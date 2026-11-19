@@ -1,0 +1,27 @@
+name: lvpai_ftp_client
+description: 跨平台照片 FTP 上传工具
+publish_to: none
+version: 0.3.0+3
+environment:
+  sdk: '>=3.10.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  file_picker: ^13.4.0
+  flutter_secure_storage: ^10.0.0
+  ftpconnect: ^3.0.0
+  path: ^1.9.1
+  material_ui: ^1.11.1
+  crypto: ^3.0.8
+  path_provider: ^2.1.6
+  package_info_plus: ^10.2.2
+  url_launcher: ^6.3.3
+  http: ^1.6.0
+  image: 4.9.0
+  zxing_lib: ^1.1.4
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>旅派 FTP · 客户端下载</title>
+  <link rel="stylesheet" href="./style.css">
+  <script defer src="./releases.js"></script>
+  <script defer src="./download.js"></script>
+</head>
+<body>
+  <header><a class="brand" href="./index.html" aria-label="旅派 FTP 下载首页"><span class="mark" aria-hidden="true">↗</span>旅派 <strong>FTP</strong></a><span class="tag">照片传输工具</span></header>
+  <main>
+    <section class="intro">
+      <p class="eyebrow">从相机收图，到服务器归档</p>
+      <h1>照片到达，<br>上传接着发生。</h1>
+      <p class="lead">选择照片手动上传，或监听相机软件的收图文件夹。<br>保留原图，传输状态随时可见。</p>
+      <div class="features"><span>多图上传</span><span>文件夹监听</span><span>失败重试</span></div>
+    </section>
+    <section aria-labelledby="download-title">
+      <div class="section-top"><h2 id="download-title">选择你的设备</h2><button id="refresh" type="button">刷新版本</button></div>
+      <p class="muted">仅显示已发布的正式版本；不同设备的版本可能不同。</p>
+      <div class="cards">
+        <article data-platform="windows-x64"><span class="platform-mark" aria-hidden="true">W</span><h3>Windows</h3><p class="muted">x64 · ZIP 便携包</p><div class="release" aria-live="polite"></div><p class="hint">完整解压后运行，无需安装开发环境。</p></article>
+        <article data-platform="macos-arm64"><span class="platform-mark" aria-hidden="true">M</span><h3>Mac · Apple 芯片</h3><p class="muted">M 系列芯片 · DMG</p><div class="release" aria-live="polite"></div><p class="hint">打开 DMG，将应用拖入「应用程序」。</p></article>
+        <article data-platform="macos-x64"><span class="platform-mark" aria-hidden="true">M</span><h3>Mac · Intel</h3><p class="muted">Intel 芯片 · DMG</p><div class="release" aria-live="polite"></div><p class="hint">在「关于本机」中查看芯片类型。</p></article>
+        <article data-platform="ios"><span class="platform-mark" aria-hidden="true">P</span><h3>iPad / iPhone</h3><p class="muted">App Store / TestFlight</p><div class="release" aria-live="polite"></div><p class="hint">自动监听限前台运行，返回应用后可补传。</p></article>
+      </div>
+    </section>
+    <aside><h2>使用前，先准备一个收图文件夹。</h2><p>相机 WiFi SD 卡需要通过配套软件把照片存入可访问的目录。支持 JPEG / PNG；连接 FTP 后即可开始上传。iPad 无法读取其他应用的私有目录。</p><p>应用下载和版本检查使用 HTTPS；照片传输当前使用明文 FTP，请在可信网络使用。</p></aside>
+  </main>
+  <footer>旅派 FTP<span>Windows · macOS · iPadOS</span></footer>
+</body>
+</html>

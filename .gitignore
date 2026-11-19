@@ -1,0 +1,32 @@
+# Generated dependencies, caches and platform build intermediates
+.dart_tool/
+.flutter-plugins*
+.packages
+build/
+coverage/
+.fvm/
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+**/ephemeral/
+**/Flutter/Generated.xcconfig
+**/Flutter/flutter_export_environment.sh
+**/Flutter/GeneratedPluginRegistrant.*
+**/flutter/generated_plugin_registrant.*
+**/flutter/generated_plugins.cmake
+**/Flutter/Flutter.framework/
+**/Flutter/App.framework/
+**/Pods/
+**/.symlinks/
+**/xcuserdata/
+**/DerivedData/
+*.user
+*.suo
+.env
+.env.*
+!.env.example
+.runtime/
+uploads/
+*.log
+# Keep pubspec.lock, native runners, CMake and Xcode project sources.

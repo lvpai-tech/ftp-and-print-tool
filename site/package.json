@@ -1,0 +1,6 @@
+{
+  "name": "lvpai-ftp-download-page",
+  "private": true,
+  "scripts": { "test": "node --test ../tool/download.e2e.cjs" },
+  "devDependencies": { "@playwright/test": "^1.49.1" }
+}

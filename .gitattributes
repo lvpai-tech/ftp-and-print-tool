@@ -1,0 +1,8 @@
+*.dart text eol=lf
+*.yaml text eol=lf
+*.lock text eol=lf
+*.md text eol=lf
+*.plist text eol=lf
+*.entitlements text eol=lf
+*.xcconfig text eol=lf
+*.sh text eol=lf
