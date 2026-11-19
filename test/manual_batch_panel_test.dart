@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:lvpai_ftp_client/manual_batch/batch_workspace.dart';
@@ -11,6 +12,14 @@ import 'manual_batch_test.dart' as fixtures;
 void main() {
   for (final width in [375.0, 768.0, 1280.0]) {
     testWidgets('手动批次在$width宽度可增减并核对上传，未确认不连接FTP', (tester) async {
+      const folderAccess = MethodChannel('ai.lvpai.ftp/folder-access');
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(folderAccess, (call) async {
+        expect(call.method, 'release');
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(folderAccess, null));
+
       late Directory root;
       late BatchWorkspace work;
       await tester.runAsync(() async {
