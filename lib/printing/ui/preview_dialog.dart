@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:file_selector/file_selector.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../ui/app_dialogs.dart';
 import '../print_bridge.dart';
 import 'design.dart';
 
@@ -27,7 +28,6 @@ class _PreviewDialogState extends State<PreviewDialog> {
   String? error;
   bool loading = true;
   bool actionBusy = false;
-  String? actionMessage;
   @override
   void initState() {
     super.initState();
@@ -52,7 +52,7 @@ class _PreviewDialogState extends State<PreviewDialog> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          error = '$e';
+          error = appErrorMessage(e);
           loading = false;
         });
       }
@@ -140,7 +140,7 @@ class _PreviewDialogState extends State<PreviewDialog> {
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Text('${snapshot.error}'),
+                                  Text(appErrorMessage(snapshot.error!)),
                                   TextButton(
                                     onPressed: showImage,
                                     child: const Text('重试图片'),
@@ -176,16 +176,6 @@ class _PreviewDialogState extends State<PreviewDialog> {
                       ),
               ),
               const SizedBox(height: 16),
-              if (actionMessage != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: SelectableText(
-                    actionMessage!,
-                    style: TextStyle(
-                      color: widget.bridge.error == null ? accent : Colors.red,
-                    ),
-                  ),
-                ),
               Wrap(
                 spacing: 12,
                 runSpacing: 8,
@@ -196,16 +186,16 @@ class _PreviewDialogState extends State<PreviewDialog> {
                         ? null
                         : () async {
                             setState(() => actionBusy = true);
-                            await widget.perform('trialPrintItem', [
+                            final ok = await widget.perform('trialPrintItem', [
                               items[index],
                             ]);
-                            if (mounted) {
-                              setState(() {
-                                actionBusy = false;
-                                actionMessage =
-                                    widget.bridge.error ??
-                                    '试打印命令已受理，请核对实物；工单状态未修改。';
-                              });
+                            if (!mounted) return;
+                            setState(() => actionBusy = false);
+                            if (ok) {
+                              await showAppMessage(
+                                context,
+                                message: '试打印命令已受理，请核对实物；工单状态未修改。',
+                              );
                             }
                           },
                     child: const Text('试打印当前张（实际出纸）'),
@@ -246,17 +236,17 @@ class _PreviewDialogState extends State<PreviewDialog> {
                             );
                             if (location == null || !mounted) return;
                             setState(() => actionBusy = true);
-                            await widget.perform('downloadJobZip', [
+                            final ok = await widget.perform('downloadJobZip', [
                               widget.jobId,
                               location.path,
                             ]);
-                            if (mounted) {
-                              setState(() {
-                                actionBusy = false;
-                                actionMessage =
-                                    widget.bridge.error ??
-                                    'ZIP 已保存：${location.path}';
-                              });
+                            if (!mounted) return;
+                            setState(() => actionBusy = false);
+                            if (ok) {
+                              await showAppMessage(
+                                context,
+                                message: 'ZIP 已保存：${location.path}',
+                              );
                             }
                           },
                     child: const Text('下载本单 ZIP'),

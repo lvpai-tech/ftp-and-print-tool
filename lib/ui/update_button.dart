@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../release/update_service.dart';
+import 'app_dialogs.dart';
 
 class UpdateButton extends StatefulWidget {
   const UpdateButton({super.key});
@@ -27,8 +28,9 @@ class _UpdateButtonState extends State<UpdateButton> {
       final release = await service.check();
       if (!mounted) return;
       if (release.code <= code) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('当前已是最新版本 ${info.version}（$code）')),
+        await showAppMessage(
+          context,
+          message: '当前已是最新版本 ${info.version}（$code）',
         );
       } else {
         await showDialog<void>(
@@ -39,12 +41,12 @@ class _UpdateButtonState extends State<UpdateButton> {
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              error is StateError ? error.message : '更新检查失败，请检查网络或稍后重试',
-            ),
-          ),
+        await showAppMessage(
+          context,
+          title: '操作未完成',
+          message: error is StateError
+              ? error.message
+              : '更新检查失败，请检查网络或稍后重试',
         );
       }
     } finally {

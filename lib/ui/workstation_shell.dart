@@ -63,20 +63,12 @@ class _WorkstationShellState extends State<WorkstationShell> {
                     icon: const Icon(Icons.arrow_back),
                     onPressed: () => setState(() => _module = null),
                   ),
-            title: Row(
-              children: [
-                const WorkstationMark(),
-                const SizedBox(width: 10),
-                Flexible(
-                  child: Text(
-                    module?.label ?? '帧集',
-                    style: const TextStyle(
-                      color: workstationInk,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
+            title: Text(
+              module?.label ?? '帧集',
+              style: const TextStyle(
+                color: workstationInk,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             actions: [
               const UpdateButton(),

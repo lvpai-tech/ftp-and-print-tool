@@ -37,21 +37,6 @@ enum WorkModule {
   Color get tint => Color.lerp(Colors.white, color, .10)!;
 }
 
-class WorkstationMark extends StatelessWidget {
-  const WorkstationMark({super.key});
-
-  @override
-  Widget build(BuildContext context) => ClipRRect(
-    borderRadius: BorderRadius.circular(11),
-    child: Image.asset(
-      'assets/branding/zhenji-brand.png',
-      width: 40,
-      height: 40,
-      fit: BoxFit.cover,
-    ),
-  );
-}
-
 class WorkstationHome extends StatelessWidget {
   const WorkstationHome({
     super.key,

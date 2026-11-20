@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../ui/app_dialogs.dart';
 import '../print_bridge.dart';
 import 'design.dart';
 
@@ -28,7 +29,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
   bool checkingPrinters = false;
   String? printerStatus;
   bool obscureToken = true;
-  bool loadingToken = false;
 
   Future<void> inspectPrinters() async {
     setState(() {
@@ -57,7 +57,12 @@ class _SettingsPanelState extends State<SettingsPanel> {
       if (mounted) setState(() => printerStatus = lines.join('\n'));
     } catch (e) {
       if (mounted) {
-        setState(() => printerStatus = e is StateError ? e.message : '$e');
+        setState(() => printerStatus = null);
+        await showAppMessage(
+          context,
+          title: '操作未完成',
+          message: appErrorMessage(e),
+        );
       }
     } finally {
       if (mounted) setState(() => checkingPrinters = false);
@@ -89,7 +94,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
     super.initState();
     routes = Map<String, String>.from(widget.bridge.config['printers'] ?? {});
     loadPrinters();
-    loadStoredToken();
   }
 
   @override
@@ -97,6 +101,18 @@ class _SettingsPanelState extends State<SettingsPanel> {
     token.dispose();
     super.dispose();
   }
+
+  List<Map<String, dynamic>> get scenicProfiles {
+    final raw = widget.bridge.config['scenicProfiles'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
+  String get activeScenicId =>
+      '${widget.bridge.config['activeScenicProfileId'] ?? ''}';
 
   Future<void> loadPrinters() async {
     setState(() {
@@ -107,63 +123,185 @@ class _SettingsPanelState extends State<SettingsPanel> {
       final result = await widget.bridge.call('listPrinters');
       if (mounted) setState(() => printers = List<String>.from(result));
     } catch (e) {
-      if (mounted) setState(() => printerError = '$e');
+      if (mounted) {
+        setState(() => printerError = null);
+        await showAppMessage(
+          context,
+          title: '操作未完成',
+          message: appErrorMessage(e),
+        );
+      }
     } finally {
       if (mounted) setState(() => loadingPrinters = false);
     }
   }
 
-  Future<String> revealStoredToken() async {
-    final result = await widget.bridge.call('revealToken');
-    if (result is! Map) {
-      throw StateError('无法读取已保存的密钥');
-    }
+  Future<String> revealProfileToken(String id) async {
+    final result = await widget.bridge.call('revealScenicProfileToken', [
+      {'id': id},
+    ]);
+    if (result is! Map) throw StateError('无法读取已保存的密钥');
     return '${result['token'] ?? ''}'.trim();
   }
 
-  Future<void> loadStoredToken() async {
-    if (!widget.bridge.configured) return;
-    setState(() => loadingToken = true);
+  Future<void> copyProfileToken(String id) async {
     try {
-      final value = await revealStoredToken();
-      if (mounted && value.isNotEmpty) token.text = value;
+      final text = await revealProfileToken(id);
+      if (text.isEmpty) throw StateError('没有可复制的密钥');
+      await Clipboard.setData(ClipboardData(text: text));
+      if (!mounted) return;
+      await showAppMessage(context, message: '密钥已复制');
     } catch (e) {
-      if (mounted) {
-        setState(
-          () => printerError = e is StateError ? e.message : '读取密钥失败：$e',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => loadingToken = false);
+      if (!mounted) return;
+      await showAppMessage(
+        context,
+        title: '操作未完成',
+        message: appErrorMessage(e),
+      );
     }
   }
 
-  Future<void> copyToken() async {
-    var text = token.text.trim();
-    if (text.isEmpty && widget.bridge.configured) {
-      try {
-        text = await revealStoredToken();
-        if (text.isNotEmpty) token.text = text;
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text(e is StateError ? e.message : '复制失败：$e')),
-        );
-        return;
-      }
-    }
-    if (text.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.maybeOf(
-        context,
-      )?.showSnackBar(const SnackBar(content: Text('没有可复制的密钥')));
+  Future<void> promptAddOrUpdateProfile({String? profileId}) async {
+    final draft = TextEditingController();
+    var obscure = true;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialog) => AlertDialog(
+          title: Text(profileId == null ? '添加景区密钥' : '更新景区密钥'),
+          content: TextField(
+            controller: draft,
+            obscureText: obscure,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: '景区打印密钥',
+              suffixIcon: IconButton(
+                onPressed: () => setDialog(() => obscure = !obscure),
+                icon: Icon(
+                  obscure
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('校验并保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final value = draft.text.trim();
+    draft.dispose();
+    if (ok != true || !mounted) return;
+    if (value.isEmpty) {
+      await showAppMessage(context, title: '操作未完成', message: '请输入景区打印密钥');
       return;
     }
-    await Clipboard.setData(ClipboardData(text: text));
-    if (!mounted) return;
-    ScaffoldMessenger.maybeOf(
-      context,
-    )?.showSnackBar(const SnackBar(content: Text('密钥已复制')));
+    if (profileId == null) {
+      await widget.perform('addScenicProfile', [
+        {'token': value, 'activate': !widget.bridge.configured},
+      ]);
+    } else {
+      await widget.perform('updateScenicProfile', [
+        {'id': profileId, 'token': value},
+      ]);
+    }
+  }
+
+  Widget _profileList() {
+    final profiles = scenicProfiles;
+    final activeId = activeScenicId;
+    if (profiles.isEmpty) {
+      return const Text('尚未添加景区密钥', style: TextStyle(color: muted));
+    }
+    return Column(
+      children: [
+        for (final profile in profiles)
+          Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            child: ListTile(
+              title: Text(
+                '${profile['scenicName'] ?? ''}'.trim().isEmpty
+                    ? '未命名景区'
+                    : '${profile['scenicName']}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: Text(
+                profile['id'] == activeId ? '当前激活' : '点击可激活',
+                style: TextStyle(
+                  color: profile['id'] == activeId
+                      ? const Color(0xff389e0d)
+                      : muted,
+                ),
+              ),
+              leading: Icon(
+                profile['id'] == activeId
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_off,
+                color: profile['id'] == activeId
+                    ? const Color(0xff1677ff)
+                    : muted,
+              ),
+              trailing: Wrap(
+                spacing: 0,
+                children: [
+                  IconButton(
+                    tooltip: '复制密钥',
+                    onPressed: () => copyProfileToken('${profile['id']}'),
+                    icon: const Icon(Icons.copy_outlined, size: 18),
+                  ),
+                  IconButton(
+                    tooltip: '更新密钥',
+                    onPressed: widget.bridge.busy
+                        ? null
+                        : () => promptAddOrUpdateProfile(
+                            profileId: '${profile['id']}',
+                          ),
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                  ),
+                  IconButton(
+                    tooltip: profile['id'] == activeId
+                        ? '请先切换到其他景区再删除'
+                        : '删除',
+                    onPressed: widget.bridge.busy ||
+                            profiles.length <= 1 ||
+                            profile['id'] == activeId
+                        ? null
+                        : () async {
+                            final yes = await showAppConfirm(
+                              context,
+                              title: '删除景区档案',
+                              message:
+                                  '确定删除「${profile['scenicName'] ?? profile['id']}」？',
+                              action: '删除',
+                            );
+                            if (yes) {
+                              await widget.perform('deleteScenicProfile', [
+                                {'id': profile['id']},
+                              ]);
+                            }
+                          },
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                  ),
+                ],
+              ),
+              onTap: widget.bridge.busy || profile['id'] == activeId
+                  ? null
+                  : () => widget.perform('activateScenicProfile', [
+                      {'id': profile['id']},
+                    ]),
+            ),
+          ),
+      ],
+    );
   }
 
   @override
@@ -182,7 +320,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const Text(
-                      '景区连接',
+                      '景区密钥档案',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
@@ -190,52 +328,34 @@ class _SettingsPanelState extends State<SettingsPanel> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      () {
-                        if (!widget.bridge.configured) {
-                          return '先粘贴密钥，点「连接景区」校验通过后再选打印机。';
-                        }
-                        final name =
-                            '${widget.bridge.config['scenicName'] ?? ''}'
-                                .trim();
-                        return name.isEmpty
-                            ? '当前景区：（未返回名称）'
-                            : '当前景区：$name';
-                      }(),
+                      widget.bridge.configured
+                          ? '可添加多个景区密钥，打印机路由共用；打印中或自动打印开启时不能切换。'
+                          : '先添加并校验景区打印密钥，再选择打印机。',
                       style: const TextStyle(color: muted),
                     ),
-                    const SizedBox(height: 20),
-                    TextField(
-                      controller: token,
-                      obscureText: obscureToken,
-                      enableSuggestions: false,
-                      autocorrect: false,
-                      decoration: InputDecoration(
-                        labelText: loadingToken ? '正在读取密钥…' : '景区打印密钥',
-                        suffixIcon: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              tooltip: obscureToken ? '显示密钥' : '隐藏密钥',
-                              onPressed: () => setState(
-                                () => obscureToken = !obscureToken,
-                              ),
-                              icon: Icon(
-                                obscureToken
-                                    ? Icons.visibility_outlined
-                                    : Icons.visibility_off_outlined,
-                              ),
+                    const SizedBox(height: 16),
+                    if (!widget.bridge.configured) ...[
+                      TextField(
+                        controller: token,
+                        obscureText: obscureToken,
+                        enableSuggestions: false,
+                        autocorrect: false,
+                        decoration: InputDecoration(
+                          labelText: '景区打印密钥',
+                          suffixIcon: IconButton(
+                            tooltip: obscureToken ? '显示密钥' : '隐藏密钥',
+                            onPressed: () => setState(
+                              () => obscureToken = !obscureToken,
                             ),
-                            IconButton(
-                              tooltip: '复制密钥',
-                              onPressed: copyToken,
-                              icon: const Icon(Icons.copy_outlined),
+                            icon: Icon(
+                              obscureToken
+                                  ? Icons.visibility_outlined
+                                  : Icons.visibility_off_outlined,
                             ),
-                          ],
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    if (!widget.bridge.configured)
+                      const SizedBox(height: 12),
                       Align(
                         alignment: Alignment.centerLeft,
                         child: FilledButton(
@@ -245,15 +365,25 @@ class _SettingsPanelState extends State<SettingsPanel> {
                                   await widget.perform('configure', [
                                     {'token': token.text.trim()},
                                   ]);
-                                  if (widget.bridge.configured) {
-                                    await loadStoredToken();
-                                  }
                                 },
-                          child: Text(widget.embedded ? '连接景区' : '验证并连接景区'),
+                          child: Text(
+                            widget.embedded ? '连接景区' : '验证并连接景区',
+                          ),
                         ),
                       ),
-                    if (widget.bridge.configured) ...[
-                      const SizedBox(height: 32),
+                    ] else ...[
+                      _profileList(),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: widget.bridge.busy
+                              ? null
+                              : () => promptAddOrUpdateProfile(),
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('添加景区'),
+                        ),
+                      ),
+                      const SizedBox(height: 28),
                       Row(
                         children: [
                           Expanded(
@@ -273,7 +403,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                         ],
                       ),
                       const Text(
-                        '开头片和照片都用 6 寸相纸。',
+                        '开头片和照片都用 6 寸相纸；所有景区共用这套打印机。',
                         style: TextStyle(color: muted),
                       ),
                       if (printerError != null)
@@ -323,7 +453,11 @@ class _SettingsPanelState extends State<SettingsPanel> {
                                       );
                                     } catch (e) {
                                       if (mounted) {
-                                        setState(() => printerError = '$e');
+                                        await showAppMessage(
+                                          context,
+                                          title: '操作未完成',
+                                          message: appErrorMessage(e),
+                                        );
                                       }
                                     }
                                   },
@@ -361,14 +495,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
                               ? null
                               : () async {
                                   await widget.perform('saveConfig', [
-                                    {
-                                      'token': token.text.trim(),
-                                      'printers': routes,
-                                    },
+                                    {'printers': routes},
                                   ]);
-                                  await loadStoredToken();
                                 },
-                          child: Text(widget.embedded ? '保存设置' : '保存并立即生效'),
+                          child: Text(widget.embedded ? '保存打印机设置' : '保存并立即生效'),
                         ),
                       ),
                       const SizedBox(height: 24),

@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../ui/app_dialogs.dart';
 import '../ui/design.dart';
 import 'print_bridge.dart';
 import 'ui/design.dart';
@@ -45,10 +46,10 @@ class _WorkstationState extends State<Workstation> {
     if (mounted) setState(() {});
   }
 
-  Future<void> perform(String method, [List<dynamic> args = const []]) async {
+  Future<bool> perform(String method, [List<dynamic> args = const []]) async {
     try {
       final result = await bridge.run(method, args);
-      if (!mounted) return;
+      if (!mounted) return false;
       if (result is Map && result['needConfirm'] == true) {
         final agreed = await confirm(
           '驱动报告缺纸',
@@ -56,40 +57,33 @@ class _WorkstationState extends State<Workstation> {
           '已核实，继续打印',
         );
         if (agreed) {
-          await perform(method, [
+          return await perform(method, [
             args.first,
             {'ignorePaperOut': true},
           ]);
         }
+        return false;
       }
+      return true;
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
+        await showAppMessage(
           context,
-        ).showSnackBar(SnackBar(content: Text('$e')));
+          title: '操作未完成',
+          message: appErrorMessage(e),
+        );
       }
+      return false;
     }
   }
 
-  Future<bool> confirm(String title, String message, String action) async =>
-      await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(title),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(action),
-            ),
-          ],
-        ),
-      ) ??
-      false;
+  Future<bool> confirm(String title, String message, String action) =>
+      showAppConfirm(
+        context,
+        title: title,
+        message: message,
+        action: action,
+      );
 
   Future<void> query({int number = 1}) async {
     selected.clear();
@@ -182,7 +176,7 @@ class _WorkstationState extends State<Workstation> {
           color: const Color(0xfffff0e8),
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           child: SelectableText(
-            bridge.error!,
+            appErrorMessage(bridge.error!),
             style: const TextStyle(color: Color(0xff923f20)),
           ),
         ),
@@ -254,20 +248,6 @@ class _WorkstationState extends State<Workstation> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton.icon(
-              key: const ValueKey('print-open-config'),
-              onPressed: openConfig,
-              icon: Badge(
-                isLabelVisible: !bridge.configured,
-                smallSize: 8,
-                child: const Icon(Icons.print_outlined, size: 18),
-              ),
-              label: Text(bridge.configured ? '景区连接' : '景区连接 · 未配置'),
-            ),
-          ),
-          const SizedBox(height: 8),
           _scenicSummary(),
           const SizedBox(height: 16),
           if (bridge.configured) _autoPrintBar(),
@@ -284,7 +264,7 @@ class _WorkstationState extends State<Workstation> {
               child: Padding(
                 padding: const EdgeInsets.all(12),
                 child: SelectableText(
-                  bridge.error!,
+                  appErrorMessage(bridge.error!),
                   style: const TextStyle(color: Color(0xff923f20)),
                 ),
               ),
@@ -307,6 +287,7 @@ class _WorkstationState extends State<Workstation> {
   }
 
   Widget _scenicSummary() => Material(
+    key: const ValueKey('print-open-config'),
     color: bridge.configured
         ? WorkstationStyle.accentSoft
         : WorkstationStyle.warnSoft,
@@ -488,7 +469,7 @@ class _WorkstationState extends State<Workstation> {
               const SizedBox(height: 12),
               TextButton(
                 onPressed: openConfig,
-                child: const Text('也可点击顶部「景区连接」'),
+                child: const Text('也可点击上方景区卡片'),
               ),
             ],
           ),
@@ -688,226 +669,332 @@ class _WorkstationState extends State<Workstation> {
                       : () => perform('continueJobs', [selected.toList()]),
                   child: const Text('继续剩余'),
                 ),
-                PopupMenuButton<String>(
-                  enabled: selected.isNotEmpty && !bridge.busy,
-                  tooltip: '工单处理',
-                  onSelected: (method) async {
-                    final yes = await confirm(
-                      method == 'confirmPrinted' ? '确认已出纸' : '标记为未打印',
-                      method == 'confirmPrinted'
-                          ? '请先核对纸面已齐。本操作更新状态，不会再次打印。'
-                          : '将重置整单进度。后续打印会从头出纸，请核对实物，避免重复。',
-                      '确认',
-                    );
-                    if (yes) await perform(method, [selected.toList()]);
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(
-                      value: 'confirmPrinted',
-                      child: Text('确认已打印'),
-                    ),
-                    PopupMenuItem(value: 'markUnprinted', child: Text('标记未打印')),
-                  ],
-                  child: const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: Text('更多处理 ▾'),
-                  ),
+                OutlinedButton(
+                  onPressed: selected.isEmpty || bridge.busy
+                      ? null
+                      : () async {
+                          final yes = await confirm(
+                            '确认已打印',
+                            '请先核对纸面已齐。本操作只更新状态，不会再次打印。',
+                            '确认已打印',
+                          );
+                          if (yes) {
+                            await perform('confirmPrinted', [
+                              selected.toList(),
+                            ]);
+                          }
+                        },
+                  child: const Text('确认已打印'),
+                ),
+                OutlinedButton(
+                  onPressed: selected.isEmpty || bridge.busy
+                      ? null
+                      : () async {
+                          final yes = await confirm(
+                            '标记为未打印',
+                            '将重置整单进度。后续打印会从头出纸，请核对实物，避免重复。',
+                            '标记未打印',
+                          );
+                          if (yes) {
+                            await perform('markUnprinted', [
+                              selected.toList(),
+                            ]);
+                          }
+                        },
+                  child: const Text('标记未打印'),
                 ),
               ],
             ),
           ),
           const SizedBox(height: 12),
           Expanded(
-            child: Container(
+            child: DecoratedBox(
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xfff0f0f0)),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x08000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
+                ],
               ),
-              clipBehavior: Clip.antiAlias,
-              child: jobs.isEmpty
-                  ? const Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.inbox_outlined, size: 42, color: muted),
-                          SizedBox(height: 12),
-                          Text('暂无符合条件的打印任务'),
-                          SizedBox(height: 8),
-                          Text(
-                            '新工单会自动刷新，也可调整筛选条件',
-                            style: TextStyle(color: muted),
-                          ),
-                        ],
-                      ),
-                    )
-                  : LayoutBuilder(
-                      builder: (context, constraints) => SingleChildScrollView(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              minWidth: constraints.maxWidth,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: jobs.isEmpty
+                    ? const Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.inbox_outlined, size: 42, color: muted),
+                            SizedBox(height: 12),
+                            Text('暂无符合条件的打印任务'),
+                            SizedBox(height: 8),
+                            Text(
+                              '新工单会自动刷新，也可调整筛选条件',
+                              style: TextStyle(color: muted),
                             ),
-                            child: DataTable(
-                              headingRowHeight: 48,
-                              dataRowMinHeight: 108,
-                              dataRowMaxHeight: 128,
-                              columnSpacing: 24,
-                              showCheckboxColumn: true,
-                              columns: const [
-                                DataColumn(label: Text('任务 / 取片码')),
-                                DataColumn(label: Text('预览')),
-                                DataColumn(label: Text('状态')),
-                                DataColumn(label: Text('打印内容')),
-                                DataColumn(label: Text('创建时间')),
-                                DataColumn(label: Text('操作')),
-                              ],
-                              rows: jobs.map((job) {
-                                final id = '${job['id']}';
-                                void openPreview() => showDialog<void>(
-                                  context: context,
-                                  builder: (_) => PreviewDialog(
-                                    bridge: bridge,
-                                    jobId: id,
-                                    perform: perform,
+                          ],
+                        ),
+                      )
+                    : LayoutBuilder(
+                        builder: (context, constraints) =>
+                            SingleChildScrollView(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                minWidth: constraints.maxWidth,
+                              ),
+                              child: Theme(
+                                data: Theme.of(context).copyWith(
+                                  dividerColor: const Color(0xfff0f0f0),
+                                  dataTableTheme: const DataTableThemeData(
+                                    headingRowColor: WidgetStatePropertyAll(
+                                      Color(0xfffafafa),
+                                    ),
+                                    dataRowColor: WidgetStatePropertyAll(
+                                      Colors.white,
+                                    ),
+                                    headingTextStyle: TextStyle(
+                                      color: Color(0xff595959),
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    dataTextStyle: TextStyle(
+                                      color: Color(0xff262626),
+                                      fontSize: 13,
+                                    ),
+                                    dividerThickness: 1,
+                                    horizontalMargin: 16,
+                                    columnSpacing: 20,
+                                    checkboxHorizontalMargin: 12,
                                   ),
-                                );
-                                return DataRow(
-                                  selected: selected.contains(id),
-                                  onSelectChanged: bridge.busy
-                                      ? null
-                                      : (value) => setState(() {
-                                          if (value == true) {
-                                            selected.add(id);
-                                          } else {
-                                            selected.remove(id);
-                                          }
-                                        }),
-                                  cells: [
-                                    DataCell(
-                                      Column(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
+                                ),
+                                child: DataTable(
+                                  headingRowHeight: 40,
+                                  dataRowMinHeight: 64,
+                                  dataRowMaxHeight: 72,
+                                  showCheckboxColumn: true,
+                                  border: const TableBorder(
+                                    horizontalInside: BorderSide(
+                                      color: Color(0xfff0f0f0),
+                                    ),
+                                  ),
+                                  columns: const [
+                                    DataColumn(label: Text('任务 / 取片码')),
+                                    DataColumn(label: Text('预览')),
+                                    DataColumn(label: Text('状态')),
+                                    DataColumn(label: Text('打印内容')),
+                                    DataColumn(label: Text('创建时间')),
+                                    DataColumn(label: Text('操作')),
+                                  ],
+                                  rows: jobs.map((job) {
+                                    final id = '${job['id']}';
+                                    final created =
+                                        '${job['createdAt'] ?? '—'}'
+                                            .replaceFirst('T', ' ')
+                                            .split('.')
+                                            .first;
+                                    void openPreview() => showDialog<void>(
+                                      context: context,
+                                      builder: (_) => PreviewDialog(
+                                        bridge: bridge,
+                                        jobId: id,
+                                        perform: perform,
+                                      ),
+                                    );
+                                    return DataRow(
+                                      selected: selected.contains(id),
+                                      color: WidgetStateProperty.resolveWith((
+                                        states,
+                                      ) {
+                                        if (states.contains(
+                                          WidgetState.selected,
+                                        )) {
+                                          return const Color(0xffe6f4ff);
+                                        }
+                                        if (states.contains(
+                                          WidgetState.hovered,
+                                        )) {
+                                          return const Color(0xfffafafa);
+                                        }
+                                        return Colors.white;
+                                      }),
+                                      onSelectChanged: bridge.busy
+                                          ? null
+                                          : (value) => setState(() {
+                                              if (value == true) {
+                                                selected.add(id);
+                                              } else {
+                                                selected.remove(id);
+                                              }
+                                            }),
+                                      cells: [
+                                        DataCell(
+                                          Column(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                '#$id',
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w700,
+                                                  fontSize: 14,
+                                                  fontFeatures: [
+                                                    FontFeature
+                                                        .tabularFigures(),
+                                                  ],
+                                                ),
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                '尾号 ${job['cardTail'] ?? '—'}  ·  ${job['phone'] ?? '未绑定手机'}',
+                                                style: const TextStyle(
+                                                  color: muted,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        DataCell(
+                                          JobThumbnails(
+                                            bridge: bridge,
+                                            jobId: id,
+                                            contentSummary:
+                                                '${job['contentSummary'] ?? ''}',
+                                            onOpenPreview: openPreview,
+                                          ),
+                                        ),
+                                        DataCell(
+                                          StatusBadge(
+                                            status: '${job['status']}',
+                                          ),
+                                        ),
+                                        DataCell(
+                                          SizedBox(
+                                            width: 220,
+                                            child: Column(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  '${job['contentSummary'] ?? '内容未知'}',
+                                                  maxLines: 2,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    fontSize: 13,
+                                                  ),
+                                                ),
+                                                if ((job['completedSheets']
+                                                            as num? ??
+                                                        0) >
+                                                    0)
+                                                  Text(
+                                                    '已完成 ${job['completedSheets']} / ${job['totalSheets'] ?? '—'} 张',
+                                                    style: const TextStyle(
+                                                      color: Color(0xff1677ff),
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                if (job['errorReason'] != null)
+                                                  Text(
+                                                    '${job['errorReason']}',
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      color: Color(0xffcf1322),
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        DataCell(
                                           Text(
-                                            '#$id',
+                                            created,
                                             style: const TextStyle(
-                                              fontWeight: FontWeight.w700,
+                                              fontSize: 12,
+                                              color: muted,
                                               fontFeatures: [
                                                 FontFeature.tabularFigures(),
                                               ],
                                             ),
                                           ),
-                                          Text(
-                                            '尾号 ${job['cardTail'] ?? '—'}',
-                                            style: const TextStyle(
-                                              color: muted,
-                                            ),
-                                          ),
-                                          Text(
-                                            '${job['phone'] ?? '未绑定手机'}',
-                                            style: const TextStyle(
-                                              fontSize: 12,
-                                              color: muted,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    DataCell(
-                                      JobThumbnails(
-                                        bridge: bridge,
-                                        jobId: id,
-                                        contentSummary:
-                                            '${job['contentSummary'] ?? ''}',
-                                        onOpenPreview: openPreview,
-                                      ),
-                                    ),
-                                    DataCell(
-                                      StatusBadge(status: '${job['status']}'),
-                                    ),
-                                    DataCell(
-                                      SizedBox(
-                                        width: 245,
-                                        child: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              '${job['contentSummary'] ?? '内容未知'}',
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                            if ((job['completedSheets']
-                                                        as num? ??
-                                                    0) >
-                                                0)
-                                              Text(
-                                                '已完成 ${job['completedSheets']} / ${job['totalSheets'] ?? '—'} 张',
-                                                style: const TextStyle(
-                                                  color: accent,
-                                                ),
-                                              ),
-                                            if (job['errorReason'] != null)
-                                              Text(
-                                                '${job['errorReason']}',
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(
-                                                  color: Color(0xffa33c30),
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                          ],
                                         ),
-                                      ),
-                                    ),
-                                    DataCell(
-                                      Text(
-                                        '${job['createdAt'] ?? '—'}'
-                                            .replaceFirst('T', '\n'),
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: muted,
+                                        DataCell(
+                                          Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              FilledButton(
+                                                style: FilledButton.styleFrom(
+                                                  backgroundColor: const Color(
+                                                    0xff1677ff,
+                                                  ),
+                                                  foregroundColor: Colors.white,
+                                                  minimumSize: const Size(
+                                                    0,
+                                                    32,
+                                                  ),
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 12,
+                                                      ),
+                                                  textStyle: const TextStyle(
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                ),
+                                                onPressed:
+                                                    bridge.busy ||
+                                                        !_canPrintJob(job)
+                                                    ? null
+                                                    : () => perform(
+                                                        'printJobs',
+                                                        [
+                                                          [id],
+                                                        ],
+                                                      ),
+                                                child: const Text('打印本单'),
+                                              ),
+                                              TextButton(
+                                                style: TextButton.styleFrom(
+                                                  foregroundColor: const Color(
+                                                    0xff1677ff,
+                                                  ),
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                ),
+                                                onPressed: bridge.busy
+                                                    ? null
+                                                    : openPreview,
+                                                child: const Text('查看照片'),
+                                              ),
+                                            ],
+                                          ),
                                         ),
-                                      ),
-                                    ),
-                                    DataCell(
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          FilledButton.tonal(
-                                            onPressed:
-                                                bridge.busy ||
-                                                    !_canPrintJob(job)
-                                                ? null
-                                                : () => perform('printJobs', [
-                                                    [id],
-                                                  ]),
-                                            child: const Text('打印本单'),
-                                          ),
-                                          const SizedBox(width: 4),
-                                          TextButton(
-                                            onPressed: bridge.busy
-                                                ? null
-                                                : openPreview,
-                                            child: const Text('查看照片'),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                );
-                              }).toList(),
+                                      ],
+                                    );
+                                  }).toList(),
+                                ),
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
+              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -967,23 +1054,31 @@ class StatusBadge extends StatelessWidget {
           'PRINTING': '打印中',
         }[status] ??
         status;
-    final color = status == 'PRINTED'
-        ? accent
-        : status == 'FAILED'
-        ? const Color(0xffa33c30)
-        : muted;
+    // Ant Design Tag 色：蓝/绿/红/紫
+    final (Color fg, Color bg) = switch (status) {
+      'PRINTED' => (const Color(0xff389e0d), const Color(0xfff6ffed)),
+      'FAILED' => (const Color(0xffcf1322), const Color(0xfffff1f0)),
+      'CLAIMED' || 'PRINTING' => (
+        const Color(0xff531dab),
+        const Color(0xfff9f0ff),
+      ),
+      'QUEUED' => (const Color(0xff0958d9), const Color(0xffe6f4ff)),
+      _ => (const Color(0xff595959), const Color(0xfffafafa)),
+    };
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: .08),
-        borderRadius: BorderRadius.circular(6),
+        color: bg,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: fg.withValues(alpha: .25)),
       ),
       child: Text(
         label,
         style: TextStyle(
-          color: color,
+          color: fg,
           fontSize: 12,
           fontWeight: FontWeight.w600,
+          height: 1.4,
         ),
       ),
     );

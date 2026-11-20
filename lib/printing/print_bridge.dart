@@ -74,7 +74,9 @@ class PrintBridge extends ChangeNotifier {
       connected = true;
       notifyListeners();
     } catch (e) {
-      error ??= e is StateError ? e.message : '$e';
+      error ??= e is StateError
+          ? e.message
+          : '$e'.replaceFirst(RegExp(r'^Bad state:\s*'), '');
       notifyListeners();
     }
   }
@@ -148,8 +150,8 @@ class PrintBridge extends ChangeNotifier {
     notifyListeners();
     try {
       return await call(method, args);
-    } catch (e) {
-      error = '$e';
+    } catch (_) {
+      // 业务失败由界面弹窗展示，不写入顶栏 error（顶栏仅留给连接/内核故障）。
       rethrow;
     } finally {
       working = false;

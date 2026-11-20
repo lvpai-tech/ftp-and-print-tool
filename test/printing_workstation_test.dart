@@ -11,6 +11,15 @@ class ControlledBridge extends PrintBridge {
       'configured': configured,
       'config': {
         'scenicName': '隔离测试景区',
+        'activeScenicProfileId': 'default',
+        'scenicProfiles': [
+          {
+            'id': 'default',
+            'token': '[已配置]',
+            'scenicName': '隔离测试景区',
+            'scenicIds': ['1'],
+          },
+        ],
         'statusCommand': ['controlled'],
         'printers': {},
       },
@@ -37,7 +46,9 @@ class ControlledBridge extends PrintBridge {
   Future<dynamic> call(String method, [List<dynamic> args = const []]) async {
     calls.add(method);
     if (method == 'listPrinters') return ['真实系统适配的测试替身'];
-    if (method == 'revealToken') return {'token': 'isolation-test-token'};
+    if (method == 'revealToken' || method == 'revealScenicProfileToken') {
+      return {'token': 'isolation-test-token'};
+    }
     if (method == 'previewJob') {
       return {
         'id': '${args.first}',

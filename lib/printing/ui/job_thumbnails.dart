@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:material_ui/material_ui.dart';
 
+import '../../ui/app_dialogs.dart';
 import '../print_bridge.dart';
 import 'design.dart';
 
@@ -128,7 +129,7 @@ class _JobThumbnailsState extends State<JobThumbnails> {
       });
     } catch (e) {
       if (!mounted || token != attempt) return;
-      setState(() => error = e is StateError ? e.message : '$e');
+      setState(() => error = appErrorMessage(e));
     }
   }
 
@@ -156,30 +157,18 @@ class _JobThumbnailsState extends State<JobThumbnails> {
             child: InkWell(
               onTap: widget.onOpenPreview,
               borderRadius: BorderRadius.circular(4),
-              child: SizedBox(
-                width: 64,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        color: const Color(0xfffafafa),
-                        border: Border.all(color: const Color(0xfff0f0f0)),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: Image.memory(item.bytes, fit: BoxFit.contain),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${item.label} ×${item.copies}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: muted, fontSize: 12),
-                    ),
-                  ],
+              child: Tooltip(
+                message: '${item.label} ×${item.copies}',
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: const Color(0xfffafafa),
+                    border: Border.all(color: const Color(0xfff0f0f0)),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Image.memory(item.bytes, fit: BoxFit.contain),
                 ),
               ),
             ),
