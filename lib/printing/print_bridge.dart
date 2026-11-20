@@ -98,7 +98,12 @@ class PrintBridge extends ChangeNotifier {
       } else {
         final data = message['data'];
         if (data is Map && data.containsKey('state')) {
-          snapshot = {...Map<String, dynamic>.from(data), 'configured': true};
+          final map = Map<String, dynamic>.from(data);
+          // 未配置快照自带 configured:false，必须保留；勿一律写成 true。
+          if (!map.containsKey('configured')) {
+            map['configured'] = true;
+          }
+          snapshot = map;
           notifyListeners();
         }
         pending.complete(data);

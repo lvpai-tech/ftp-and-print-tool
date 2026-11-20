@@ -13,7 +13,9 @@ Finder keyed(String key) => find.byKey(ValueKey(key));
 Future<void> open(WidgetTester tester, String key) async {
   await tester.ensureVisible(keyed(key));
   await tester.tap(keyed(key));
-  await tester.pumpAndSettle();
+  // 避免无尽动画导致 pumpAndSettle 超时（打印页/状态刷新可能持续重建）。
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
 }
 
 class WorkstationBridge extends ControlledBridge {
@@ -48,7 +50,7 @@ void main() {
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
   for (final width in [420.0, 820.0, 1280.0, 1600.0]) {
-    testWidgets('工作台 ${width.toInt()}：分开进入、切换与保留上传页', (tester) async {
+    testWidgets('工作台 ${width.toInt()}：首页进出并保留上传页', (tester) async {
       tester.view.physicalSize = Size(width, 900);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -62,19 +64,22 @@ void main() {
       expect(keyed('open-print'), findsOneWidget);
       await open(tester, 'open-upload');
       expect(find.byType(TransferPage), findsOneWidget);
-      expect(find.text('手动上传模式'), findsOneWidget);
+      expect(find.text('自动上传模式'), findsOneWidget);
       final transferState = tester.state(find.byType(TransferPage));
-      await open(tester, 'switch-print');
-      await open(tester, 'print-step-1');
-      await tester.tap(find.text('读取打印机状态'));
+      await tester.tap(find.byTooltip('返回工作台'));
+      await tester.pumpAndSettle();
+      await open(tester, 'open-print');
+      expect(find.text('#9007199254740993'), findsOneWidget);
+      await open(tester, 'print-open-config');
+      await tester.tap(keyed('print-inspect-printers'));
       await tester.pumpAndSettle();
       expect(find.text('隔离测试打印机：正常（0 项任务）'), findsOneWidget);
       expect(bridge.calls, contains('printerStatus'));
       expect(bridge.calls, isNot(contains('printJobs')));
       expect(bridge.calls, isNot(contains('autoPrint')));
-      await open(tester, 'print-step-2');
-      expect(find.text('#9007199254740993'), findsOneWidget);
-      await open(tester, 'switch-upload');
+      await tester.tap(find.byTooltip('返回工作台'));
+      await tester.pumpAndSettle();
+      await open(tester, 'open-upload');
       expect(tester.state(find.byType(TransferPage)), same(transferState));
       expect(tester.takeException(), isNull);
     });
@@ -89,7 +94,8 @@ void main() {
     await tester.pumpWidget(PhotoFtpApp(session: WorkstationSession(bridge)));
     await tester.pumpAndSettle();
     await open(tester, 'open-print');
-    final field = find.byType(DropdownButtonFormField<String>).first;
+    await open(tester, 'print-open-config');
+    final field = find.byType(DropdownMenu<String>).first;
     final arrow = find.descendant(
       of: field,
       matching: find.byIcon(Icons.keyboard_arrow_down_rounded),
@@ -131,8 +137,6 @@ void main() {
     await tester.pumpWidget(PhotoFtpApp(session: session));
     await tester.pumpAndSettle();
     await open(tester, 'open-upload');
-    await tester.tap(find.text('自动上传模式'));
-    await tester.pumpAndSettle();
     expect(find.text('请先配置机位连接'), findsOneWidget);
 
     session.setTransferActive(true);
@@ -147,8 +151,9 @@ void main() {
     await tester.tap(keyed('open-print'));
     await tester.pump();
     expect(find.text('#9007199254740993'), findsOneWidget);
-    await tester.tap(keyed('switch-upload'));
+    await tester.tap(find.byTooltip('返回工作台'));
     await tester.pump();
+    await open(tester, 'open-upload');
     expect(find.byType(TransferPage), findsOneWidget);
 
     bridge.setPrinting(false);

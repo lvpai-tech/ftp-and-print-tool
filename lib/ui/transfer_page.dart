@@ -32,7 +32,7 @@ class _TransferPageState extends State<TransferPage> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _form = GlobalKey<FormState>();
   final _autoPanelKey = GlobalKey();
-  bool _autoMode = false, _autoLocked = false;
+  bool _autoMode = true, _autoLocked = false;
   final _name = TextEditingController(text: '我的服务器');
   final _host = TextEditingController();
   final _port = TextEditingController(text: '21');
@@ -572,20 +572,20 @@ class _TransferPageState extends State<TransferPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               _modeChip(
-                label: '手动上传模式',
-                icon: Icons.upload_outlined,
-                selected: !_autoMode,
-                onTap: _busy || _loading || _autoLocked
-                    ? null
-                    : () => setState(() => _autoMode = false),
-              ),
-              _modeChip(
                 label: '自动上传模式',
                 icon: Icons.folder_open_outlined,
                 selected: _autoMode,
                 onTap: _busy || _loading || _autoLocked
                     ? null
                     : () => setState(() => _autoMode = true),
+              ),
+              _modeChip(
+                label: '手动上传模式',
+                icon: Icons.upload_outlined,
+                selected: !_autoMode,
+                onTap: _busy || _loading || _autoLocked
+                    ? null
+                    : () => setState(() => _autoMode = false),
               ),
             ],
           ),

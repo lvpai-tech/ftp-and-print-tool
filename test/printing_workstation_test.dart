@@ -37,6 +37,42 @@ class ControlledBridge extends PrintBridge {
   Future<dynamic> call(String method, [List<dynamic> args = const []]) async {
     calls.add(method);
     if (method == 'listPrinters') return ['真实系统适配的测试替身'];
+    if (method == 'revealToken') return {'token': 'isolation-test-token'};
+    if (method == 'previewJob') {
+      return {
+        'id': '${args.first}',
+        'items': [
+          {
+            'kind': 'COVER',
+            'label': '开头片',
+            'copies': 1,
+            'fileUrl':
+                '/print-agents/jobs/${args.first}/preview-files/COVER/1',
+          },
+          {
+            'kind': 'ORIGINAL',
+            'label': '原片',
+            'copies': 1,
+            'fileUrl':
+                '/print-agents/jobs/${args.first}/preview-files/PHOTO/2',
+          },
+          {
+            'kind': 'CREATIVE',
+            'label': '创意',
+            'copies': 1,
+            'fileUrl':
+                '/print-agents/jobs/${args.first}/preview-files/WORK/3',
+          },
+        ],
+      };
+    }
+    if (method == 'previewJobImage') {
+      return {
+        'contentType': 'image/gif',
+        'dataUrl':
+            'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+      };
+    }
     return snapshot;
   }
 }
@@ -57,6 +93,7 @@ void main() {
       await tester.tap(find.byType(Checkbox).last);
       await tester.pumpAndSettle();
       expect(find.text('已选 1 单'), findsOneWidget);
+      expect(find.text('打印本单'), findsWidgets);
       await tester.tap(find.text('继续剩余'));
       await tester.pumpAndSettle();
       expect(bridge.calls, contains('continueJobs'));

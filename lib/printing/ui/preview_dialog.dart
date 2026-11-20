@@ -63,13 +63,15 @@ class _PreviewDialogState extends State<PreviewDialog> {
     if (items.isEmpty) return;
     final item = items[index];
     final url = '${item['fileUrl']}';
-    setState(
-      () => image = widget.bridge.call('previewJobImage', [
-        item['kind'] == 'COVER'
-            ? url
-            : '$url${url.contains('?') ? '&' : '?'}preview=true',
-      ]),
-    );
+    final future = widget.bridge.call('previewJobImage', [
+      item['kind'] == 'COVER'
+          ? url
+          : '$url${url.contains('?') ? '&' : '?'}preview=true',
+    ]);
+    // 必须用块体：箭头赋值会把 Future 当 setState 回调返回值，触发框架报错。
+    setState(() {
+      image = future;
+    });
   }
 
   @override

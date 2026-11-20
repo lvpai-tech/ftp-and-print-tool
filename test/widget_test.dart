@@ -19,11 +19,8 @@ void main() {
 
       expect(find.text('机位尚未配置'), findsOneWidget);
       expect(find.text('请先配置机位连接'), findsOneWidget);
-      expect(find.text('手动上传模式'), findsOneWidget);
       expect(find.text('自动上传模式'), findsOneWidget);
-
-      await tester.tap(find.text('自动上传模式'));
-      await tester.pumpAndSettle();
+      expect(find.text('手动上传模式'), findsOneWidget);
       expect(find.text('请先配置机位连接'), findsOneWidget);
 
       final openConfig = find.text('机位连接 · 未配置').evaluate().isNotEmpty

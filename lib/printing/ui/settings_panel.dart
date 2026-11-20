@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../print_bridge.dart';
@@ -26,6 +27,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
   bool loadingPrinters = false;
   bool checkingPrinters = false;
   String? printerStatus;
+  bool obscureToken = true;
+  bool loadingToken = false;
 
   Future<void> inspectPrinters() async {
     setState(() {
@@ -36,9 +39,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
       final saved = Map<String, String>.from(
         widget.bridge.config['printers'] ?? {},
       );
-      final names = (widget.embedded ? saved : routes).values
-          .where((name) => name.isNotEmpty)
-          .toSet();
+      final source = routes.values.any((name) => name.isNotEmpty)
+          ? routes
+          : saved;
+      final names = source.values.where((name) => name.isNotEmpty).toSet();
       if (names.isEmpty) throw StateError('请先选择打印机');
       final lines = <String>[];
       for (final name in names) {
@@ -85,6 +89,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     super.initState();
     routes = Map<String, String>.from(widget.bridge.config['printers'] ?? {});
     loadPrinters();
+    loadStoredToken();
   }
 
   @override
@@ -106,6 +111,59 @@ class _SettingsPanelState extends State<SettingsPanel> {
     } finally {
       if (mounted) setState(() => loadingPrinters = false);
     }
+  }
+
+  Future<String> revealStoredToken() async {
+    final result = await widget.bridge.call('revealToken');
+    if (result is! Map) {
+      throw StateError('无法读取已保存的密钥');
+    }
+    return '${result['token'] ?? ''}'.trim();
+  }
+
+  Future<void> loadStoredToken() async {
+    if (!widget.bridge.configured) return;
+    setState(() => loadingToken = true);
+    try {
+      final value = await revealStoredToken();
+      if (mounted && value.isNotEmpty) token.text = value;
+    } catch (e) {
+      if (mounted) {
+        setState(
+          () => printerError = e is StateError ? e.message : '读取密钥失败：$e',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => loadingToken = false);
+    }
+  }
+
+  Future<void> copyToken() async {
+    var text = token.text.trim();
+    if (text.isEmpty && widget.bridge.configured) {
+      try {
+        text = await revealStoredToken();
+        if (text.isNotEmpty) token.text = text;
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text(e is StateError ? e.message : '复制失败：$e')),
+        );
+        return;
+      }
+    }
+    if (text.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(const SnackBar(content: Text('没有可复制的密钥')));
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(
+      context,
+    )?.showSnackBar(const SnackBar(content: Text('密钥已复制')));
   }
 
   @override
@@ -132,21 +190,48 @@ class _SettingsPanelState extends State<SettingsPanel> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      widget.bridge.configured
-                          ? '当前景区：${widget.bridge.config['scenicName']}'
-                          : '输入景区打印密钥，连接后即可查看打印任务。',
+                      () {
+                        if (!widget.bridge.configured) {
+                          return '先粘贴密钥，点「连接景区」校验通过后再选打印机。';
+                        }
+                        final name =
+                            '${widget.bridge.config['scenicName'] ?? ''}'
+                                .trim();
+                        return name.isEmpty
+                            ? '当前景区：（未返回名称）'
+                            : '当前景区：$name';
+                      }(),
                       style: const TextStyle(color: muted),
                     ),
                     const SizedBox(height: 20),
                     TextField(
                       controller: token,
-                      obscureText: true,
+                      obscureText: obscureToken,
                       enableSuggestions: false,
                       autocorrect: false,
                       decoration: InputDecoration(
-                        labelText: widget.bridge.configured
-                            ? '更换密钥（留空保留）'
-                            : '景区打印密钥',
+                        labelText: loadingToken ? '正在读取密钥…' : '景区打印密钥',
+                        suffixIcon: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: obscureToken ? '显示密钥' : '隐藏密钥',
+                              onPressed: () => setState(
+                                () => obscureToken = !obscureToken,
+                              ),
+                              icon: Icon(
+                                obscureToken
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: '复制密钥',
+                              onPressed: copyToken,
+                              icon: const Icon(Icons.copy_outlined),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -160,7 +245,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
                                   await widget.perform('configure', [
                                     {'token': token.text.trim()},
                                   ]);
-                                  if (widget.bridge.configured) token.clear();
+                                  if (widget.bridge.configured) {
+                                    await loadStoredToken();
+                                  }
                                 },
                           child: Text(widget.embedded ? '连接景区' : '验证并连接景区'),
                         ),
@@ -212,107 +299,56 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       }.entries)
                         Padding(
                           padding: const EdgeInsets.only(top: 16),
-                          child: DropdownButtonFormField<String>(
-                            key: ValueKey(
-                              '${entry.key}-${routes[entry.key]}-${printers.join()}',
-                            ),
-                            initialValue: routes[entry.key]?.isNotEmpty == true
+                          child: _PrinterDropdown(
+                            // 不要把当前选中值放进 Key，否则一点选就重建，表现为要点两次。
+                            key: ValueKey('${entry.key}-${printers.join('|')}'),
+                            label: entry.value,
+                            value: routes[entry.key]?.isNotEmpty == true
                                 ? routes[entry.key]
                                 : null,
-                            isExpanded: true,
-                            borderRadius: BorderRadius.circular(14),
-                            dropdownColor: Colors.white,
-                            menuMaxHeight: 320,
-                            icon: const Icon(Icons.keyboard_arrow_down_rounded),
-                            selectedItemBuilder: (_) => [
-                              for (final name in _options(entry.key))
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Text(
-                                    name,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                            ],
-                            decoration: InputDecoration(
-                              labelText: entry.value,
-                              suffixIcon: IconButton(
-                                tooltip: '打开系统打印偏好设置',
-                                onPressed:
-                                    widget.bridge.busy ||
-                                        routes[entry.key]?.isNotEmpty != true
-                                    ? null
-                                    : () async {
-                                        try {
-                                          await widget.bridge.call(
-                                            'printerPreferences',
-                                            [routes[entry.key]],
-                                          );
-                                        } catch (e) {
-                                          if (mounted) {
-                                            setState(() => printerError = '$e');
-                                          }
-                                        }
-                                      },
-                                icon: const Icon(
-                                  Icons.settings_outlined,
-                                  size: 18,
-                                ),
-                              ),
+                            options: _options(entry.key).toList(),
+                            enabled: !widget.bridge.busy,
+                            onChanged: (value) => setState(
+                              () => routes[entry.key] = value ?? '',
                             ),
-                            items: [
-                              for (final name in _options(entry.key))
-                                DropdownMenuItem(
-                                  value: name,
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.print_outlined,
-                                        size: 18,
-                                        color: _pickerColor,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          name,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                      if (name == routes[entry.key])
-                                        const Icon(
-                                          Icons.check_rounded,
-                                          size: 18,
-                                          color: _pickerColor,
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                            ],
-                            onChanged: widget.bridge.busy
+                            onOpenPreferences:
+                                widget.bridge.busy ||
+                                    routes[entry.key]?.isNotEmpty != true
                                 ? null
-                                : (value) => setState(
-                                    () => routes[entry.key] = value ?? '',
-                                  ),
+                                : () async {
+                                    try {
+                                      await widget.bridge.call(
+                                        'printerPreferences',
+                                        [routes[entry.key]],
+                                      );
+                                    } catch (e) {
+                                      if (mounted) {
+                                        setState(() => printerError = '$e');
+                                      }
+                                    }
+                                  },
                           ),
                         ),
                       const SizedBox(height: 24),
-                      if (!widget.embedded)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            onPressed: widget.bridge.busy || checkingPrinters
-                                ? null
-                                : inspectPrinters,
-                            icon: const Icon(
-                              Icons.monitor_heart_outlined,
-                              size: 18,
-                            ),
-                            label: const Text('读取驱动与队列状态'),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          key: const ValueKey('print-inspect-printers'),
+                          onPressed: widget.bridge.busy || checkingPrinters
+                              ? null
+                              : inspectPrinters,
+                          icon: const Icon(
+                            Icons.monitor_heart_outlined,
+                            size: 18,
+                          ),
+                          label: Text(
+                            checkingPrinters ? '正在检查…' : '读取打印机状态',
                           ),
                         ),
-                      if (!widget.embedded && printerStatus != null)
+                      ),
+                      if (printerStatus != null)
                         Padding(
-                          padding: const EdgeInsets.only(bottom: 16),
+                          padding: const EdgeInsets.only(bottom: 16, top: 8),
                           child: SelectableText(
                             printerStatus!,
                             style: const TextStyle(color: muted),
@@ -330,7 +366,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                                       'printers': routes,
                                     },
                                   ]);
-                                  token.clear();
+                                  await loadStoredToken();
                                 },
                           child: Text(widget.embedded ? '保存设置' : '保存并立即生效'),
                         ),
@@ -347,8 +383,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
             ),
           ],
         );
-
-  static const _pickerColor = Color(0xff6741a5);
 
   Set<String> _options(String kind) => {
     ...printers,
@@ -411,6 +445,112 @@ class _SettingsPanelState extends State<SettingsPanel> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 菜单在输入框下方展开，不盖住触发框描边。
+class _PrinterDropdown extends StatefulWidget {
+  const _PrinterDropdown({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.options,
+    required this.enabled,
+    required this.onChanged,
+    this.onOpenPreferences,
+  });
+
+  final String label;
+  final String? value;
+  final List<String> options;
+  final bool enabled;
+  final ValueChanged<String?> onChanged;
+  final VoidCallback? onOpenPreferences;
+
+  @override
+  State<_PrinterDropdown> createState() => _PrinterDropdownState();
+}
+
+class _PrinterDropdownState extends State<_PrinterDropdown> {
+  static const _pickerColor = Color(0xff6741a5);
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.value ?? '');
+  }
+
+  @override
+  void didUpdateWidget(covariant _PrinterDropdown oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final next = widget.value ?? '';
+    if (_controller.text != next) _controller.text = next;
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, bounds) {
+        final menuWidth = (bounds.maxWidth - 48).clamp(160.0, bounds.maxWidth);
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: DropdownMenu<String>(
+                enabled: widget.enabled,
+                // 桌面端默认先抢焦点再开菜单；打开后一次点击即可选中。
+                requestFocusOnTap: true,
+                controller: _controller,
+                width: menuWidth > 0 ? menuWidth : null,
+                initialSelection: widget.value,
+                label: Text(widget.label),
+                hintText: '选择打印机',
+                expandedInsets: EdgeInsets.zero,
+                menuHeight: 320,
+                trailingIcon: const Icon(Icons.keyboard_arrow_down_rounded),
+                selectedTrailingIcon: const Icon(
+                  Icons.keyboard_arrow_up_rounded,
+                ),
+                inputDecorationTheme: Theme.of(context).inputDecorationTheme,
+                dropdownMenuEntries: [
+                  for (final name in widget.options)
+                    DropdownMenuEntry<String>(
+                      value: name,
+                      label: name,
+                      leadingIcon: const Icon(
+                        Icons.print_outlined,
+                        size: 18,
+                        color: _pickerColor,
+                      ),
+                      trailingIcon: name == widget.value
+                          ? const Icon(
+                              Icons.check_rounded,
+                              size: 18,
+                              color: _pickerColor,
+                            )
+                          : null,
+                    ),
+                ],
+                onSelected: widget.enabled ? widget.onChanged : null,
+              ),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: '打开系统打印偏好设置',
+              onPressed: widget.onOpenPreferences,
+              icon: const Icon(Icons.settings_outlined, size: 18),
+            ),
+          ],
+        );
+      },
     );
   }
 }

@@ -16,7 +16,6 @@ class WorkstationShell extends StatefulWidget {
 
 class _WorkstationShellState extends State<WorkstationShell> {
   WorkModule? _module;
-  int _printStep = 0;
 
   String get _uploadStatus => widget.session.transferUploading
       ? '上传任务正在运行'
@@ -35,16 +34,7 @@ class _WorkstationShellState extends State<WorkstationShell> {
 
   void _open(WorkModule module) {
     FocusScope.of(context).unfocus();
-    setState(() {
-      if (_module != module) {
-        final bridge = widget.session.printBridge;
-        if (module == WorkModule.print &&
-            (bridge.printing || bridge.state['autoPrint'] == true)) {
-          _printStep = 2;
-        }
-      }
-      _module = module;
-    });
+    setState(() => _module = module);
   }
 
   @override
@@ -107,50 +97,6 @@ class _WorkstationShellState extends State<WorkstationShell> {
                       ),
                     ],
                   ),
-                if (module != null) ...[
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
-                    child: Row(
-                      children: [
-                        for (final item in WorkModule.values)
-                          Expanded(
-                            child: TextButton(
-                              key: ValueKey('switch-${item.name}'),
-                              onPressed: () => _open(item),
-                              style: TextButton.styleFrom(
-                                foregroundColor: item.color,
-                                backgroundColor: item == module
-                                    ? item.tint
-                                    : Colors.white,
-                                minimumSize: const Size(0, 48),
-                              ),
-                              child: Wrap(
-                                spacing: 7,
-                                runSpacing: 2,
-                                alignment: WrapAlignment.center,
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                children: [
-                                  Icon(item.icon, size: 17),
-                                  Text(item.label),
-                                  Text(
-                                    item == WorkModule.upload
-                                        ? _uploadStatus
-                                        : _printStatus,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  if (module == WorkModule.print)
-                    WorkstationSteps(
-                      module: module,
-                      selected: _printStep,
-                      onSelected: (step) => setState(() => _printStep = step),
-                    ),
-                ],
                 Expanded(
                   child: IndexedStack(
                     index: module == null ? 0 : module.index + 1,
@@ -173,7 +119,6 @@ class _WorkstationShellState extends State<WorkstationShell> {
                       Workstation(
                         bridge: session.printBridge,
                         embedded: true,
-                        selectedPage: const [1, 3, 0][_printStep],
                       ),
                     ],
                   ),

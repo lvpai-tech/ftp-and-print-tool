@@ -11,7 +11,6 @@ enum WorkModule {
     Icons.cloud_upload_outlined,
     Color(0xff2056b9),
     [Color(0xff0f2449), Color(0xff18366c), Color(0xff265ba2)],
-    ['上传设置', '试一下连接', '开始上传'],
   ),
   print(
     '打印照片',
@@ -20,7 +19,6 @@ enum WorkModule {
     Icons.print_outlined,
     Color(0xff6741a5),
     [Color(0xff271b45), Color(0xff3a275d), Color(0xff69489a)],
-    ['打印设置', '检查打印机', '开始打印'],
   );
 
   const WorkModule(
@@ -30,13 +28,11 @@ enum WorkModule {
     this.icon,
     this.color,
     this.gradient,
-    this.steps,
   );
   final String label, description, action;
   final IconData icon;
   final Color color;
   final List<Color> gradient;
-  final List<String> steps;
 
   Color get tint => Color.lerp(Colors.white, color, .10)!;
 }
@@ -45,18 +41,13 @@ class WorkstationMark extends StatelessWidget {
   const WorkstationMark({super.key});
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: const Color(0xff142540),
-      borderRadius: BorderRadius.circular(11),
-    ),
-    child: Padding(
-      padding: const EdgeInsets.all(4),
-      child: Image.asset(
-        'assets/branding/zhenji-brand.png',
-        width: 37,
-        height: 37,
-      ),
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: BorderRadius.circular(11),
+    child: Image.asset(
+      'assets/branding/zhenji-brand.png',
+      width: 40,
+      height: 40,
+      fit: BoxFit.cover,
     ),
   );
 }
@@ -295,61 +286,6 @@ class _ModuleCard extends StatelessWidget {
       ),
     );
   }
-}
-
-class WorkstationSteps extends StatelessWidget {
-  const WorkstationSteps({
-    super.key,
-    required this.module,
-    required this.selected,
-    required this.onSelected,
-  });
-  final WorkModule module;
-  final int selected;
-  final ValueChanged<int> onSelected;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
-    child: Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
-      child: Padding(
-        padding: const EdgeInsets.all(4),
-        child: Row(
-          children: [
-            for (var i = 0; i < module.steps.length; i++)
-              Expanded(
-                child: Semantics(
-                  selected: i == selected,
-                  child: TextButton(
-                    key: ValueKey('${module.name}-step-$i'),
-                    onPressed: () => onSelected(i),
-                    style: TextButton.styleFrom(
-                      foregroundColor: i == selected
-                          ? module.color
-                          : workstationInk,
-                      backgroundColor: i == selected
-                          ? module.tint
-                          : Colors.transparent,
-                      minimumSize: const Size(0, 44),
-                      padding: const EdgeInsets.all(4),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: Text(
-                      '${i + 1}  ${module.steps[i]}',
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    ),
-  );
 }
 
 class _ModuleIllustration extends CustomPainter {
