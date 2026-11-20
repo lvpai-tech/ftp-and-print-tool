@@ -5,6 +5,7 @@ import 'package:lvpai_ftp_client/printing/print_bridge.dart';
 
 class ControlledBridge extends PrintBridge {
   final calls = <String>[];
+  final arguments = <String, List<dynamic>>{};
   ControlledBridge({bool configured = true}) {
     connected = true;
     snapshot = {
@@ -45,6 +46,7 @@ class ControlledBridge extends PrintBridge {
   @override
   Future<dynamic> call(String method, [List<dynamic> args = const []]) async {
     calls.add(method);
+    arguments[method] = args;
     if (method == 'listPrinters') return ['真实系统适配的测试替身'];
     if (method == 'revealToken' || method == 'revealScenicProfileToken') {
       return {'token': 'isolation-test-token'};
@@ -57,22 +59,19 @@ class ControlledBridge extends PrintBridge {
             'kind': 'COVER',
             'label': '开头片',
             'copies': 1,
-            'fileUrl':
-                '/print-agents/jobs/${args.first}/preview-files/COVER/1',
+            'fileUrl': '/print-agents/jobs/${args.first}/preview-files/COVER/1',
           },
           {
             'kind': 'ORIGINAL',
             'label': '原片',
             'copies': 1,
-            'fileUrl':
-                '/print-agents/jobs/${args.first}/preview-files/PHOTO/2',
+            'fileUrl': '/print-agents/jobs/${args.first}/preview-files/PHOTO/2',
           },
           {
             'kind': 'CREATIVE',
             'label': '创意',
             'copies': 1,
-            'fileUrl':
-                '/print-agents/jobs/${args.first}/preview-files/WORK/3',
+            'fileUrl': '/print-agents/jobs/${args.first}/preview-files/WORK/3',
           },
         ],
       };
@@ -99,15 +98,21 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: Workstation(bridge: bridge)));
       await tester.pumpAndSettle();
       expect(find.text('#9007199254740993'), findsOneWidget);
+      expect(find.text('4987'), findsOneWidget);
+      expect(find.text('共 9 张'), findsOneWidget);
       expect(find.text('已完成 3 / 9 张'), findsOneWidget);
+      expect(find.text('继续剩余'), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.tap(find.byType(Checkbox).last);
       await tester.pumpAndSettle();
       expect(find.text('已选 1 单'), findsOneWidget);
-      expect(find.text('打印本单'), findsWidgets);
+      expect(find.text('打印选中'), findsNothing);
       await tester.tap(find.text('继续剩余'));
       await tester.pumpAndSettle();
       expect(bridge.calls, contains('continueJobs'));
+      expect(bridge.arguments['continueJobs'], [
+        ['9007199254740993'],
+      ]);
     });
   }
   testWidgets('首次连接不展示假数据且密钥遮挡', (tester) async {
@@ -129,5 +134,72 @@ void main() {
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
     expect(bridge.calls, isNot(contains('autoPrint')));
+  });
+
+  testWidgets('勾选后原位显示批量操作，缩略图可直接打开预览', (tester) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final bridge = ControlledBridge();
+    final job = bridge.snapshot['state']['jobPage']['list'][0] as Json;
+    job['status'] = 'QUEUED';
+    job['completedSheets'] = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Workstation(bridge: bridge, embedded: true, onBack: () {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final tail = find.text('4987');
+    final top = tester.getTopLeft(tail).dy;
+    expect(find.text('自动打印 关闭'), findsOneWidget);
+    expect(find.text('打印本单'), findsOneWidget);
+    expect(find.text('打印选中'), findsNothing);
+    await tester.tap(find.byType(Checkbox).last);
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(tail).dy, top);
+    expect(find.text('打印选中'), findsOneWidget);
+    expect(find.text('继续剩余'), findsNothing);
+    await tester.tap(find.text('取消选择'));
+    await tester.pumpAndSettle();
+    expect(find.text('全部任务'), findsOneWidget);
+    await tester.tap(find.byTooltip('查看照片'));
+    await tester.pumpAndSettle();
+    expect(find.text('工单 #9007199254740993 · 打印预览'), findsOneWidget);
+    expect(bridge.arguments['previewJob'], ['9007199254740993']);
+    expect(bridge.calls, isNot(contains('printJobs')));
+  });
+
+  testWidgets('异常菜单核对纸面后才确认已打印', (tester) async {
+    tester.view.physicalSize = const Size(375, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final bridge = ControlledBridge();
+    final job = bridge.snapshot['state']['jobPage']['list'][0] as Json;
+    job['completedSheets'] = 9;
+    job['errorReason'] = '缺纸';
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Workstation(bridge: bridge, embedded: true, onBack: () {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('缺纸'), findsOneWidget);
+    await tester.tap(find.byTooltip('处理异常'));
+    await tester.pumpAndSettle();
+    expect(find.text('继续剩余'), findsNothing);
+    await tester.tap(find.text('确认已打印'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('请先核对纸面已齐'), findsOneWidget);
+    expect(bridge.calls, isNot(contains('confirmPrinted')));
+    await tester.tap(find.widgetWithText(FilledButton, '确认已打印'));
+    await tester.pumpAndSettle();
+    expect(bridge.arguments['confirmPrinted'], [
+      ['9007199254740993'],
+    ]);
+    expect(bridge.calls, isNot(contains('printJobs')));
+    expect(tester.takeException(), isNull);
   });
 }

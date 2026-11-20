@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
+import 'branding.dart';
 import 'ui/design.dart';
 import 'ui/transfer_page.dart';
 import 'ui/workstation_shell.dart';
@@ -12,7 +13,7 @@ class PhotoFtpApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp(
     debugShowCheckedModeBanner: false,
-    title: session == null ? '旅派 · FTP 上传' : '帧集 · 上传与打印工作台',
+    title: session == null ? '$appBrandName · FTP 上传' : workstationTitle,
     theme: ThemeData(
       useMaterial3: true,
       fontFamilyFallback: const [

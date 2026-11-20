@@ -2,7 +2,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:label="旅派 FTP"
+        android:label="帧集快拍"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

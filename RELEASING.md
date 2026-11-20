@@ -80,7 +80,7 @@ workflow 文件进入默认分支后，在 GitHub Actions 里选择对应的构�
 
 ```sh
 python3 tool/package_release.py --platform macos-arm64 --channel test \
-  --app '/absolute/path/to/signed/旅派 FTP.app' \
+  --app '/absolute/path/to/signed/lvpai_ftp_client.app' \
   --sign-identity 'Developer ID Application: YOUR TEAM (TEAMID)' \
   --notary-profile 'YOUR_EXISTING_KEYCHAIN_PROFILE'
 ```

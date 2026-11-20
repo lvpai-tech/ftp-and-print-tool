@@ -3,7 +3,7 @@
 <html lang="zh-CN">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>帧集 · 上传与打印工作台原型</title>
+<title>帧集快拍 · 上传与打印工作台原型</title>
 <style>
   :root{color-scheme:light;--paper:#f5f4ef;--white:#fff;--ink:#202521;--muted:#58615a;--line:#e3e4dc;--sage:#e8efe4;--forest:#233a30;--green:#37624a;--lime:#dff39c;--sand:#f7ebd7;--brown:#744a1e;--rust:#8a382d;--radius:16px;font-family:'Instrument Sans','Microsoft YaHei UI','PingFang SC',sans-serif;color:var(--ink);background:var(--paper);font-variant-numeric:tabular-nums}
   *{box-sizing:border-box}body{margin:0;-webkit-font-smoothing:antialiased}button,input,select{font:inherit}button{cursor:pointer;touch-action:manipulation}button:disabled{cursor:default;opacity:.55}button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid #568d62;outline-offset:3px}button:not(:disabled):active{scale:.96}button{transition:scale 150ms,background-color 150ms}h1,h2,h3,p,figure{margin:0}h1,h2,h3{text-wrap:balance}p{text-wrap:pretty;line-height:1.6}h1{font-size:clamp(2rem,3.5vw,3.15rem);font-weight:750;letter-spacing:-.055em;line-height:1.16}h2{font-size:1.25rem;letter-spacing:-.025em}h3{font-size:1rem}small{font-size:.75rem}.muted{color:var(--muted)}.mono{font-family:'IBM Plex Mono',Consolas,monospace;letter-spacing:.015em}.icon{width:19px;height:19px;flex:none;vertical-align:middle}.big-icon{width:44px;height:44px;object-fit:contain}.skip{position:absolute;left:12px;top:-100px;z-index:10}.skip:focus{top:12px}
@@ -84,7 +84,7 @@
   const log = message => events.unshift(`刚刚　${message}`);
 
   function header() {
-    el('top').innerHTML = `<div class="brand"><span class="brand-mark">${icon('camera')}</span>帧集 <small>交互原型</small></div><nav class="seg" aria-label="演示界面">${['client','ops'].map((key,i)=>`<button data-action="surface:${key}" aria-pressed="${state.surface===key}">${['Flutter 工作台','运营后台'][i]}</button>`).join('')}</nav>${pill('<i class="dot"></i> 本地演示','neutral')}`;
+    el('top').innerHTML = `<div class="brand"><span class="brand-mark">${icon('camera')}</span>帧集快拍 <small>交互原型</small></div><nav class="seg" aria-label="演示界面">${['client','ops'].map((key,i)=>`<button data-action="surface:${key}" aria-pressed="${state.surface===key}">${['Flutter 工作台','运营后台'][i]}</button>`).join('')}</nav>${pill('<i class="dot"></i> 本地演示','neutral')}`;
     const client = state.surface === 'client';
     const nav = client ? clientNav : opsNav;
     const selected = client ? state.page : state.opsTab;

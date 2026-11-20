@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:material_ui/material_ui.dart';
 
 import '../../ui/app_dialogs.dart';
+import '../../ui/design.dart';
 import '../print_bridge.dart';
 import 'design.dart';
 
@@ -73,10 +74,17 @@ class _JobThumbnailsState extends State<JobThumbnails> {
   @override
   void didUpdateWidget(covariant JobThumbnails oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.jobId != widget.jobId ||
+    if (oldWidget.bridge != widget.bridge ||
+        oldWidget.jobId != widget.jobId ||
         oldWidget.contentSummary != widget.contentSummary) {
       load();
     }
+  }
+
+  @override
+  void dispose() {
+    attempt++;
+    super.dispose();
   }
 
   Future<void> load() async {
@@ -88,6 +96,7 @@ class _JobThumbnailsState extends State<JobThumbnails> {
     });
     try {
       final result = await _ThumbScheduler.run(() async {
+        if (token != attempt) return null;
         final job = await widget.bridge.call('previewJob', [widget.jobId]);
         if (job is! Map) throw StateError('预览清单无效');
         final raw = (job['items'] as List? ?? [])
@@ -136,46 +145,77 @@ class _JobThumbnailsState extends State<JobThumbnails> {
   @override
   Widget build(BuildContext context) {
     if (error != null) {
-      return TextButton(
-        onPressed: load,
-        style: TextButton.styleFrom(foregroundColor: Colors.red),
-        child: const Text('图片加载失败，重试'),
+      return Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          TextButton(
+            onPressed: widget.onOpenPreview,
+            child: const Text('查看照片'),
+          ),
+          IconButton(
+            tooltip: '重试缩略图：$error',
+            onPressed: load,
+            icon: const Icon(Icons.refresh, size: 18),
+          ),
+        ],
       );
     }
     if (items == null) {
-      return const Text('缩略图加载中…', style: TextStyle(color: muted, fontSize: 12));
+      return TextButton(
+        onPressed: widget.onOpenPreview,
+        child: const Text('缩略图加载中…'),
+      );
     }
     if (items!.isEmpty) {
-      return const Text('无照片条目', style: TextStyle(color: muted, fontSize: 12));
+      return TextButton(
+        onPressed: widget.onOpenPreview,
+        child: const Text('查看打印预览'),
+      );
     }
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final item in items!)
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: InkWell(
-              onTap: widget.onOpenPreview,
-              borderRadius: BorderRadius.circular(4),
-              child: Tooltip(
-                message: '${item.label} ×${item.copies}',
-                child: Container(
-                  width: 40,
-                  height: 40,
+    return Align(
+      alignment: Alignment.centerLeft,
+      widthFactor: 1,
+      child: Tooltip(
+        message: '查看照片',
+        child: TextButton(
+          onPressed: widget.onOpenPreview,
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            minimumSize: const Size(44, 44),
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.all(Radius.circular(6)),
+            ),
+          ),
+          child: Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              for (final item in items!)
+                Container(
+                  width: 36,
+                  height: 44,
                   decoration: BoxDecoration(
-                    color: const Color(0xfffafafa),
-                    border: Border.all(color: const Color(0xfff0f0f0)),
+                    color: WorkstationStyle.bg,
+                    border: Border.all(color: WorkstationStyle.line),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   clipBehavior: Clip.antiAlias,
-                  child: Image.memory(item.bytes, fit: BoxFit.contain),
+                  child: Image.memory(
+                    item.bytes,
+                    fit: BoxFit.contain,
+                    semanticLabel: '${item.label} ×${item.copies}',
+                  ),
                 ),
-              ),
-            ),
+              if (remaining > 0)
+                Text(
+                  '+$remaining',
+                  style: const TextStyle(color: muted, fontSize: 12),
+                ),
+            ],
           ),
-        if (remaining > 0)
-          Text('另 $remaining 张', style: const TextStyle(color: muted, fontSize: 12)),
-      ],
+        ),
+      ),
     );
   }
 }

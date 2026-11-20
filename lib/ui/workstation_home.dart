@@ -1,24 +1,27 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../branding.dart';
+
 const workstationBackground = Color(0xfff5f7fb);
 const workstationInk = Color(0xff192943);
+const workstationContentWidth = 1110.0;
 
 enum WorkModule {
   upload(
     '上传照片',
-    '手动上传，也可以自动上传新照片。',
+    '选图上传，或监听文件夹自动上传',
     '去上传',
     Icons.cloud_upload_outlined,
-    Color(0xff2056b9),
-    [Color(0xff0f2449), Color(0xff18366c), Color(0xff265ba2)],
+    Color(0xffa6dce3),
+    [Color(0xff102735), Color(0xff1c3e4b), Color(0xff285b66)],
   ),
   print(
     '打印照片',
-    '手动打印，也可以自动打印新任务。',
+    '查看工单、核对照片并打印',
     '去打印',
     Icons.print_outlined,
-    Color(0xff6741a5),
-    [Color(0xff271b45), Color(0xff3a275d), Color(0xff69489a)],
+    Color(0xffdec6eb),
+    [Color(0xff252139), Color(0xff3a304d), Color(0xff59466c)],
   );
 
   const WorkModule(
@@ -26,15 +29,54 @@ enum WorkModule {
     this.description,
     this.action,
     this.icon,
-    this.color,
+    this.accent,
     this.gradient,
   );
   final String label, description, action;
   final IconData icon;
-  final Color color;
+  final Color accent;
   final List<Color> gradient;
+}
 
-  Color get tint => Color.lerp(Colors.white, color, .10)!;
+class WorkstationScenicBackground extends StatelessWidget {
+  const WorkstationScenicBackground({super.key});
+
+  @override
+  Widget build(BuildContext context) => const DecoratedBox(
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xff142744), Color(0xff3d5277), Color(0xff6d638b)],
+      ),
+    ),
+    child: Stack(
+      fit: StackFit.expand,
+      children: [
+        Image(
+          image: AssetImage('assets/branding/workstation-scenic.webp'),
+          fit: BoxFit.cover,
+          alignment: Alignment(.82, -.72),
+          excludeFromSemantics: true,
+        ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color(0xbb0c182f),
+                Color(0x4d192640),
+                Color(0x0d1b2844),
+                Color(0x53101f3b),
+              ],
+              stops: [0, .37, .67, 1],
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class WorkstationHome extends StatelessWidget {
@@ -64,7 +106,9 @@ class WorkstationHome extends StatelessWidget {
         ),
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1110),
+            constraints: const BoxConstraints(
+              maxWidth: workstationContentWidth,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -73,14 +117,14 @@ class WorkstationHome extends StatelessWidget {
                   style: TextStyle(
                     fontSize: wide ? 48 : 34,
                     height: 1.16,
-                    color: workstationInk,
+                    color: Colors.white,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 13),
                 const Text(
-                  '上传和打印可以同时进行。',
-                  style: TextStyle(fontSize: 15, color: Color(0xff52637c)),
+                  appSlogan,
+                  style: TextStyle(fontSize: 15, color: Color(0xffe9f0ff)),
                 ),
                 SizedBox(height: wide ? 40 : 22),
                 LayoutBuilder(
@@ -102,13 +146,14 @@ class WorkstationHome extends StatelessWidget {
                         ),
                     ];
                     return wide
-                        ? Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(child: cards.first),
-                              const SizedBox(width: 22),
-                              Expanded(child: cards.last),
-                            ],
+                        ? IntrinsicHeight(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              spacing: 22,
+                              children: [
+                                for (final card in cards) Expanded(child: card),
+                              ],
+                            ),
                           )
                         : Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -147,14 +192,14 @@ class _ModuleCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const radius = BorderRadius.all(Radius.circular(22));
-    final light = module == WorkModule.upload
-        ? const Color(0xffaecbff)
-        : const Color(0xffd9c1ff);
+    final accent = module.accent;
     return Material(
       color: module.gradient.first,
+      elevation: 8,
+      shadowColor: const Color(0x75101b32),
       shape: RoundedRectangleBorder(
         borderRadius: radius,
-        side: BorderSide(color: light.withValues(alpha: .55)),
+        side: BorderSide(color: accent.withValues(alpha: .55)),
       ),
       clipBehavior: Clip.antiAlias,
       child: Ink(
@@ -176,6 +221,7 @@ class _ModuleCard extends StatelessWidget {
                 : const EdgeInsets.all(19),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Row(
                   children: [
@@ -192,7 +238,7 @@ class _ModuleCard extends StatelessWidget {
                             child: SizedBox(
                               width: 44,
                               height: 44,
-                              child: Icon(module.icon, size: 23, color: light),
+                              child: Icon(module.icon, size: 23, color: accent),
                             ),
                           ),
                           SizedBox(height: illustrate ? 24 : 13),
@@ -219,7 +265,7 @@ class _ModuleCard extends StatelessWidget {
                       ExcludeSemantics(
                         child: CustomPaint(
                           size: const Size(142, 146),
-                          painter: _ModuleIllustration(module, light),
+                          painter: _ModuleIllustration(module, accent),
                         ),
                       ),
                   ],
@@ -232,7 +278,7 @@ class _ModuleCard extends StatelessWidget {
                     Icon(
                       active ? Icons.circle : Icons.circle_outlined,
                       size: 9,
-                      color: active ? const Color(0xffa8f1d0) : light,
+                      color: active ? const Color(0xffa8f1d0) : accent,
                     ),
                     const SizedBox(width: 7),
                     Expanded(

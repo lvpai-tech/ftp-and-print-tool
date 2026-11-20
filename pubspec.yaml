@@ -30,6 +30,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/branding/zhenji-brand.png
+    - assets/branding/workstation-scenic.webp
     - assets/branding/logo-zhen.svg
     - assets/printing/tray.ico
     - assets/printing/tray.png

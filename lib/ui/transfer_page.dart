@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
 
+import '../branding.dart';
 import '../profile_store.dart';
 import '../transfer.dart';
 import 'auto_upload_panel.dart';
@@ -17,12 +18,14 @@ class TransferPage extends StatefulWidget {
     this.embedded = false,
     this.onActiveChanged,
     this.onUploadingChanged,
+    this.onConfiguredChanged,
   });
 
   /// 嵌在工作台壳内时隐藏自带顶栏，由壳提供返回与切换。
   final bool embedded;
   final ValueChanged<bool>? onActiveChanged;
   final ValueChanged<bool>? onUploadingChanged;
+  final ValueChanged<bool>? onConfiguredChanged;
 
   @override
   State<TransferPage> createState() => _TransferPageState();
@@ -66,7 +69,10 @@ class _TransferPageState extends State<TransferPage> {
     } catch (_) {
       _message = '无法读取已保存配置，请重新填写；检查系统安全存储权限';
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+        widget.onConfiguredChanged?.call(_configured);
+      }
     }
   }
 
@@ -107,8 +113,7 @@ class _TransferPageState extends State<TransferPage> {
       final port = int.tryParse(value.trim());
       if (port == null || port < 1 || port > 65535) return '端口应为 1—65535';
     }
-    if (controller == _host &&
-        (value.contains('://') || value.contains('/'))) {
+    if (controller == _host && (value.contains('://') || value.contains('/'))) {
       return '只填写域名或 IP，不含协议和路径';
     }
     return null;
@@ -235,12 +240,11 @@ class _TransferPageState extends State<TransferPage> {
       }
       if (mounted) {
         setState(
-          () => _message = save
-              ? '配置已保存到系统安全存储'
-              : '连接成功，目标目录可访问（上传权限将在传输时验证）',
+          () => _message = save ? '配置已保存到系统安全存储' : '连接成功，目标目录可访问（上传权限将在传输时验证）',
         );
       }
       if (save && mounted) {
+        widget.onConfiguredChanged?.call(_configured);
         Navigator.of(context).maybePop();
       }
     } catch (error) {
@@ -704,9 +708,7 @@ class _TransferPageState extends State<TransferPage> {
 
   Widget _brandBar() {
     final narrow = MediaQuery.sizeOf(context).width < 560;
-    final configLabel = _configured
-        ? '机位连接'
-        : (narrow ? '未配置' : '机位连接 · 未配置');
+    final configLabel = _configured ? '机位连接' : (narrow ? '未配置' : '机位连接 · 未配置');
     return Container(
       height: 64,
       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -740,7 +742,7 @@ class _TransferPageState extends State<TransferPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '旅派 · 照片传输',
+                  '$appBrandName · 照片传输',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -753,10 +755,7 @@ class _TransferPageState extends State<TransferPage> {
                   '现场上传工作台',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: WorkstationStyle.muted,
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: WorkstationStyle.muted, fontSize: 12),
                 ),
               ],
             ),
@@ -853,9 +852,7 @@ class _TransferPageState extends State<TransferPage> {
     body: Column(
       children: [
         if (!widget.embedded) _brandBar(),
-        Expanded(
-          child: SafeArea(top: false, child: _workspace()),
-        ),
+        Expanded(child: SafeArea(top: false, child: _workspace())),
       ],
     ),
   );

@@ -60,6 +60,14 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('照片工作台'), findsOneWidget);
+      expect(find.text('帧集快拍'), findsOneWidget);
+      expect(find.text('一分钟拍大片'), findsOneWidget);
+      final background = find.image(
+        const AssetImage('assets/branding/workstation-scenic.webp'),
+      );
+      expect(tester.getRect(background), Offset.zero & Size(width, 900));
+      expect(tester.widget<Text>(keyed('status-upload')).data, '机位待配置');
+      expect(tester.widget<Text>(keyed('status-print')).data, '自动打印已关闭');
       expect(keyed('open-upload'), findsOneWidget);
       expect(keyed('open-print'), findsOneWidget);
       await open(tester, 'open-upload');
@@ -145,7 +153,7 @@ void main() {
     await tester.pump();
     await tester.tap(find.byTooltip('返回工作台'));
     await tester.pump();
-    expect(tester.widget<Text>(keyed('status-upload')).data, '上传任务正在运行');
+    expect(tester.widget<Text>(keyed('status-upload')).data, '上传中');
     expect(tester.widget<Text>(keyed('status-print')).data, '打印中');
     await tester.ensureVisible(keyed('open-print'));
     await tester.tap(keyed('open-print'));
@@ -160,8 +168,8 @@ void main() {
     await tester.pump();
     await tester.tap(find.byTooltip('返回工作台'));
     await tester.pump();
-    expect(tester.widget<Text>(keyed('status-upload')).data, '上传任务正在运行');
-    expect(tester.widget<Text>(keyed('status-print')).data, '未运行');
+    expect(tester.widget<Text>(keyed('status-upload')).data, '上传中');
+    expect(tester.widget<Text>(keyed('status-print')).data, '自动打印已关闭');
   });
 
   test('退出检查分别保护上传与打印', () {

@@ -7,6 +7,7 @@ class WorkstationSession extends ChangeNotifier {
   final PrintBridge printBridge;
   bool transferActive = false;
   bool transferUploading = false;
+  bool? transferConfigured;
   String? notice;
 
   void setTransferActive(bool active) {
@@ -23,6 +24,12 @@ class WorkstationSession extends ChangeNotifier {
   void setTransferUploading(bool active) {
     if (transferUploading == active) return;
     transferUploading = active;
+    notifyListeners();
+  }
+
+  void setTransferConfigured(bool configured) {
+    if (transferConfigured == configured) return;
+    transferConfigured = configured;
     notifyListeners();
   }
 

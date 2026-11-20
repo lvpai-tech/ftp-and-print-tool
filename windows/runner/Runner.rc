@@ -90,11 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "ai.lvpai" "\0"
-            VALUE "FileDescription", "lvpai_ftp_client" "\0"
+            VALUE "FileDescription", "帧集快拍" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "lvpai_ftp_client" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 ai.lvpai. All rights reserved." "\0"
             VALUE "OriginalFilename", "lvpai_ftp_client.exe" "\0"
+            // Flutter storage uses ProductName as part of its directory path.
             VALUE "ProductName", "lvpai_ftp_client" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END

@@ -1,7 +1,9 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../branding.dart';
 import '../ui/app_dialogs.dart';
 import '../ui/design.dart';
+import '../ui/update_button.dart';
 import 'print_bridge.dart';
 import 'ui/design.dart';
 import 'ui/job_thumbnails.dart';
@@ -14,10 +16,12 @@ class Workstation extends StatefulWidget {
     required this.bridge,
     this.embedded = false,
     this.selectedPage,
+    this.onBack,
   });
   final PrintBridge bridge;
   final bool embedded;
   final int? selectedPage;
+  final VoidCallback? onBack;
   @override
   State<Workstation> createState() => _WorkstationState();
 }
@@ -78,12 +82,7 @@ class _WorkstationState extends State<Workstation> {
   }
 
   Future<bool> confirm(String title, String message, String action) =>
-      showAppConfirm(
-        context,
-        title: title,
-        message: message,
-        action: action,
-      );
+      showAppConfirm(context, title: title, message: message, action: action);
 
   Future<void> query({int number = 1}) async {
     selected.clear();
@@ -100,12 +99,6 @@ class _WorkstationState extends State<Workstation> {
 
   String date(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-
-  /// 与 Electron 一致：仅未打印/领取中可直接整单送打。
-  bool _canPrintJob(Json job) {
-    final status = '${job['status'] ?? ''}';
-    return status == 'QUEUED' || status == 'CLAIMED';
-  }
 
   void openConfig() => _scaffoldKey.currentState?.openEndDrawer();
 
@@ -133,7 +126,7 @@ class _WorkstationState extends State<Workstation> {
                     Icon(Icons.camera_outlined, color: accent, size: 28),
                     SizedBox(width: 10),
                     Text(
-                      '帧集',
+                      appBrandName,
                       style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.w700,
@@ -191,9 +184,7 @@ class _WorkstationState extends State<Workstation> {
       Expanded(
         child: !bridge.connected
             ? Center(
-                child: Text(
-                  bridge.error == null ? '正在连接打印内核…' : '暂时无法使用打印',
-                ),
+                child: Text(bridge.error == null ? '正在连接打印内核…' : '暂时无法使用打印'),
               )
             : IndexedStack(
                 sizing: StackFit.expand,
@@ -218,66 +209,135 @@ class _WorkstationState extends State<Workstation> {
     ],
   );
 
-  Widget _embeddedShell() => Scaffold(
-    key: _scaffoldKey,
-    backgroundColor: Colors.transparent,
-    endDrawer: Drawer(
-      width: MediaQuery.sizeOf(context).width.clamp(320, 560),
-      child: SafeArea(
-        child: SettingsPanel(
-          bridge: bridge,
-          perform: perform,
-          embedded: true,
+  Widget _embeddedShell() {
+    final putControlsInHeader =
+        widget.onBack != null &&
+        MediaQuery.sizeOf(context).width >= 960 &&
+        MediaQuery.textScalerOf(context).scale(14) <= 17;
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      appBar: widget.onBack == null
+          ? null
+          : AppBar(
+              backgroundColor: WorkstationStyle.card,
+              surfaceTintColor: Colors.transparent,
+              toolbarHeight: 64,
+              titleSpacing: 8,
+              shape: const Border(
+                bottom: BorderSide(color: WorkstationStyle.line),
+              ),
+              leading: IconButton(
+                tooltip: '返回工作台',
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () {
+                  _scaffoldKey.currentState?.closeEndDrawer();
+                  widget.onBack!();
+                },
+              ),
+              title: Row(
+                children: [
+                  const Text(
+                    '打印照片',
+                    style: TextStyle(
+                      color: WorkstationStyle.ink,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (putControlsInHeader && bridge.connected) ...[
+                    const SizedBox(width: 16),
+                    const SizedBox(
+                      height: 24,
+                      child: VerticalDivider(width: 1),
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(child: _scenicControl()),
+                    if (bridge.configured) ...[
+                      const SizedBox(width: 12),
+                      _connectionStatus(),
+                    ],
+                  ],
+                ],
+              ),
+              actions: [
+                if (putControlsInHeader &&
+                    bridge.connected &&
+                    bridge.configured)
+                  _autoPrintControl(),
+                const SizedBox(width: 8),
+                const UpdateButton(),
+                const SizedBox(width: 8),
+              ],
+            ),
+      body: Scaffold(
+        key: _scaffoldKey,
+        backgroundColor: Colors.transparent,
+        endDrawer: Drawer(
+          width: MediaQuery.sizeOf(context).width.clamp(280, 560),
+          child: SafeArea(
+            child: SettingsPanel(
+              bridge: bridge,
+              perform: perform,
+              embedded: true,
+            ),
+          ),
+        ),
+        body: SafeArea(
+          top: false,
+          child: !bridge.connected
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Text(
+                      bridge.error == null
+                          ? '正在连接打印内核…'
+                          : appErrorMessage(bridge.error!),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                )
+              : _embeddedWorkspace(putControlsInHeader),
         ),
       ),
-    ),
-    body: SafeArea(
-      top: false,
-      child: !bridge.connected
-          ? Center(
-              child: Text(bridge.error == null ? '正在连接打印内核…' : '暂时无法使用打印'),
-            )
-          : _embeddedWorkspace(),
-    ),
-  );
+    );
+  }
 
-  Widget _embeddedWorkspace() {
+  Widget _embeddedWorkspace(bool putControlsInHeader) {
     final pad = MediaQuery.sizeOf(context).width >= 960 ? 20.0 : 12.0;
     return Padding(
-      padding: EdgeInsets.fromLTRB(pad, 16, pad, 20),
+      padding: EdgeInsets.fromLTRB(pad, 12, pad, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _scenicSummary(),
-          const SizedBox(height: 16),
-          if (bridge.configured) _autoPrintBar(),
-          if (bridge.busy) ...[
-            const SizedBox(height: 12),
-            const LinearProgressIndicator(minHeight: 2),
-          ],
-          if (bridge.error != null) ...[
-            const SizedBox(height: 12),
-            DecoratedBox(
-              decoration: WorkstationStyle.surface(
-                color: WorkstationStyle.badSoft,
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: SelectableText(
-                  appErrorMessage(bridge.error!),
-                  style: const TextStyle(color: Color(0xff923f20)),
-                ),
+          if (!putControlsInHeader)
+            Wrap(
+              spacing: 10,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _scenicControl(),
+                if (bridge.configured) ...[
+                  _connectionStatus(),
+                  _autoPrintControl(),
+                ],
+              ],
+            ),
+          if (bridge.busy) const LinearProgressIndicator(minHeight: 2),
+          if (bridge.error case final error?)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: SelectableText(
+                appErrorMessage(error),
+                style: const TextStyle(color: WorkstationStyle.bad),
               ),
             ),
-          ],
-          if (bridge.configured && bridge.config['statusCommand'] == null) ...[
-            const SizedBox(height: 12),
-            const Text(
-              '当前平台未配置打印状态观察：送打受理无法证明实际出纸，请核对实物。',
-              style: TextStyle(color: Color(0xff923f20)),
+          if (bridge.configured && bridge.config['statusCommand'] == null)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 6),
+              child: Text(
+                '未配置打印状态监测，请核对实物是否出纸。',
+                style: TextStyle(color: WorkstationStyle.warn),
+              ),
             ),
-          ],
-          const SizedBox(height: 18),
+          if (!putControlsInHeader) const SizedBox(height: 8),
           Expanded(
             child: bridge.configured ? jobsView(compact: true) : _needConfig(),
           ),
@@ -286,109 +346,69 @@ class _WorkstationState extends State<Workstation> {
     );
   }
 
-  Widget _scenicSummary() => Material(
+  Widget _scenicControl() => TextButton(
     key: const ValueKey('print-open-config'),
-    color: bridge.configured
-        ? WorkstationStyle.accentSoft
-        : WorkstationStyle.warnSoft,
-    borderRadius: BorderRadius.circular(12),
-    child: InkWell(
-      onTap: openConfig,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
-        child: Row(
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: WorkstationStyle.card,
-                borderRadius: BorderRadius.circular(9),
-                border: Border.all(color: WorkstationStyle.line),
-              ),
-              child: Icon(
-                bridge.configured
-                    ? Icons.landscape_outlined
-                    : Icons.key_outlined,
-                color: bridge.configured
-                    ? const Color(0xff6741a5)
-                    : WorkstationStyle.warn,
-                size: 18,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    bridge.configured ? '当前景区' : '景区尚未连接',
-                    style: const TextStyle(
-                      color: WorkstationStyle.muted,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    bridge.configured
-                        ? scenicLabel
-                        : '点击粘贴打印密钥并选择打印机',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: bridge.configured
-                          ? WorkstationStyle.ink
-                          : WorkstationStyle.warn,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            StatusTag(
-              label: bridge.configured ? '已连接' : '必填',
-              color: bridge.configured
-                  ? WorkstationStyle.ok
-                  : WorkstationStyle.warn,
-              soft: bridge.configured
-                  ? WorkstationStyle.okSoft
-                  : const Color(0xfffff7ed),
-            ),
-            const SizedBox(width: 8),
-            const Icon(Icons.chevron_right, color: WorkstationStyle.muted),
-          ],
-        ),
+    onPressed: openConfig,
+    style: TextButton.styleFrom(
+      foregroundColor: WorkstationStyle.ink,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      minimumSize: const Size(40, 44),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(Radius.circular(8)),
       ),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.landscape_outlined, size: 18),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(
+            bridge.configured ? scenicLabel : '连接景区',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        const Icon(Icons.keyboard_arrow_down, size: 18),
+      ],
     ),
   );
 
-  Widget _autoPrintBar() => DecoratedBox(
-    decoration: WorkstationStyle.surface(),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: Row(
-        children: [
-          Icon(
-            bridge.connected ? Icons.check_circle_outline : Icons.sync,
-            size: 18,
-            color: bridge.connected ? accent : muted,
+  Widget _connectionStatus() => Text.rich(
+    TextSpan(
+      children: [
+        WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: Icon(
+            bridge.printing ? Icons.print_outlined : Icons.circle,
+            size: bridge.printing ? 16 : 7,
+            color: bridge.printing
+                ? WorkstationStyle.accent
+                : WorkstationStyle.ok,
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              bridge.printing
-                  ? '正在打印，请勿关闭设备'
-                  : bridge.connected
-                  ? '打印服务已连接'
-                  : '连接中',
-              style: const TextStyle(color: WorkstationStyle.muted),
-            ),
-          ),
-          const Text('自动打印'),
-          Switch(
-            value: bridge.state['autoPrint'] == true,
-            onChanged: !bridge.busy
+        ),
+        TextSpan(text: bridge.printing ? '  正在打印，请勿关闭设备' : '  打印服务已连接'),
+      ],
+    ),
+    style: const TextStyle(color: WorkstationStyle.muted, fontSize: 13),
+  );
+
+  Widget _autoPrintControl() {
+    final enabled = bridge.state['autoPrint'] == true;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '自动打印 ${enabled ? '开启' : '关闭'}',
+          style: const TextStyle(color: WorkstationStyle.ink, fontSize: 13),
+        ),
+        const SizedBox(width: 4),
+        Semantics(
+          label: '自动打印',
+          child: Switch(
+            value: enabled,
+            activeTrackColor: WorkstationStyle.accent,
+            onChanged: bridge.configured && !bridge.busy
                 ? (value) async {
                     if (!value ||
                         await confirm(
@@ -396,15 +416,15 @@ class _WorkstationState extends State<Workstation> {
                           '有新任务时会自动打印。请确认打印机和相纸已准备好。',
                           '开启自动打印',
                         )) {
-                      await perform('autoPrint', [value]);
+                      if (mounted) await perform('autoPrint', [value]);
                     }
                   }
                 : null,
           ),
-        ],
-      ),
-    ),
-  );
+        ),
+      ],
+    );
+  }
 
   Widget _needConfig() => DecoratedBox(
     decoration: WorkstationStyle.surface(),
@@ -413,7 +433,7 @@ class _WorkstationState extends State<Workstation> {
         padding: const EdgeInsets.fromLTRB(22, 20, 22, 24),
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            minHeight: bounds.maxHeight - 44,
+            minHeight: (bounds.maxHeight - 44).clamp(0, double.infinity),
             maxWidth: 480,
           ),
           child: Column(
@@ -465,11 +485,6 @@ class _WorkstationState extends State<Workstation> {
                   backgroundColor: const Color(0xff6741a5),
                   minimumSize: const Size(220, 48),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextButton(
-                onPressed: openConfig,
-                child: const Text('也可点击上方景区卡片'),
               ),
             ],
           ),
@@ -524,22 +539,7 @@ class _WorkstationState extends State<Workstation> {
                   : '连接中',
             ),
             const SizedBox(width: 20),
-            const Text('自动打印'),
-            Switch(
-              value: bridge.state['autoPrint'] == true,
-              onChanged: bridge.configured && !bridge.busy
-                  ? (value) async {
-                      if (!value ||
-                          await confirm(
-                            '开启自动打印',
-                            '有新任务时会自动打印。请确认打印机和相纸已准备好。',
-                            '开启自动打印',
-                          )) {
-                        await perform('autoPrint', [value]);
-                      }
-                    }
-                  : null,
-            ),
+            _autoPrintControl(),
           ],
         ),
       ],
@@ -548,483 +548,550 @@ class _WorkstationState extends State<Workstation> {
 
   Widget jobsView({bool compact = false}) {
     final jobs = bridge.jobs;
-    final ids = jobs.map((e) => '${e['id']}').toSet();
-    selected.removeWhere((id) => !ids.contains(id));
-    final total = bridge.state['jobPage']?['total'] ?? 0;
-    final number = (bridge.state['jobPage']?['pageNum'] as num? ?? 1).toInt();
+    final ids = jobs.map((job) => '${job['id']}').toSet();
+    selected.retainAll(ids);
+    final jobPage = bridge.state['jobPage'];
+    final total = (jobPage?['total'] as num?)?.toInt() ?? 0;
+    final number = (jobPage?['pageNum'] as num?)?.toInt() ?? 1;
+    final pageSize = (jobPage?['pageSize'] as num?)?.toInt() ?? 20;
     return Padding(
-      padding: EdgeInsets.all(compact ? 0 : 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              for (final entry in const {
-                'ALL': '全部任务',
-                'UNPRINTED': '待打印',
-                'FAILED': '需处理',
-                'PRINTED': '已打印',
-              }.entries)
-                ChoiceChip(
-                  label: Text(entry.value),
-                  selected: filter == entry.key,
-                  onSelected: bridge.busy
-                      ? null
-                      : (_) {
-                          setState(() => filter = entry.key);
-                          query();
-                        },
-                ),
-              OutlinedButton.icon(
-                icon: const Icon(Icons.date_range_outlined, size: 18),
-                label: Text(
-                  dates == null
-                      ? '选择日期'
-                      : '${date(dates!.start)} — ${date(dates!.end)}',
-                ),
-                onPressed: bridge.busy
-                    ? null
-                    : () async {
-                        final range = await showDateRangePicker(
-                          context: context,
-                          firstDate: DateTime(2024),
-                          lastDate: DateTime.now().add(const Duration(days: 1)),
-                          initialDateRange: dates,
-                        );
-                        if (range != null) {
-                          setState(() => dates = range);
-                          await query();
-                        }
-                      },
-              ),
-              if (dates != null)
-                IconButton(
-                  tooltip: '清除日期',
-                  onPressed: bridge.busy
-                      ? null
-                      : () {
-                          setState(() => dates = null);
-                          query();
-                        },
-                  icon: const Icon(Icons.close),
-                ),
-              IconButton(
-                tooltip: '刷新打印任务',
-                onPressed: bridge.busy ? null : () => query(number: number),
-                icon: const Icon(Icons.refresh),
-              ),
-              if (widget.embedded)
-                TextButton.icon(
-                  onPressed: () => showDialog<void>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('打印记录'),
-                      content: SizedBox(
-                        width: 560,
-                        height: 380,
-                        child: logsView(),
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('关闭'),
+      padding: EdgeInsets.all(compact ? 0 : 16),
+      child: Material(
+        color: WorkstationStyle.card,
+        shape: const RoundedRectangleBorder(
+          side: BorderSide(color: WorkstationStyle.line),
+          borderRadius: BorderRadius.all(Radius.circular(12)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: LayoutBuilder(
+          builder: (context, bounds) {
+            final table =
+                bounds.maxWidth >= 740 &&
+                MediaQuery.textScalerOf(context).scale(14) <= 17;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 60),
+                  child: selected.isEmpty
+                      ? _queueToolbar(number)
+                      : _batchToolbar(
+                          jobs
+                              .where((job) => selected.contains('${job['id']}'))
+                              .toList(),
+                          selectAll: table ? null : _selectAll(ids),
                         ),
-                      ],
+                ),
+                const Divider(height: 1, color: WorkstationStyle.line),
+                if (table && jobs.isNotEmpty)
+                  ColoredBox(
+                    color: WorkstationStyle.bg,
+                    child: DefaultTextStyle.merge(
+                      style: const TextStyle(
+                        color: WorkstationStyle.muted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      child: _queueColumns(
+                        checkbox: _selectAll(ids),
+                        identity: const Text('取片卡尾号 / 工单'),
+                        photos: const Text('照片预览'),
+                        details: const Text('打印内容'),
+                        status: const Text('状态'),
+                        created: const Text('创建时间'),
+                        action: const Text('操作'),
+                      ),
                     ),
                   ),
-                  icon: const Icon(Icons.history, size: 18),
-                  label: const Text('打印记录'),
+                Expanded(
+                  child: jobs.isEmpty
+                      ? const Center(
+                          child: Text(
+                            '暂无符合条件的打印任务',
+                            style: TextStyle(color: WorkstationStyle.muted),
+                          ),
+                        )
+                      : ListView.separated(
+                          key: PageStorageKey((
+                            filter,
+                            dates,
+                            number,
+                            bridge.config['activeScenicProfileId'],
+                          )),
+                          padding: EdgeInsets.zero,
+                          itemCount: jobs.length,
+                          separatorBuilder: (_, _) => const Divider(
+                            height: 1,
+                            color: WorkstationStyle.line,
+                          ),
+                          itemBuilder: (context, index) =>
+                              _jobRow(jobs[index], table: table),
+                        ),
                 ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            padding: const EdgeInsets.all(16),
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text(
-                  '已选 ${selected.length} 单',
-                  style: const TextStyle(color: muted),
-                ),
-                FilledButton.icon(
-                  onPressed: selected.isEmpty || bridge.busy
-                      ? null
-                      : () => perform('printJobs', [selected.toList()]),
-                  icon: const Icon(Icons.print_outlined, size: 18),
-                  label: const Text('打印选中'),
-                ),
-                OutlinedButton(
-                  onPressed: selected.isEmpty || bridge.busy
-                      ? null
-                      : () => perform('continueJobs', [selected.toList()]),
-                  child: const Text('继续剩余'),
-                ),
-                OutlinedButton(
-                  onPressed: selected.isEmpty || bridge.busy
-                      ? null
-                      : () async {
-                          final yes = await confirm(
-                            '确认已打印',
-                            '请先核对纸面已齐。本操作只更新状态，不会再次打印。',
-                            '确认已打印',
-                          );
-                          if (yes) {
-                            await perform('confirmPrinted', [
-                              selected.toList(),
-                            ]);
-                          }
-                        },
-                  child: const Text('确认已打印'),
-                ),
-                OutlinedButton(
-                  onPressed: selected.isEmpty || bridge.busy
-                      ? null
-                      : () async {
-                          final yes = await confirm(
-                            '标记为未打印',
-                            '将重置整单进度。后续打印会从头出纸，请核对实物，避免重复。',
-                            '标记未打印',
-                          );
-                          if (yes) {
-                            await perform('markUnprinted', [
-                              selected.toList(),
-                            ]);
-                          }
-                        },
-                  child: const Text('标记未打印'),
+                const Divider(height: 1, color: WorkstationStyle.line),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Wrap(
+                    alignment: WrapAlignment.end,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(
+                        '共 $total 单 · 第 $number 页',
+                        style: const TextStyle(color: WorkstationStyle.muted),
+                      ),
+                      IconButton(
+                        tooltip: '上一页',
+                        onPressed: number > 1 && !bridge.busy
+                            ? () => query(number: number - 1)
+                            : null,
+                        icon: const Icon(Icons.chevron_left),
+                      ),
+                      IconButton(
+                        tooltip: '下一页',
+                        onPressed: number * pageSize < total && !bridge.busy
+                            ? () => query(number: number + 1)
+                            : null,
+                        icon: const Icon(Icons.chevron_right),
+                      ),
+                    ],
+                  ),
                 ),
               ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xfff0f0f0)),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x08000000),
-                    blurRadius: 8,
-                    offset: Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: jobs.isEmpty
-                    ? const Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.inbox_outlined, size: 42, color: muted),
-                            SizedBox(height: 12),
-                            Text('暂无符合条件的打印任务'),
-                            SizedBox(height: 8),
-                            Text(
-                              '新工单会自动刷新，也可调整筛选条件',
-                              style: TextStyle(color: muted),
-                            ),
-                          ],
-                        ),
-                      )
-                    : LayoutBuilder(
-                        builder: (context, constraints) =>
-                            SingleChildScrollView(
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: ConstrainedBox(
-                              constraints: BoxConstraints(
-                                minWidth: constraints.maxWidth,
-                              ),
-                              child: Theme(
-                                data: Theme.of(context).copyWith(
-                                  dividerColor: const Color(0xfff0f0f0),
-                                  dataTableTheme: const DataTableThemeData(
-                                    headingRowColor: WidgetStatePropertyAll(
-                                      Color(0xfffafafa),
-                                    ),
-                                    dataRowColor: WidgetStatePropertyAll(
-                                      Colors.white,
-                                    ),
-                                    headingTextStyle: TextStyle(
-                                      color: Color(0xff595959),
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                    dataTextStyle: TextStyle(
-                                      color: Color(0xff262626),
-                                      fontSize: 13,
-                                    ),
-                                    dividerThickness: 1,
-                                    horizontalMargin: 16,
-                                    columnSpacing: 20,
-                                    checkboxHorizontalMargin: 12,
-                                  ),
-                                ),
-                                child: DataTable(
-                                  headingRowHeight: 40,
-                                  dataRowMinHeight: 64,
-                                  dataRowMaxHeight: 72,
-                                  showCheckboxColumn: true,
-                                  border: const TableBorder(
-                                    horizontalInside: BorderSide(
-                                      color: Color(0xfff0f0f0),
-                                    ),
-                                  ),
-                                  columns: const [
-                                    DataColumn(label: Text('任务 / 取片码')),
-                                    DataColumn(label: Text('预览')),
-                                    DataColumn(label: Text('状态')),
-                                    DataColumn(label: Text('打印内容')),
-                                    DataColumn(label: Text('创建时间')),
-                                    DataColumn(label: Text('操作')),
-                                  ],
-                                  rows: jobs.map((job) {
-                                    final id = '${job['id']}';
-                                    final created =
-                                        '${job['createdAt'] ?? '—'}'
-                                            .replaceFirst('T', ' ')
-                                            .split('.')
-                                            .first;
-                                    void openPreview() => showDialog<void>(
-                                      context: context,
-                                      builder: (_) => PreviewDialog(
-                                        bridge: bridge,
-                                        jobId: id,
-                                        perform: perform,
-                                      ),
-                                    );
-                                    return DataRow(
-                                      selected: selected.contains(id),
-                                      color: WidgetStateProperty.resolveWith((
-                                        states,
-                                      ) {
-                                        if (states.contains(
-                                          WidgetState.selected,
-                                        )) {
-                                          return const Color(0xffe6f4ff);
-                                        }
-                                        if (states.contains(
-                                          WidgetState.hovered,
-                                        )) {
-                                          return const Color(0xfffafafa);
-                                        }
-                                        return Colors.white;
-                                      }),
-                                      onSelectChanged: bridge.busy
-                                          ? null
-                                          : (value) => setState(() {
-                                              if (value == true) {
-                                                selected.add(id);
-                                              } else {
-                                                selected.remove(id);
-                                              }
-                                            }),
-                                      cells: [
-                                        DataCell(
-                                          Column(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                '#$id',
-                                                style: const TextStyle(
-                                                  fontWeight: FontWeight.w700,
-                                                  fontSize: 14,
-                                                  fontFeatures: [
-                                                    FontFeature
-                                                        .tabularFigures(),
-                                                  ],
-                                                ),
-                                              ),
-                                              const SizedBox(height: 2),
-                                              Text(
-                                                '尾号 ${job['cardTail'] ?? '—'}  ·  ${job['phone'] ?? '未绑定手机'}',
-                                                style: const TextStyle(
-                                                  color: muted,
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        DataCell(
-                                          JobThumbnails(
-                                            bridge: bridge,
-                                            jobId: id,
-                                            contentSummary:
-                                                '${job['contentSummary'] ?? ''}',
-                                            onOpenPreview: openPreview,
-                                          ),
-                                        ),
-                                        DataCell(
-                                          StatusBadge(
-                                            status: '${job['status']}',
-                                          ),
-                                        ),
-                                        DataCell(
-                                          SizedBox(
-                                            width: 220,
-                                            child: Column(
-                                              mainAxisAlignment:
-                                                  MainAxisAlignment.center,
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  '${job['contentSummary'] ?? '内容未知'}',
-                                                  maxLines: 2,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: const TextStyle(
-                                                    fontSize: 13,
-                                                  ),
-                                                ),
-                                                if ((job['completedSheets']
-                                                            as num? ??
-                                                        0) >
-                                                    0)
-                                                  Text(
-                                                    '已完成 ${job['completedSheets']} / ${job['totalSheets'] ?? '—'} 张',
-                                                    style: const TextStyle(
-                                                      color: Color(0xff1677ff),
-                                                      fontSize: 12,
-                                                    ),
-                                                  ),
-                                                if (job['errorReason'] != null)
-                                                  Text(
-                                                    '${job['errorReason']}',
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                      color: Color(0xffcf1322),
-                                                      fontSize: 12,
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                        DataCell(
-                                          Text(
-                                            created,
-                                            style: const TextStyle(
-                                              fontSize: 12,
-                                              color: muted,
-                                              fontFeatures: [
-                                                FontFeature.tabularFigures(),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                        DataCell(
-                                          Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              FilledButton(
-                                                style: FilledButton.styleFrom(
-                                                  backgroundColor: const Color(
-                                                    0xff1677ff,
-                                                  ),
-                                                  foregroundColor: Colors.white,
-                                                  minimumSize: const Size(
-                                                    0,
-                                                    32,
-                                                  ),
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                        horizontal: 12,
-                                                      ),
-                                                  textStyle: const TextStyle(
-                                                    fontSize: 13,
-                                                    fontWeight: FontWeight.w600,
-                                                  ),
-                                                  visualDensity:
-                                                      VisualDensity.compact,
-                                                ),
-                                                onPressed:
-                                                    bridge.busy ||
-                                                        !_canPrintJob(job)
-                                                    ? null
-                                                    : () => perform(
-                                                        'printJobs',
-                                                        [
-                                                          [id],
-                                                        ],
-                                                      ),
-                                                child: const Text('打印本单'),
-                                              ),
-                                              TextButton(
-                                                style: TextButton.styleFrom(
-                                                  foregroundColor: const Color(
-                                                    0xff1677ff,
-                                                  ),
-                                                  visualDensity:
-                                                      VisualDensity.compact,
-                                                ),
-                                                onPressed: bridge.busy
-                                                    ? null
-                                                    : openPreview,
-                                                child: const Text('查看照片'),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    );
-                                  }).toList(),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              Text(
-                '共 $total 单 · 第 $number 页',
-                style: const TextStyle(color: muted),
-              ),
-              IconButton(
-                tooltip: '上一页',
-                onPressed: number > 1 && !bridge.busy
-                    ? () => query(number: number - 1)
-                    : null,
-                icon: const Icon(Icons.chevron_left),
-              ),
-              IconButton(
-                tooltip: '下一页',
-                onPressed: number * 20 < total && !bridge.busy
-                    ? () => query(number: number + 1)
-                    : null,
-                icon: const Icon(Icons.chevron_right),
-              ),
-            ],
-          ),
-        ],
+            );
+          },
+        ),
       ),
     );
   }
+
+  Widget _queueToolbar(int pageNumber) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    child: Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Wrap(
+          spacing: 2,
+          children: [
+            for (final entry in const {
+              'UNPRINTED': '待打印',
+              'FAILED': '需处理',
+              'PRINTED': '已打印',
+              'ALL': '全部任务',
+            }.entries)
+              Semantics(
+                selected: filter == entry.key,
+                child: TextButton(
+                  style: _queueButtonStyle(
+                    foreground: filter == entry.key
+                        ? WorkstationStyle.accent
+                        : WorkstationStyle.muted,
+                    background: filter == entry.key
+                        ? WorkstationStyle.accentSoft
+                        : null,
+                  ),
+                  onPressed: bridge.busy
+                      ? null
+                      : () {
+                          setState(() => filter = entry.key);
+                          query();
+                        },
+                  child: Text(entry.value),
+                ),
+              ),
+          ],
+        ),
+        Wrap(
+          spacing: 2,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            TextButton.icon(
+              style: _queueButtonStyle(),
+              icon: const Icon(Icons.date_range_outlined, size: 18),
+              label: Text(
+                dates == null
+                    ? '日期'
+                    : '${date(dates!.start)} — ${date(dates!.end)}',
+              ),
+              onPressed: bridge.busy ? null : _pickDates,
+            ),
+            if (dates != null)
+              IconButton(
+                tooltip: '清除日期',
+                onPressed: bridge.busy
+                    ? null
+                    : () {
+                        setState(() => dates = null);
+                        query();
+                      },
+                icon: const Icon(Icons.close, size: 18),
+              ),
+            IconButton(
+              tooltip: '刷新打印任务',
+              onPressed: bridge.busy ? null : () => query(number: pageNumber),
+              icon: const Icon(Icons.refresh, size: 20),
+            ),
+            if (widget.embedded)
+              TextButton.icon(
+                style: _queueButtonStyle(),
+                onPressed: _openLogs,
+                icon: const Icon(Icons.history, size: 18),
+                label: const Text('打印记录'),
+              ),
+          ],
+        ),
+      ],
+    ),
+  );
+
+  Future<void> _pickDates() async {
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2024),
+      lastDate: DateTime.now().add(const Duration(days: 1)),
+      initialDateRange: dates,
+    );
+    if (range != null && mounted) {
+      setState(() => dates = range);
+      await query();
+    }
+  }
+
+  void _openLogs() => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('打印记录'),
+      content: SizedBox(width: 560, height: 380, child: logsView()),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+      ],
+    ),
+  );
+
+  ButtonStyle _queueButtonStyle({
+    Color foreground = WorkstationStyle.muted,
+    Color? background,
+  }) => TextButton.styleFrom(
+    foregroundColor: foreground,
+    backgroundColor: background,
+    minimumSize: const Size(44, 44),
+    padding: const EdgeInsets.symmetric(horizontal: 10),
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(8)),
+    ),
+  );
+
+  Widget _batchToolbar(List<Json> jobs, {Widget? selectAll}) {
+    final actions = _JobAction.values.where(
+      (action) => jobs.every(action.supports),
+    );
+    final ids = jobs.map((job) => '${job['id']}').toList();
+    return ColoredBox(
+      color: WorkstationStyle.accentSoft,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Wrap(
+          spacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            ?selectAll,
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                '已选 ${jobs.length} 单',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            if (actions.isEmpty)
+              const Text(
+                '所选任务没有共同操作',
+                style: TextStyle(color: WorkstationStyle.muted),
+              ),
+            for (final action in actions)
+              if (action == _JobAction.print)
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: WorkstationStyle.accent,
+                    minimumSize: const Size(44, 44),
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.all(Radius.circular(8)),
+                    ),
+                  ),
+                  onPressed: bridge.busy
+                      ? null
+                      : () => _applyJobAction(action, ids),
+                  icon: const Icon(Icons.print_outlined, size: 18),
+                  label: const Text('打印选中'),
+                )
+              else
+                TextButton(
+                  style: _queueButtonStyle(foreground: WorkstationStyle.ink),
+                  onPressed: bridge.busy
+                      ? null
+                      : () => _applyJobAction(action, ids),
+                  child: Text(action.label),
+                ),
+            TextButton(
+              style: _queueButtonStyle(),
+              onPressed: () => setState(selected.clear),
+              child: const Text('取消选择'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _applyJobAction(_JobAction action, List<String> ids) async {
+    if (action == _JobAction.confirm &&
+        !await confirm('确认已打印', '请先核对纸面已齐。本操作只更新状态，不会再次打印。', '确认已打印')) {
+      return;
+    }
+    if (action == _JobAction.reset &&
+        !await confirm('标记为未打印', '将重置整单进度。后续打印会从头出纸，请核对实物，避免重复。', '标记未打印')) {
+      return;
+    }
+    if (mounted) await perform(action.method, [ids]);
+  }
+
+  Widget _selectAll(Set<String> ids) => Tooltip(
+    message: '选择本页任务',
+    child: Checkbox(
+      tristate: true,
+      value: selected.isEmpty
+          ? false
+          : selected.length == ids.length
+          ? true
+          : null,
+      onChanged: bridge.busy
+          ? null
+          : (_) => setState(() {
+              if (selected.length == ids.length) {
+                selected.clear();
+              } else {
+                selected.addAll(ids);
+              }
+            }),
+    ),
+  );
+
+  Widget _queueColumns({
+    required Widget checkbox,
+    required Widget identity,
+    required Widget photos,
+    required Widget details,
+    required Widget status,
+    required Widget created,
+    required Widget action,
+  }) => Padding(
+    padding: const EdgeInsets.only(left: 4, right: 16),
+    child: Row(
+      spacing: 10,
+      children: [
+        SizedBox(width: 44, child: checkbox),
+        Expanded(flex: 14, child: identity),
+        Expanded(flex: 22, child: photos),
+        Expanded(flex: 19, child: details),
+        Expanded(flex: 10, child: status),
+        Expanded(flex: 12, child: created),
+        SizedBox(width: 104, child: Center(child: action)),
+      ],
+    ),
+  );
+
+  Widget _jobRow(Json job, {required bool table}) {
+    final id = '${job['id']}';
+    final tail = '${job['cardTail'] ?? ''}'.trim();
+    final phone = '${job['phone'] ?? ''}'.trim();
+    final total = (job['totalSheets'] as num?)?.toInt();
+    final completed = (job['completedSheets'] as num?)?.toInt() ?? 0;
+    final reason = '${job['errorReason'] ?? ''}'.trim();
+    final summary = '${job['contentSummary'] ?? '内容未知'}';
+    final created = '${job['createdAt'] ?? '—'}'.replaceFirst('T', ' ');
+    final time = created.length >= 16 ? created.substring(0, 16) : created;
+    final isSelected = selected.contains(id);
+    void openPreview() => showDialog<void>(
+      context: context,
+      builder: (_) =>
+          PreviewDialog(bridge: bridge, jobId: id, perform: perform),
+    );
+
+    final checkbox = Tooltip(
+      message: '选择工单 #$id',
+      child: Checkbox(
+        value: isSelected,
+        onChanged: bridge.busy
+            ? null
+            : (checked) => setState(() {
+                if (checked == true) {
+                  selected.add(id);
+                } else {
+                  selected.remove(id);
+                }
+              }),
+      ),
+    );
+    final identity = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          tail.isNotEmpty
+              ? tail
+              : phone.isNotEmpty
+              ? phone
+              : '无取片卡',
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            fontFeatures: [FontFeature.tabularFigures()],
+          ),
+        ),
+        Text('#$id', style: _jobMeta),
+        if (tail.isNotEmpty && phone.isNotEmpty) Text(phone, style: _jobMeta),
+      ],
+    );
+    final photos = JobThumbnails(
+      key: ValueKey((bridge.config['activeScenicProfileId'], id)),
+      bridge: bridge,
+      jobId: id,
+      contentSummary: summary,
+      onOpenPreview: openPreview,
+    );
+    final details = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (total != null && total > 0)
+          Text(
+            '共 $total 张',
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        Text(summary, style: _jobMeta),
+        if (completed > 0)
+          Text(
+            total != null && total > 0
+                ? '已完成 $completed / $total 张'
+                : '已完成 $completed 张',
+            style: _jobMeta,
+          ),
+        if (reason.isNotEmpty)
+          Tooltip(
+            message: reason,
+            child: Text(
+              reason,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: _jobMeta.copyWith(color: WorkstationStyle.warn),
+            ),
+          ),
+      ],
+    );
+    final status = StatusBadge(status: '${job['status']}');
+    final action = _rowAction(job, id);
+    return ColoredBox(
+      key: ValueKey(id),
+      color: isSelected ? WorkstationStyle.accentSoft : WorkstationStyle.card,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: table
+            ? _queueColumns(
+                checkbox: checkbox,
+                identity: identity,
+                photos: photos,
+                details: details,
+                status: Align(alignment: Alignment.centerLeft, child: status),
+                created: Text(time, style: _jobMeta),
+                action: action,
+              )
+            : Padding(
+                padding: const EdgeInsets.only(left: 4, right: 12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  spacing: 6,
+                  children: [
+                    checkbox,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        spacing: 6,
+                        children: [
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 4,
+                            alignment: WrapAlignment.spaceBetween,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [identity, status],
+                          ),
+                          details,
+                          Text(time, style: _jobMeta),
+                          SizedBox(
+                            width: double.infinity,
+                            child: Wrap(
+                              spacing: 6,
+                              alignment: WrapAlignment.spaceBetween,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [photos, action],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _rowAction(Json job, String id) {
+    if (_JobAction.print.supports(job)) {
+      return OutlinedButton(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: WorkstationStyle.accent,
+          side: const BorderSide(color: WorkstationStyle.line),
+          minimumSize: const Size(44, 44),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(8)),
+          ),
+        ),
+        onPressed: bridge.busy
+            ? null
+            : () => _applyJobAction(_JobAction.print, [id]),
+        child: const Text('打印本单'),
+      );
+    }
+    if (_JobAction.confirm.supports(job)) {
+      return PopupMenuButton<_JobAction>(
+        enabled: !bridge.busy,
+        tooltip: '处理异常',
+        onSelected: (action) => _applyJobAction(action, [id]),
+        itemBuilder: (context) => [
+          for (final action in _JobAction.values.where(
+            (action) => action.supports(job),
+          ))
+            PopupMenuItem(value: action, child: Text(action.label)),
+        ],
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [Text('处理异常'), Icon(Icons.expand_more, size: 16)],
+          ),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
+  static const _jobMeta = TextStyle(
+    color: WorkstationStyle.muted,
+    fontSize: 12,
+    fontFeatures: [FontFeature.tabularFigures()],
+  );
 
   Widget logsView() => ListView(
     padding: const EdgeInsets.all(24),
@@ -1040,47 +1107,59 @@ class _WorkstationState extends State<Workstation> {
   );
 }
 
+enum _JobAction {
+  print('printJobs', '打印选中'),
+  resume('continueJobs', '继续剩余'),
+  confirm('confirmPrinted', '确认已打印'),
+  reset('markUnprinted', '标记未打印');
+
+  const _JobAction(this.method, this.label);
+
+  final String method;
+  final String label;
+
+  bool supports(Json job) {
+    final status = job['status'];
+    return switch (this) {
+      _JobAction.print => status == 'QUEUED' || status == 'CLAIMED',
+      _JobAction.resume => _canResume(job),
+      _JobAction.confirm => status == 'FAILED' || status == 'UNKNOWN',
+      _JobAction.reset => status == 'FAILED' || status == 'PRINTED',
+    };
+  }
+
+  static bool _canResume(Json job) {
+    final completed = (job['completedSheets'] as num?)?.toInt() ?? 0;
+    final total = (job['totalSheets'] as num?)?.toInt() ?? 0;
+    return job['status'] == 'FAILED' &&
+        completed > 0 &&
+        (total <= 0 || completed < total);
+  }
+}
+
 class StatusBadge extends StatelessWidget {
   const StatusBadge({super.key, required this.status});
   final String status;
+
   @override
   Widget build(BuildContext context) {
-    final label =
-        const {
-          'QUEUED': '待打印',
-          'PRINTED': '已打印',
-          'FAILED': '需处理',
-          'CLAIMED': '已领取',
-          'PRINTING': '打印中',
-        }[status] ??
-        status;
-    // Ant Design Tag 色：蓝/绿/红/紫
-    final (Color fg, Color bg) = switch (status) {
-      'PRINTED' => (const Color(0xff389e0d), const Color(0xfff6ffed)),
-      'FAILED' => (const Color(0xffcf1322), const Color(0xfffff1f0)),
-      'CLAIMED' || 'PRINTING' => (
-        const Color(0xff531dab),
-        const Color(0xfff9f0ff),
+    final (label, color, background) = switch (status) {
+      'QUEUED' => ('待打印', WorkstationStyle.muted, WorkstationStyle.bg),
+      'CLAIMED' => (
+        '已领取',
+        WorkstationStyle.accent,
+        WorkstationStyle.accentSoft,
       ),
-      'QUEUED' => (const Color(0xff0958d9), const Color(0xffe6f4ff)),
-      _ => (const Color(0xff595959), const Color(0xfffafafa)),
+      'PRINTING' => (
+        '打印中',
+        WorkstationStyle.accent,
+        WorkstationStyle.accentSoft,
+      ),
+      'PRINTED' => ('已打印', WorkstationStyle.ok, WorkstationStyle.okSoft),
+      'FAILED' => ('需处理', WorkstationStyle.warn, WorkstationStyle.warnSoft),
+      'UNKNOWN' => ('待核对', WorkstationStyle.warn, WorkstationStyle.warnSoft),
+      _ => (status, WorkstationStyle.muted, WorkstationStyle.bg),
     };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: fg.withValues(alpha: .25)),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: fg,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          height: 1.4,
-        ),
-      ),
-    );
+    return StatusTag(label: label, color: color, soft: background);
   }
 }

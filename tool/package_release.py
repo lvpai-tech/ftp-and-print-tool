@@ -86,7 +86,7 @@ def main():
             content.mkdir()
             shutil.copytree(app, content / app.name, symlinks=True)
             (content / 'Applications').symlink_to('/Applications')
-            run('hdiutil', 'create', '-volname', '旅派 FTP', '-srcfolder', content,
+            run('hdiutil', 'create', '-volname', '帧集快拍', '-srcfolder', content,
                 '-format', 'UDZO', package)
             run('codesign', '--sign', args.sign_identity, '--timestamp', package)
             run('codesign', '--verify', '--strict', package)

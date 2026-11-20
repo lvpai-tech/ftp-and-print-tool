@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../auto_upload/folder_access.dart';
 import '../auto_upload/folder_uploader.dart';
+import '../branding.dart';
 import '../transfer.dart';
 import 'design.dart';
 
@@ -94,7 +95,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
       if (mounted) {
         setState(() {
           _folder = folder;
-          _message = '请在「文件 → 我的 iPad → 旅派 FTP → CameraInbox」放入照片';
+          _message = '请在「文件 → 我的 iPad → $appBrandName → CameraInbox」放入照片';
         });
       }
     } catch (_) {

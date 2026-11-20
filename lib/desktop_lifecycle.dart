@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:material_ui/material_ui.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
+import 'branding.dart';
 import 'workstation_session.dart';
 
 /// 一个托盘管理整个客户端；上传/监听/打印期间不能直接退出。
@@ -15,7 +16,7 @@ class DesktopLifecycle with WindowListener, TrayListener {
       const WindowOptions(
         size: Size(1440, 900),
         minimumSize: Size(820, 600),
-        title: '帧集 · 上传与打印工作台',
+        title: workstationTitle,
         center: true,
       ),
       () async {
@@ -31,7 +32,7 @@ class DesktopLifecycle with WindowListener, TrayListener {
           : 'assets/printing/tray.png',
       isTemplate: !Platform.isWindows,
     );
-    await trayManager.setToolTip('帧集 · 上传与打印工作台');
+    await trayManager.setToolTip(workstationTitle);
     await trayManager.setContextMenu(
       Menu(
         items: [

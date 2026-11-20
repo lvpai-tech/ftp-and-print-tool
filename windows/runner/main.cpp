@@ -10,6 +10,7 @@
 namespace {
 
 constexpr wchar_t kWorkstationMutex[] = L"Local\\ai.lvpai.zhenji.workstation";
+constexpr wchar_t kWorkstationTitle[] = L"帧集快拍 · 上传与打印工作台";
 constexpr ULONGLONG kWindowStartupTimeoutMs = 5000;
 
 struct CloseHandleOnExit {
@@ -35,7 +36,7 @@ bool ActivateExistingWindow() {
 }
 
 int StartupError(const wchar_t* message) {
-  ::MessageBoxW(nullptr, message, L"帧集", MB_OK | MB_ICONWARNING);
+  ::MessageBoxW(nullptr, message, L"帧集快拍", MB_OK | MB_ICONWARNING);
   return EXIT_FAILURE;
 }
 
@@ -62,7 +63,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
       return EXIT_SUCCESS;
     }
     if (::GetTickCount64() >= deadline) {
-      return StartupError(L"帧集已经在运行，请从任务栏或系统托盘打开。");
+      return StartupError(L"帧集快拍已经在运行，请从任务栏或系统托盘打开。");
     }
     // A launch at the same time as the first one may beat window creation.
     ::Sleep(50);
@@ -88,7 +89,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"帧集 · 上传与打印工作台", origin, size)) {
+  if (!window.Create(kWorkstationTitle, origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
