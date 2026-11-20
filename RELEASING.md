@@ -57,6 +57,18 @@ ac96a332718dc7f2b02bed4f62f928767d38d64889215c08965924979608ae7b
 正式 Windows 发布前使用项目持有的代码签名证书签署 EXE/DLL，再将完整 Release 重新打包、计算校验和；
 不能在后台校验或生成清单之后再修改安装包。当前脚本不代办 Windows 签名。
 
+## GitHub Actions 测试包
+
+workflow 文件进入默认分支后，在 GitHub Actions 里选择对应的构建任务和分支。下列任务均使用 Flutter 3.50.0、锁文件指定的包源和 `test` 通道。构建产物保留 14 天。
+
+| Workflow | 产物 | 用途 |
+| --- | --- | --- |
+| `Build Android APK` | `lvpai-ftp-android-debug.apk` | Android 调试签名包，可安装测试手动上传 |
+| `Build iOS` | `lvpai-ftp-ios-unsigned.zip` | iPhone/iPad 设备 Release 构建，内含未签名 `Runner.app`，真机安装需另行签名 |
+| `Build Windows` | `lvpai-ftp-<版本>-<构建号>-windows-x64.zip` | 未签名的完整 x64 Release，SHA-256 见随包的 `release-info.json` |
+
+正式 iOS 分发沿用下文的 Xcode、App Store Connect 和 TestFlight 流程。
+
 ## Mac 构建与打包
 
 先按 [APPLE_TESTING.md](APPLE_TESTING.md) 配置 Xcode、依赖及应用标识，完成目录授权与 FTP 实测。
