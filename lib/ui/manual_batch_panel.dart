@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+
 import '../auto_upload/folder_access.dart';
 import '../manual_batch/batch_workspace.dart';
 import '../transfer.dart';
@@ -29,6 +31,7 @@ class ManualBatchPanel extends StatefulWidget {
 }
 
 class _ManualBatchPanelState extends State<ManualBatchPanel> {
+  static const _photoTileWidth = 160.0;
   final _access = FolderAccess();
   BatchWorkspace? _workspace;
   String _folder = '', _error = '';
@@ -159,8 +162,10 @@ class _ManualBatchPanelState extends State<ManualBatchPanel> {
 
   Widget _photo(BatchPhoto photo, PhotoBatch? batch) {
     final ending = batch?.endPhotoId == photo.id;
+    final thumbnailWidth =
+        (_photoTileWidth * MediaQuery.devicePixelRatioOf(context)).ceil();
     return SizedBox(
-      width: 160,
+      width: _photoTileWidth,
       child: Card(
         child: Padding(
           padding: const EdgeInsets.all(8),
@@ -194,6 +199,7 @@ class _ManualBatchPanelState extends State<ManualBatchPanel> {
                   child: Image.file(
                     File(photo.snapshot),
                     height: 100,
+                    cacheWidth: thumbnailWidth,
                     fit: BoxFit.cover,
                     errorBuilder: (_, _, _) => const SizedBox(
                       height: 100,

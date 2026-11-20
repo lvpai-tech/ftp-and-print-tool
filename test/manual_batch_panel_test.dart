@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:ui' as ui;
+
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:lvpai_ftp_client/manual_batch/batch_workspace.dart';
 import 'package:lvpai_ftp_client/ui/manual_batch_panel.dart';
 import 'package:lvpai_ftp_client/transfer.dart';
+
 import 'manual_batch_test.dart' as fixtures;
 
 void main() {
@@ -34,8 +36,9 @@ void main() {
           await fixtures.photo(root, 'card', secret: 'TEST00002522'),
         ]);
       });
-      tester.view.physicalSize = Size(width, 1200);
-      tester.view.devicePixelRatio = 1;
+      final pixelRatio = width == 768 ? 2.0 : 1.0;
+      tester.view.physicalSize = Size(width * pixelRatio, 1200 * pixelRatio);
+      tester.view.devicePixelRatio = pixelRatio;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       var profileSaved = false;
@@ -82,6 +85,23 @@ void main() {
         screenshot.dispose();
       });
       expect(active, isFalse, reason: '草稿不能锁住服务器配置和模式切换');
+      final thumbnail = find.byType(Image).first;
+      final thumbnailProvider = tester.widget<Image>(thumbnail).image;
+      expect(thumbnailProvider, isA<ResizeImage>());
+      final resized = thumbnailProvider as ResizeImage;
+      expect(resized.width, (160 * pixelRatio).round());
+      await tester.ensureVisible(thumbnail);
+      await tester.tap(thumbnail);
+      await tester.pumpAndSettle();
+      final preview = find.descendant(
+        of: find.byType(InteractiveViewer),
+        matching: find.byType(Image),
+      );
+      expect(tester.widget<Image>(preview).image, resized.imageProvider);
+      Navigator.of(tester.element(preview)).pop();
+      await tester.pumpAndSettle();
+      expect(preview, findsNothing);
+
       await tester.ensureVisible(find.text('移出批次').first);
       await tester.runAsync(() async {
         await tester.tap(find.text('移出批次').first);

@@ -98,6 +98,12 @@ void main() {
         retryDelay: const Duration(milliseconds: 80),
       );
       var uploader = create();
+      final firstPhotoStates = <String>{};
+      uploader.addListener(() {
+        for (final job in uploader.jobs.where((j) => j.relative == '新照片.png')) {
+          firstPhotoStates.add(job.state);
+        }
+      });
       try {
         await uploader.start(source, profile);
         await Future<void>.delayed(const Duration(milliseconds: 350));
@@ -110,6 +116,8 @@ void main() {
         await until(
           () => uploader.jobs.where((j) => j.state == 'done').length == 1,
         );
+        await until(() => firstPhotoStates.contains('done'));
+        expect(firstPhotoStates, contains('uploading'));
         final sub = await Directory(p.join(source.path, '日期子目录')).create();
         await File(p.join(sub.path, '新照片.png')).writeAsBytes(blue, flush: true);
         await until(

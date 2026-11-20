@@ -74,7 +74,7 @@ class FolderUploader extends ChangeNotifier {
   final Map<String, String> issues = {};
   QueueJournal? _journal;
   StreamSubscription<FileSystemEvent>? _events;
-  Timer? _timer, _debounce;
+  Timer? _timer, _debounce, _progressTimer;
   ServerProfile? _profile;
   Directory? _root;
   Future<void>? _scanTask, _pumpTask;
@@ -139,7 +139,13 @@ class FolderUploader extends ChangeNotifier {
   }
 
   void _notify() {
+    _cancelProgressNotification();
     if (!_closed) notifyListeners();
+  }
+
+  void _cancelProgressNotification() {
+    _progressTimer?.cancel();
+    _progressTimer = null;
   }
 
   String _signature(FileStat s) =>
@@ -439,7 +445,12 @@ class FolderUploader extends ChangeNotifier {
           progress,
         ) {
           job.progress = progress;
-          _notify();
+          if (!_closed) {
+            _progressTimer ??= Timer(
+              const Duration(milliseconds: 100),
+              _notify,
+            );
+          }
         });
         job.state = 'done';
         job.progress = 1;
@@ -456,6 +467,7 @@ class FolderUploader extends ChangeNotifier {
         job.state = permanent || job.attempts >= 3 ? 'failed' : 'pending';
         job.nextAttempt = DateTime.now().add(retryDelay * job.attempts);
       } finally {
+        _cancelProgressNotification();
         try {
           await transfer.close();
         } catch (_) {
@@ -520,6 +532,7 @@ class FolderUploader extends ChangeNotifier {
   @override
   void dispose() {
     _closed = true;
+    _cancelProgressNotification();
     unawaited(stop().catchError((Object _) {}));
     super.dispose();
   }
