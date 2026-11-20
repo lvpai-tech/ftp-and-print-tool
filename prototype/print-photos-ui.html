@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>打印照片 UI 原型 · PROTOTYPE</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #14262f;
+      --ink-soft: #2a404b;
+      --muted: #6a7d86;
+      --line: rgba(20, 38, 47, 0.08);
+      --line-strong: rgba(20, 38, 47, 0.14);
+      --accent: #0f7668;
+      --accent-soft: #e6f4f1;
+      --accent-glow: rgba(15, 118, 104, 0.18);
+      --warn: #b45309;
+      --warn-soft: #fff7ed;
+      --danger: #b42318;
+      --danger-soft: #fef3f2;
+      --ok: #027a48;
+      --ok-soft: #ecfdf3;
+      --paper: #f4f7f8;
+      --panel: #ffffff;
+      --shadow: 0 1px 2px rgba(20, 38, 47, 0.04), 0 12px 32px rgba(20, 38, 47, 0.06);
+      --radius: 16px;
+      --font: "Noto Sans SC", "Segoe UI", sans-serif;
+      --display: "Outfit", "Noto Sans SC", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: var(--font);
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #dceeea 0%, transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, #e8eef2 0%, transparent 50%),
+        var(--paper);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input { font: inherit; }
+    button { cursor: pointer; border: none; background: none; }
+    .num { font-variant-numeric: tabular-nums; }
+
+    .proto-banner {
+      position: sticky; top: 0; z-index: 50;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 8px 18px;
+      background: #0f1c22; color: #d7e4ea;
+      font-size: 12px; letter-spacing: 0.02em;
+    }
+    .proto-banner strong { color: #fff; font-weight: 600; }
+    .proto-banner span { opacity: 0.75; }
+
+    .shell { max-width: 1440px; margin: 0 auto; padding: 20px 24px 110px; }
+
+    /* —— floating switcher —— */
+    .switcher {
+      position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+      z-index: 100;
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px;
+      background: rgba(15, 28, 34, 0.92);
+      backdrop-filter: blur(12px);
+      border-radius: 999px;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.28);
+      color: #c5d4db;
+    }
+    .switcher .label {
+      padding: 0 10px 0 14px;
+      font-size: 12px; white-space: nowrap; opacity: 0.7;
+    }
+    .switcher button {
+      min-width: 88px; padding: 10px 14px;
+      border-radius: 999px; color: #c5d4db;
+      font-size: 13px; font-weight: 500;
+      transition: background .18s cubic-bezier(.2,0,0,1), color .18s;
+    }
+    .switcher button[aria-current="true"] {
+      background: #fff; color: var(--ink); font-weight: 600;
+    }
+    .switcher button:hover:not([aria-current="true"]) {
+      background: rgba(255,255,255,0.08); color: #fff;
+    }
+
+    .variant { display: none; animation: in .28s cubic-bezier(.2,0,0,1); }
+    .variant.active { display: block; }
+    @keyframes in {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: none; }
+    }
+
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 500; white-space: nowrap;
+    }
+    .pill.ok { background: var(--ok-soft); color: var(--ok); }
+    .pill.warn { background: var(--warn-soft); color: var(--warn); }
+    .pill.danger { background: var(--danger-soft); color: var(--danger); }
+    .pill.muted { background: #eef2f4; color: var(--muted); }
+    .pill.accent { background: var(--accent-soft); color: var(--accent); }
+    .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
+    }
+
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      height: 36px; padding: 0 14px; border-radius: 10px;
+      font-size: 13px; font-weight: 550; color: var(--ink-soft);
+      border: 1px solid var(--line-strong); background: #fff;
+      transition: background .15s, border-color .15s, transform .12s;
+    }
+    .btn:hover { background: #f7fafb; }
+    .btn:active { transform: scale(0.98); }
+    .btn.primary {
+      background: var(--accent); color: #fff; border-color: transparent;
+      box-shadow: 0 1px 0 rgba(255,255,255,0.2) inset, 0 6px 16px var(--accent-glow);
+    }
+    .btn.primary:hover { filter: brightness(1.05); }
+    .btn.ghost { border-color: transparent; background: transparent; }
+    .btn.ghost:hover { background: rgba(20,38,47,0.05); }
+    .btn.danger-soft { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    .toggle {
+      width: 42px; height: 24px; border-radius: 999px;
+      background: #c5d0d5; position: relative;
+      transition: background .2s;
+    }
+    .toggle.on { background: var(--accent); }
+    .toggle i {
+      position: absolute; top: 3px; left: 3px;
+      width: 18px; height: 18px; border-radius: 50%; background: #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+      transition: transform .2s cubic-bezier(.2,0,0,1);
+    }
+    .toggle.on i { transform: translateX(18px); }
+
+    .thumb-row { display: flex; align-items: center; gap: 6px; }
+    .thumb {
+      width: 44px; height: 56px; border-radius: 6px; object-fit: cover;
+      background: linear-gradient(145deg, #cfd9de, #9eb0ba);
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+    }
+    .thumb.lg { width: 64px; height: 80px; border-radius: 8px; }
+    .thumb.xl { width: 88px; height: 110px; border-radius: 10px; }
+    .more-count {
+      font-size: 12px; color: var(--muted); font-weight: 500;
+      padding: 0 4px;
+    }
+
+    .search {
+      display: flex; align-items: center; gap: 10px;
+      height: 48px; padding: 0 14px 0 16px;
+      background: #fff; border: 1px solid var(--line-strong);
+      border-radius: 14px; box-shadow: var(--shadow);
+    }
+    .search:focus-within {
+      border-color: color-mix(in srgb, var(--accent) 55%, white);
+      box-shadow: 0 0 0 4px var(--accent-glow), var(--shadow);
+    }
+    .search input {
+      flex: 1; border: 0; outline: 0; background: transparent;
+      font-size: 15px; color: var(--ink);
+    }
+    .search input::placeholder { color: #93a3ab; }
+    .search .icon { color: var(--muted); display: grid; place-items: center; }
+
+    .state-panel {
+      margin-top: 14px; padding: 12px 14px; border-radius: 12px;
+      background: #0f1c22; color: #9fb0b9;
+      font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    /* ========== Variant A: 指挥台 ========== */
+    .a-top {
+      display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; margin-bottom: 18px;
+    }
+    .a-status {
+      padding: 22px 24px; border-radius: var(--radius);
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.7), rgba(255,255,255,0.35)),
+        linear-gradient(160deg, #0f7668 0%, #163a44 58%, #12252d 100%);
+      color: #fff; box-shadow: var(--shadow); position: relative; overflow: hidden;
+    }
+    .a-status::after {
+      content: ""; position: absolute; right: -40px; top: -40px;
+      width: 180px; height: 180px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,255,255,0.18), transparent 70%);
+    }
+    .a-status .eyebrow {
+      font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+      opacity: 0.72; font-family: var(--display); font-weight: 600;
+    }
+    .a-status h1 {
+      margin: 8px 0 14px; font-size: 28px; font-weight: 700;
+      font-family: var(--display); letter-spacing: -0.02em;
+    }
+    .a-status .meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .a-status .pill { background: rgba(255,255,255,0.14); color: #fff; }
+    .a-status .pill .dot { box-shadow: 0 0 0 3px rgba(255,255,255,0.15); }
+
+    .a-auto {
+      padding: 22px 24px; border-radius: var(--radius);
+      background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow);
+      display: flex; flex-direction: column; justify-content: space-between; gap: 16px;
+    }
+    .a-auto .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .a-auto h2 { margin: 0; font-size: 18px; font-weight: 650; }
+    .a-auto p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .a-auto .stats {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+    }
+    .a-auto .stat {
+      padding: 12px; border-radius: 12px; background: #f6f9fa; border: 1px solid var(--line);
+    }
+    .a-auto .stat b {
+      display: block; font-size: 22px; font-family: var(--display);
+      letter-spacing: -0.03em; margin-bottom: 2px;
+    }
+    .a-auto .stat span { font-size: 12px; color: var(--muted); }
+
+    .a-search-wrap { margin-bottom: 18px; }
+    .a-search-wrap .hint {
+      margin: 8px 0 0 4px; font-size: 12px; color: var(--muted);
+    }
+
+    .a-grid {
+      display: grid; grid-template-columns: 1.35fr 0.9fr; gap: 16px;
+    }
+    .panel {
+      background: var(--panel); border: 1px solid var(--line);
+      border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+    }
+    .panel-hd {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 14px 16px; border-bottom: 1px solid var(--line);
+    }
+    .panel-hd h3 { margin: 0; font-size: 15px; font-weight: 650; }
+    .panel-hd .tools { display: flex; gap: 6px; align-items: center; }
+
+    .job {
+      display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: center;
+      padding: 14px 16px; border-bottom: 1px solid var(--line);
+      transition: background .15s;
+    }
+    .job:hover { background: #f8fbfc; }
+    .job:last-child { border-bottom: 0; }
+    .job .title {
+      display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
+    }
+    .job .title b { font-size: 15px; font-family: var(--display); letter-spacing: -0.02em; }
+    .job .title span { font-size: 13px; color: var(--muted); }
+    .job .desc { font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .job .actions { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+    .check {
+      width: 18px; height: 18px; border-radius: 5px;
+      border: 1.5px solid #9aadb6; display: grid; place-items: center;
+    }
+    .check.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    .alert-job {
+      padding: 14px 16px; border-bottom: 1px solid var(--line);
+    }
+    .alert-job:last-child { border-bottom: 0; }
+    .alert-job .top {
+      display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px;
+    }
+    .alert-job p { margin: 0 0 10px; font-size: 13px; color: var(--ink-soft); line-height: 1.45; }
+    .alert-job .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    .batch-bar {
+      display: none; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 10px 16px; border-top: 1px solid var(--line); background: #f7fafb;
+    }
+    .batch-bar.show { display: flex; }
+
+    /* ========== Variant B: 队列优先 ========== */
+    .b-layout {
+      display: grid; grid-template-columns: 232px 1fr; gap: 16px; min-height: 720px;
+    }
+    .b-rail {
+      background: var(--panel); border: 1px solid var(--line);
+      border-radius: var(--radius); box-shadow: var(--shadow);
+      padding: 18px 14px; display: flex; flex-direction: column; gap: 18px;
+    }
+    .b-brand {
+      padding: 0 6px;
+    }
+    .b-brand .eyebrow {
+      font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--muted); font-family: var(--display); font-weight: 600;
+    }
+    .b-brand h1 {
+      margin: 6px 0 0; font-size: 20px; font-family: var(--display);
+      letter-spacing: -0.02em;
+    }
+    .b-live {
+      padding: 12px; border-radius: 12px; background: #f3f8f7; border: 1px solid var(--line);
+    }
+    .b-live .line { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .b-live p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.4; }
+    .b-nav { display: flex; flex-direction: column; gap: 4px; }
+    .b-nav button {
+      text-align: left; padding: 10px 12px; border-radius: 10px;
+      font-size: 13px; font-weight: 500; color: var(--ink-soft);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .b-nav button:hover { background: #f4f7f8; }
+    .b-nav button.active {
+      background: var(--accent-soft); color: var(--accent); font-weight: 650;
+    }
+    .b-nav .count {
+      min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
+      display: grid; place-items: center; font-size: 11px; font-weight: 650;
+      background: rgba(20,38,47,0.06);
+    }
+    .b-nav button.active .count { background: rgba(15,118,104,0.15); }
+
+    .b-main { display: flex; flex-direction: column; gap: 14px; }
+    .b-toolbar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px; background: var(--panel); border: 1px solid var(--line);
+      border-radius: 14px; box-shadow: var(--shadow);
+    }
+    .b-toolbar .search { flex: 1; box-shadow: none; height: 42px; }
+    .b-cards { display: flex; flex-direction: column; gap: 10px; }
+    .b-card {
+      display: grid; grid-template-columns: 28px auto 1fr auto; gap: 16px; align-items: center;
+      padding: 16px 18px; background: var(--panel); border: 1px solid var(--line);
+      border-radius: 14px; box-shadow: var(--shadow);
+      transition: border-color .15s, transform .12s;
+    }
+    .b-card:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--line-strong)); }
+    .b-card .meta b {
+      display: block; font-size: 18px; font-family: var(--display);
+      letter-spacing: -0.02em; margin-bottom: 4px;
+    }
+    .b-card .meta .sub { font-size: 13px; color: var(--muted); }
+    .b-card .meta .content { margin-top: 8px; font-size: 13px; color: var(--ink-soft); }
+    .b-card .side { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+    .b-card .time { font-size: 12px; color: var(--muted); }
+
+    /* ========== Variant C: 双焦 ========== */
+    .c-header {
+      display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
+      margin-bottom: 18px;
+    }
+    .c-header h1 {
+      margin: 0; font-size: 30px; font-family: var(--display);
+      letter-spacing: -0.03em; font-weight: 700;
+    }
+    .c-header p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+    .c-header .right { display: flex; align-items: center; gap: 10px; }
+
+    .c-find {
+      padding: 22px; border-radius: var(--radius);
+      background:
+        linear-gradient(180deg, #ffffff 0%, #f7fbfa 100%);
+      border: 1px solid var(--line); box-shadow: var(--shadow);
+      margin-bottom: 16px;
+    }
+    .c-find .title-row {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .c-find h2 { margin: 0; font-size: 16px; font-weight: 650; }
+    .c-hit {
+      margin-top: 14px; display: none;
+      grid-template-columns: auto 1fr auto; gap: 18px; align-items: center;
+      padding: 16px; border-radius: 14px; background: #fff;
+      border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+      box-shadow: 0 0 0 4px var(--accent-glow);
+    }
+    .c-hit.show { display: grid; animation: in .25s cubic-bezier(.2,0,0,1); }
+    .c-hit .meta b {
+      font-size: 22px; font-family: var(--display); letter-spacing: -0.02em;
+    }
+    .c-hit .meta .sub { margin-top: 4px; color: var(--muted); font-size: 13px; }
+    .c-hit .meta .content { margin-top: 8px; font-size: 13px; }
+
+    .c-split {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    }
+    .c-empty {
+      padding: 28px 18px; text-align: center; color: var(--muted); font-size: 13px;
+    }
+    .c-queue-item {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 12px 16px; border-bottom: 1px solid var(--line);
+    }
+    .c-queue-item:last-child { border-bottom: 0; }
+    .c-queue-item .left { display: flex; gap: 12px; align-items: center; min-width: 0; }
+    .c-queue-item .text b { display: block; font-size: 14px; margin-bottom: 2px; }
+    .c-queue-item .text span { font-size: 12px; color: var(--muted); }
+
+    .collapsed {
+      margin-top: 14px; border-radius: 12px; border: 1px dashed var(--line-strong);
+      background: rgba(255,255,255,0.5);
+    }
+    .collapsed summary {
+      list-style: none; cursor: pointer; padding: 12px 14px;
+      font-size: 13px; font-weight: 550; color: var(--ink-soft);
+      display: flex; justify-content: space-between;
+    }
+    .collapsed summary::-webkit-details-marker { display: none; }
+    .collapsed[open] summary { border-bottom: 1px solid var(--line); }
+
+    @media (max-width: 1100px) {
+      .a-top, .a-grid, .b-layout, .c-split { grid-template-columns: 1fr; }
+      .b-card { grid-template-columns: 28px auto 1fr; }
+      .b-card .side { grid-column: 2 / -1; flex-direction: row; justify-content: space-between; align-items: center; }
+      .c-hit { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="proto-banner">
+    <div><strong>PROTOTYPE</strong> · 打印照片桌面端 UI · 假数据，不接真实打印</div>
+    <span id="stateHint">variant=A · autoPrint=on · selected=0 · filter=pending</span>
+  </div>
+
+  <div class="shell">
+    <!-- ========== A ========== -->
+    <section class="variant active" id="variant-A" data-name="指挥台">
+      <div class="a-top">
+        <div class="a-status">
+          <div class="eyebrow">Print Desk</div>
+          <h1>玉龙雪山·蓝月谷</h1>
+          <div class="meta">
+            <span class="pill"><span class="dot"></span>打印服务已连接</span>
+            <span class="pill">自动打印运行中</span>
+            <span class="pill">上次拉取 12 秒前</span>
+          </div>
+        </div>
+        <div class="a-auto">
+          <div class="row">
+            <div>
+              <h2>自动打印</h2>
+              <p>新任务会按队列自动出纸。柜台取片或异常时，用下方搜索与「需处理」。</p>
+            </div>
+            <button class="toggle on" id="a-auto" aria-label="自动打印" onclick="toggleAuto(this)"><i></i></button>
+          </div>
+          <div class="stats">
+            <div class="stat"><b class="num" data-k="pending">6</b><span>待打印</span></div>
+            <div class="stat"><b class="num" data-k="need" style="color:var(--warn)">2</b><span>需处理</span></div>
+            <div class="stat"><b class="num" data-k="done">41</b><span>今日已打</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="a-search-wrap">
+        <div class="search">
+          <span class="icon" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg>
+          </span>
+          <input placeholder="输入取片码或手机号，回车找单打印" id="a-search" onkeydown="if(event.key==='Enter')demoSearch('A')" />
+          <button class="btn primary" onclick="demoSearch('A')">找单</button>
+        </div>
+        <p class="hint">柜台客人到场时优先用搜索；自动队列继续在后台跑。</p>
+      </div>
+
+      <div class="a-grid">
+        <div class="panel">
+          <div class="panel-hd">
+            <h3>打印队列</h3>
+            <div class="tools">
+              <button class="btn ghost" onclick="setFilter('pending')">待打印</button>
+              <button class="btn ghost" onclick="toast('已刷新队列')">刷新</button>
+            </div>
+          </div>
+          <div id="a-jobs"></div>
+          <div class="batch-bar" id="a-batch">
+            <span class="num" id="a-sel">已选 0 单</span>
+            <button class="btn primary" onclick="toast('打印选中（原型）')">打印选中</button>
+            <button class="btn" onclick="clearSel()">取消选择</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-hd">
+            <h3>需处理</h3>
+            <span class="pill warn">优先人工</span>
+          </div>
+          <div id="a-alerts"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== B ========== -->
+    <section class="variant" id="variant-B" data-name="队列优先">
+      <div class="b-layout">
+        <aside class="b-rail">
+          <div class="b-brand">
+            <div class="eyebrow">Print Desk</div>
+            <h1>打印照片</h1>
+          </div>
+          <div class="b-live">
+            <div class="line">
+              <span class="pill ok"><span class="dot"></span>已连接</span>
+              <button class="toggle on" id="b-auto" aria-label="自动打印" onclick="toggleAuto(this)"><i></i></button>
+            </div>
+            <p>玉龙雪山·蓝月谷<br/>自动打印开启 · 每 5 分钟拉未打印</p>
+          </div>
+          <nav class="b-nav">
+            <button class="active" onclick="setFilter('pending', this)"><span>待打印</span><span class="count num">6</span></button>
+            <button onclick="setFilter('need', this)"><span>需处理</span><span class="count num">2</span></button>
+            <button onclick="setFilter('done', this)"><span>已打印</span><span class="count num">41</span></button>
+            <button onclick="setFilter('all', this)"><span>全部任务</span><span class="count num">49</span></button>
+          </nav>
+          <div style="margin-top:auto; display:flex; flex-direction:column; gap:8px;">
+            <button class="btn" onclick="toast('打开打印记录（原型）')">打印记录</button>
+            <button class="btn ghost" onclick="toast('检查更新（原型）')">检查更新</button>
+          </div>
+        </aside>
+        <div class="b-main">
+          <div class="b-toolbar">
+            <div class="search">
+              <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></span>
+              <input placeholder="取片码 / 手机号" id="b-search" onkeydown="if(event.key==='Enter')demoSearch('B')" />
+            </div>
+            <button class="btn primary" onclick="demoSearch('B')">找单打印</button>
+            <button class="btn" onclick="toast('选择日期（原型）')">日期</button>
+            <button class="btn ghost" onclick="toast('已刷新')">刷新</button>
+          </div>
+          <div class="b-cards" id="b-jobs"></div>
+          <div class="batch-bar show" id="b-batch" style="border-radius:14px; border:1px solid var(--line);">
+            <span class="num" id="b-sel">已选 0 单</span>
+            <button class="btn primary" disabled id="b-print-sel">打印选中</button>
+            <button class="btn" disabled>继续剩余</button>
+            <button class="btn" disabled>确认已打印</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== C ========== -->
+    <section class="variant" id="variant-C" data-name="双焦工作台">
+      <div class="c-header">
+        <div>
+          <h1>打印照片</h1>
+          <p>玉龙雪山·蓝月谷 · <span class="pill ok" style="vertical-align:middle"><span class="dot"></span>打印服务已连接</span></p>
+        </div>
+        <div class="right">
+          <span style="font-size:13px;color:var(--muted)">自动打印</span>
+          <button class="toggle on" id="c-auto" aria-label="自动打印" onclick="toggleAuto(this)"><i></i></button>
+          <button class="btn" onclick="toast('打印记录（原型）')">打印记录</button>
+        </div>
+      </div>
+
+      <div class="c-find">
+        <div class="title-row">
+          <h2>柜台找单</h2>
+          <span class="pill muted">客人到场优先</span>
+        </div>
+        <div class="search">
+          <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></span>
+          <input placeholder="输入取片码或手机尾号，例如 578 或 8821" id="c-search" onkeydown="if(event.key==='Enter')demoSearch('C')" />
+          <button class="btn primary" onclick="demoSearch('C')">查找并打印</button>
+        </div>
+        <div class="c-hit" id="c-hit">
+          <div class="thumb-row" id="c-hit-thumbs"></div>
+          <div class="meta">
+            <b class="num" id="c-hit-id">#578</b>
+            <div class="sub" id="c-hit-phone">手机 ····8821</div>
+            <div class="content" id="c-hit-content">开头片×1、原片×2、创意×6</div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:8px; min-width:120px;">
+            <button class="btn primary" onclick="toast('打印本单（原型）')">打印本单</button>
+            <button class="btn" onclick="toast('查看照片（原型）')">查看照片</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="c-split">
+        <div class="panel">
+          <div class="panel-hd">
+            <h3>需处理</h3>
+            <span class="pill warn">2</span>
+          </div>
+          <div id="c-alerts"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-hd">
+            <h3>自动队列一览</h3>
+            <span class="pill accent">后台运行中</span>
+          </div>
+          <div id="c-queue"></div>
+          <details class="collapsed">
+            <summary><span>更多待打印（折叠）</span><span class="num">还有 3 单</span></summary>
+            <div id="c-queue-more"></div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <div class="state-panel" id="statePanel"></div>
+  </div>
+
+  <div class="switcher" role="tablist" aria-label="原型变体">
+    <span class="label">切换方案</span>
+    <button type="button" data-v="A" aria-current="true" onclick="showVariant('A')">A 指挥台</button>
+    <button type="button" data-v="B" onclick="showVariant('B')">B 队列</button>
+    <button type="button" data-v="C" onclick="showVariant('C')">C 双焦</button>
+  </div>
+
+  <script>
+    /** Three variants of the print-photos desk UI; switch via bottom bar / ?variant= */
+    const JOBS = [
+      { id: 578, phone: "····8821", status: "pending", content: "开头片×1、原片×2、创意×6", time: "06:25:56", thumbs: 3, more: 6 },
+      { id: 577, phone: "····1093", status: "pending", content: "开头片×1、原片×2、创意×6", time: "06:24:51", thumbs: 3, more: 6 },
+      { id: 576, phone: "····7740", status: "pending", content: "开头片×1、原片×2、创意×6", time: "06:21:18", thumbs: 3, more: 6 },
+      { id: 575, phone: "····2201", status: "pending", content: "原片×4、创意×4", time: "06:18:02", thumbs: 3, more: 5 },
+      { id: 574, phone: "····6612", status: "pending", content: "开头片×1、创意×8", time: "06:12:44", thumbs: 3, more: 6 },
+      { id: 573, phone: "····9088", status: "pending", content: "原片×2、创意×6", time: "06:05:10", thumbs: 3, more: 5 },
+    ];
+    const ALERTS = [
+      { id: 552, phone: "····3341", reason: "驱动报告缺纸，已暂停本单。请核实纸匣后继续。", level: "warn" },
+      { id: 541, phone: "····0199", reason: "打印中断：任务超时。可继续剩余张数或整单重打。", level: "danger" },
+    ];
+
+    const state = {
+      variant: "A",
+      autoPrint: true,
+      selected: new Set(),
+      filter: "pending",
+      lastAction: "打开原型",
+    };
+
+    function thumbHtml(n, size) {
+      const cls = size === "xl" ? "thumb xl" : size === "lg" ? "thumb lg" : "thumb";
+      let h = "";
+      for (let i = 0; i < n; i++) {
+        const hue = 180 + i * 18;
+        h += `<div class="${cls}" style="background:linear-gradient(145deg,hsl(${hue} 18% 72%),hsl(${hue + 20} 22% 48%))"></div>`;
+      }
+      return h;
+    }
+
+    function toast(msg) {
+      state.lastAction = msg;
+      renderState();
+      const t = document.createElement("div");
+      t.textContent = msg;
+      Object.assign(t.style, {
+        position: "fixed", top: "52px", left: "50%", transform: "translateX(-50%)",
+        background: "#0f1c22", color: "#fff", padding: "10px 16px", borderRadius: "10px",
+        fontSize: "13px", zIndex: 200, boxShadow: "0 12px 30px rgba(0,0,0,.25)",
+      });
+      document.body.appendChild(t);
+      setTimeout(() => t.remove(), 1600);
+    }
+
+    function toggleAuto(el) {
+      state.autoPrint = !state.autoPrint;
+      document.querySelectorAll(".toggle").forEach((n) => n.classList.toggle("on", state.autoPrint));
+      state.lastAction = state.autoPrint ? "开启自动打印" : "关闭自动打印";
+      renderState();
+    }
+
+    function setFilter(f, btn) {
+      state.filter = f;
+      state.lastAction = "筛选=" + f;
+      if (btn) {
+        btn.parentElement.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+      }
+      renderState();
+    }
+
+    function toggleSel(id) {
+      if (state.selected.has(id)) state.selected.delete(id);
+      else state.selected.add(id);
+      state.lastAction = "选择变更";
+      renderJobs();
+      renderState();
+    }
+
+    function clearSel() {
+      state.selected.clear();
+      renderJobs();
+      renderState();
+    }
+
+    function demoSearch(from) {
+      const input = document.getElementById(from === "A" ? "a-search" : from === "B" ? "b-search" : "c-search");
+      const q = (input.value || "578").trim();
+      state.lastAction = `找单「${q}」→ 命中 #578`;
+      if (from === "C") {
+        const hit = document.getElementById("c-hit");
+        hit.classList.add("show");
+        document.getElementById("c-hit-thumbs").innerHTML = thumbHtml(3, "xl") + `<span class="more-count">另 6 张</span>`;
+      } else {
+        toast(`已定位 #578（原型）`);
+      }
+      renderState();
+    }
+
+    function renderJobs() {
+      const a = document.getElementById("a-jobs");
+      a.innerHTML = JOBS.slice(0, 4).map((j) => `
+        <div class="job">
+          <button class="check ${state.selected.has(j.id) ? "on" : ""}" onclick="toggleSel(${j.id})" aria-label="选择">
+            ${state.selected.has(j.id) ? "✓" : ""}
+          </button>
+          <div>
+            <div class="title"><b class="num">#${j.id}</b><span>${j.phone}</span><span class="pill accent">队列中</span></div>
+            <div class="thumb-row">${thumbHtml(j.thumbs)}${j.more ? `<span class="more-count">另 ${j.more} 张</span>` : ""}</div>
+            <div class="desc">${j.content} · 今天 ${j.time}</div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" onclick="toast('打印 #${j.id}')">打印本单</button>
+            <button class="btn ghost" onclick="toast('查看 #${j.id}')">查看</button>
+          </div>
+        </div>
+      `).join("");
+
+      document.getElementById("a-alerts").innerHTML = ALERTS.map((a) => `
+        <div class="alert-job">
+          <div class="top">
+            <b class="num">#${a.id}</b>
+            <span class="pill ${a.level === "danger" ? "danger" : "warn"}">${a.level === "danger" ? "中断" : "缺纸"}</span>
+          </div>
+          <p>${a.reason}</p>
+          <div class="actions">
+            <button class="btn primary" onclick="toast('继续 #${a.id}')">继续打印</button>
+            <button class="btn" onclick="toast('查看 #${a.id}')">查看照片</button>
+          </div>
+        </div>
+      `).join("");
+
+      const batch = document.getElementById("a-batch");
+      const n = state.selected.size;
+      batch.classList.toggle("show", n > 0);
+      document.getElementById("a-sel").textContent = `已选 ${n} 单`;
+
+      document.getElementById("b-jobs").innerHTML = JOBS.map((j) => `
+        <div class="b-card">
+          <button class="check ${state.selected.has(j.id) ? "on" : ""}" onclick="toggleSel(${j.id})">${state.selected.has(j.id) ? "✓" : ""}</button>
+          <div class="thumb-row">${thumbHtml(j.thumbs, "lg")}${j.more ? `<span class="more-count">另 ${j.more} 张</span>` : ""}</div>
+          <div class="meta">
+            <b class="num">#${j.id}</b>
+            <div class="sub">${j.phone}</div>
+            <div class="content">${j.content}</div>
+          </div>
+          <div class="side">
+            <span class="time num">今天 ${j.time}</span>
+            <button class="btn primary" onclick="toast('打印 #${j.id}')">打印本单</button>
+          </div>
+        </div>
+      `).join("");
+
+      document.getElementById("b-sel").textContent = `已选 ${n} 单`;
+      const bp = document.getElementById("b-print-sel");
+      bp.disabled = n === 0;
+      bp.onclick = () => toast("打印选中（原型）");
+
+      document.getElementById("c-alerts").innerHTML = ALERTS.map((a) => `
+        <div class="alert-job">
+          <div class="top"><b class="num">#${a.id} · ${a.phone}</b><span class="pill ${a.level === "danger" ? "danger" : "warn"}">需处理</span></div>
+          <p>${a.reason}</p>
+          <div class="actions">
+            <button class="btn ${a.level === "danger" ? "danger-soft" : "primary"}" onclick="toast('处理 #${a.id}')">${a.level === "danger" ? "继续剩余" : "确认有纸并继续"}</button>
+            <button class="btn" onclick="toast('查看 #${a.id}')">查看照片</button>
+          </div>
+        </div>
+      `).join("");
+
+      const q = JOBS.slice(0, 3);
+      document.getElementById("c-queue").innerHTML = q.map((j) => `
+        <div class="c-queue-item">
+          <div class="left">
+            <div class="thumb-row">${thumbHtml(2)}</div>
+            <div class="text"><b class="num">#${j.id}</b><span>${j.content}</span></div>
+          </div>
+          <button class="btn" onclick="toast('打印 #${j.id}')">打印</button>
+        </div>
+      `).join("");
+      document.getElementById("c-queue-more").innerHTML = JOBS.slice(3).map((j) => `
+        <div class="c-queue-item">
+          <div class="left">
+            <div class="text"><b class="num">#${j.id}</b><span>${j.phone} · ${j.content}</span></div>
+          </div>
+          <button class="btn ghost" onclick="toast('打印 #${j.id}')">打印</button>
+        </div>
+      `).join("");
+    }
+
+    function renderState() {
+      const hint = document.getElementById("stateHint");
+      hint.textContent = `variant=${state.variant} · autoPrint=${state.autoPrint ? "on" : "off"} · selected=${state.selected.size} · filter=${state.filter}`;
+      document.getElementById("statePanel").textContent =
+        `state = ${JSON.stringify({
+          variant: state.variant,
+          autoPrint: state.autoPrint,
+          selected: [...state.selected],
+          filter: state.filter,
+          lastAction: state.lastAction,
+        }, null, 2)}`;
+    }
+
+    function showVariant(v) {
+      state.variant = v;
+      document.querySelectorAll(".variant").forEach((el) => el.classList.toggle("active", el.id === "variant-" + v));
+      document.querySelectorAll(".switcher button[data-v]").forEach((b) => {
+        b.setAttribute("aria-current", b.dataset.v === v ? "true" : "false");
+      });
+      const url = new URL(location.href);
+      url.searchParams.set("variant", v);
+      history.replaceState(null, "", url);
+      state.lastAction = "切换到方案 " + v;
+      renderState();
+    }
+
+    (function init() {
+      const v = new URL(location.href).searchParams.get("variant") || "A";
+      showVariant(["A", "B", "C"].includes(v) ? v : "A");
+      renderJobs();
+      renderState();
+    })();
+  </script>
+</body>
+</html>
