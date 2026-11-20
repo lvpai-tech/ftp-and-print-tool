@@ -358,8 +358,7 @@ async function createRuntime(options = {}) {
 
   async function bindToken(token) {
     const { fetchMe } = require('./api');
-    const probe = withNorm({ token });
-    const me = await fetchMe(probe);
+    const me = await fetchMe({ base: runtime.getConfig().base, token });
     if (!me || !me.scenicId) throw new Error('密钥校验失败：未返回景区信息');
     const ids = Array.isArray(me.scenicIds) && me.scenicIds.length
       ? me.scenicIds.map((id) => String(id))
@@ -440,16 +439,16 @@ async function createRuntime(options = {}) {
     assertCanSwitchScenic();
     const id = String(body.id || '').trim();
     if (!id) throw new Error('请指定要激活的景区档案');
-    const current = toWritableConfig(runtime.getConfig());
+    const original = runtime.getConfig();
+    const current = toWritableConfig(original);
     const profile = (current.scenicProfiles || []).find((p) => p.id === id);
     if (!profile) throw new Error('景区档案不存在');
-    if (current.activeScenicProfileId === id) return snapshot();
+    const bound = await bindToken(profile.token);
+    assertCanSwitchScenic();
+    if (runtime.getConfig() !== original) throw new Error('景区档案已更新，请重试');
     const next = withNorm({
       activeScenicProfileId: id,
-      token: profile.token,
-      scenicIds: profile.scenicIds,
-      scenicName: profile.scenicName,
-      scenicCode: profile.scenicCode,
+      scenicProfiles: current.scenicProfiles.map((entry) => entry.id === id ? { id, ...bound } : entry),
     });
     saveConfig(next);
     runtime.setConfig(next);
