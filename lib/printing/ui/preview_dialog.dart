@@ -192,6 +192,7 @@ class _PreviewDialogState extends State<PreviewDialog> {
                             if (!mounted) return;
                             setState(() => actionBusy = false);
                             if (ok) {
+                              if (!context.mounted) return;
                               await showAppMessage(
                                 context,
                                 message: '试打印命令已受理，请核对实物；工单状态未修改。',
@@ -243,6 +244,7 @@ class _PreviewDialogState extends State<PreviewDialog> {
                             if (!mounted) return;
                             setState(() => actionBusy = false);
                             if (ok) {
+                              if (!context.mounted) return;
                               await showAppMessage(
                                 context,
                                 message: 'ZIP 已保存：${location.path}',

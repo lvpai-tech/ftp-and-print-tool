@@ -452,13 +452,12 @@ class _SettingsPanelState extends State<SettingsPanel> {
                                         [routes[entry.key]],
                                       );
                                     } catch (e) {
-                                      if (mounted) {
-                                        await showAppMessage(
-                                          context,
-                                          title: '操作未完成',
-                                          message: appErrorMessage(e),
-                                        );
-                                      }
+                                      if (!context.mounted) return;
+                                      await showAppMessage(
+                                        context,
+                                        title: '操作未完成',
+                                        message: appErrorMessage(e),
+                                      );
                                     }
                                   },
                           ),
