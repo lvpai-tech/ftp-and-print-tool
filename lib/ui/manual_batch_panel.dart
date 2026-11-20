@@ -7,18 +7,21 @@ import 'package:path_provider/path_provider.dart';
 import '../auto_upload/folder_access.dart';
 import '../manual_batch/batch_workspace.dart';
 import '../transfer.dart';
+import 'design.dart';
 
 /// 摄影师确认批次的桌面工作区；任何识别或监听操作都不会上传。
 class ManualBatchPanel extends StatefulWidget {
   final ServerProfile? Function() readProfile;
   final Future<void> Function(ServerProfile) saveProfile;
   final void Function(bool) onActiveChanged;
+  final ValueChanged<bool>? onUploadingChanged;
   final BatchWorkspace? workspace;
   const ManualBatchPanel({
     super.key,
     required this.readProfile,
     required this.saveProfile,
     required this.onActiveChanged,
+    this.onUploadingChanged,
     this.workspace,
   });
   @override
@@ -71,6 +74,7 @@ class _ManualBatchPanelState extends State<ManualBatchPanel> {
       _selected = w.batches.first.id;
     }
     widget.onActiveChanged(w.watching || w.uploading);
+    widget.onUploadingChanged?.call(w.uploading);
     setState(() {});
   }
 
@@ -252,18 +256,30 @@ class _ManualBatchPanelState extends State<ManualBatchPanel> {
   Widget build(BuildContext context) {
     final w = _workspace;
     final batch = w?.batches.where((b) => b.id == _selected).firstOrNull;
-    return Card(
+    return DecoratedBox(
+      decoration: WorkstationStyle.surface(),
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(22),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              '手动批次',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+              '批次工作区',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                color: WorkstationStyle.ink,
+              ),
             ),
             const SizedBox(height: 8),
-            const Text('本机辅助分组、识别条形码；摄影师核对并点击上传后才发送。移出照片仅回到待分组区。'),
+            const Text(
+              '本机辅助分组、识别条形码；摄影师核对并点击上传后才发送。移出照片仅回到待分组区。',
+              style: TextStyle(
+                color: WorkstationStyle.muted,
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
             const SizedBox(height: 16),
             Wrap(
               spacing: 8,

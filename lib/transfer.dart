@@ -52,6 +52,8 @@ class PhotoTransfer {
 
   Future<void> open(String directory) async {
     if (!await _client.connect()) throw StateError('FTP 登录失败');
+    // ftpconnect.connect() 会把传输模式重置为 auto/ASCII；JPEG 等二进制必须再发 TYPE I。
+    await _client.setTransferType(TransferType.binary);
     if (!await _client.changeDirectory(directory)) {
       throw StateError('目标目录不存在或无访问权限');
     }

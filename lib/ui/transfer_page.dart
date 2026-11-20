@@ -1,18 +1,35 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
+
 import 'package:material_ui/material_ui.dart';
+
 import '../profile_store.dart';
+import '../transfer.dart';
 import 'auto_upload_panel.dart';
+import 'design.dart';
 import 'manual_batch_panel.dart';
 import 'update_button.dart';
-import '../transfer.dart';
 
 class TransferPage extends StatefulWidget {
-  const TransferPage({super.key});
+  const TransferPage({
+    super.key,
+    this.embedded = false,
+    this.onActiveChanged,
+    this.onUploadingChanged,
+  });
+
+  /// 嵌在工作台壳内时隐藏自带顶栏，由壳提供返回与切换。
+  final bool embedded;
+  final ValueChanged<bool>? onActiveChanged;
+  final ValueChanged<bool>? onUploadingChanged;
+
   @override
   State<TransferPage> createState() => _TransferPageState();
 }
 
 class _TransferPageState extends State<TransferPage> {
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _form = GlobalKey<FormState>();
   final _autoPanelKey = GlobalKey();
   bool _autoMode = false, _autoLocked = false;
@@ -24,7 +41,8 @@ class _TransferPageState extends State<TransferPage> {
   final _directory = TextEditingController(text: '/');
   final _store = const ProfileStore();
   bool _busy = false, _loading = true, _hidePassword = true;
-  String _message = '配置服务器后，选择照片开始上传';
+  bool _hasSavedProfile = false;
+  String _message = '';
 
   @override
   void initState() {
@@ -43,6 +61,7 @@ class _TransferPageState extends State<TransferPage> {
         _user.text = profile.user;
         _password.text = profile.password;
         _directory.text = profile.directory;
+        _hasSavedProfile = _fieldsComplete();
       }
     } catch (_) {
       _message = '无法读取已保存配置，请重新填写；检查系统安全存储权限';
@@ -60,6 +79,19 @@ class _TransferPageState extends State<TransferPage> {
     directory: _directory.text.trim(),
   );
 
+  bool _fieldsComplete() {
+    final port = int.tryParse(_port.text.trim());
+    return _host.text.trim().isNotEmpty &&
+        _user.text.trim().isNotEmpty &&
+        _password.text.isNotEmpty &&
+        _directory.text.trim().isNotEmpty &&
+        port != null &&
+        port >= 1 &&
+        port <= 65535;
+  }
+
+  bool get _configured => _hasSavedProfile && _fieldsComplete();
+
   // 不把库异常原文显示到界面，避免服务端应答或认证内容泄漏。
   String _error(Object error) => error is StateError
       ? error.message
@@ -67,8 +99,126 @@ class _TransferPageState extends State<TransferPage> {
       ? '网络连接失败，请检查主机、端口和网络'
       : '操作失败，请检查账号、目录权限和服务器 FTP 日志';
 
+  String? _validateField(TextEditingController controller, String label) {
+    final value = controller.text;
+    if (value.trim().isEmpty) return '请填写$label';
+    if (value.contains('\r') || value.contains('\n')) return '不能包含换行符';
+    if (controller == _port) {
+      final port = int.tryParse(value.trim());
+      if (port == null || port < 1 || port > 65535) return '端口应为 1—65535';
+    }
+    if (controller == _host &&
+        (value.contains('://') || value.contains('/'))) {
+      return '只填写域名或 IP，不含协议和路径';
+    }
+    return null;
+  }
+
+  ServerProfile? _readProfile() {
+    for (final entry in [
+      (_host, '主机'),
+      (_port, '端口'),
+      (_directory, '远程目录'),
+      (_user, '用户名'),
+      (_password, '密码'),
+    ]) {
+      if (_validateField(entry.$1, entry.$2) != null) return null;
+    }
+    return _profile;
+  }
+
+  void _openConfig() => _scaffoldKey.currentState?.openEndDrawer();
+
+  void _reportActivity({bool? active, bool? uploading}) {
+    if (active != null) widget.onActiveChanged?.call(active);
+    if (uploading != null) widget.onUploadingChanged?.call(uploading);
+  }
+
+  Future<void> _showNeedConfigDialog() async {
+    final go = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => Dialog(
+        backgroundColor: WorkstationStyle.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: WorkstationStyle.accentSoft,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.dns_outlined,
+                        color: WorkstationStyle.accent,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        '还不能开始上传',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                          color: WorkstationStyle.ink,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  '首次使用请先配置机位 FTP（主机、账号、目录）。配置保存后，主界面继续专注收图与上传。',
+                  style: TextStyle(color: WorkstationStyle.muted, height: 1.5),
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(0, 44),
+                          foregroundColor: WorkstationStyle.ink,
+                          side: const BorderSide(color: WorkstationStyle.line),
+                        ),
+                        child: const Text('稍后'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(0, 44),
+                          backgroundColor: WorkstationStyle.accent,
+                        ),
+                        child: const Text('去配置机位'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (go == true && mounted) _openConfig();
+  }
+
   Future<void> _connect({bool save = false}) async {
-    if (!_form.currentState!.validate()) return;
+    if (!(_form.currentState?.validate() ?? false)) return;
     setState(() {
       _busy = true;
       _message = save ? '正在保存配置…' : '正在测试连接与目录权限…';
@@ -78,14 +228,20 @@ class _TransferPageState extends State<TransferPage> {
       final profile = _profile;
       if (save) {
         await _store.save(profile);
+        _hasSavedProfile = true;
       } else {
         transfer = PhotoTransfer(profile);
         await transfer.open(profile.directory);
       }
       if (mounted) {
         setState(
-          () => _message = save ? '配置已保存到系统安全存储' : '连接成功，目标目录可访问（上传权限将在传输时验证）',
+          () => _message = save
+              ? '配置已保存到系统安全存储'
+              : '连接成功，目标目录可访问（上传权限将在传输时验证）',
         );
+      }
+      if (save && mounted) {
+        Navigator.of(context).maybePop();
       }
     } catch (error) {
       if (mounted) setState(() => _message = _error(error));
@@ -111,12 +267,15 @@ class _TransferPageState extends State<TransferPage> {
     String label,
     TextEditingController controller, {
     bool secret = false,
+    TextInputType? type,
   }) => Padding(
-    padding: const EdgeInsets.only(bottom: 16),
+    padding: const EdgeInsets.only(bottom: 12),
     child: TextFormField(
       controller: controller,
       enabled: !_busy && !_loading && !_autoLocked,
       obscureText: secret && _hidePassword,
+      keyboardType: type,
+      onChanged: (_) => setState(() {}),
       decoration: InputDecoration(
         labelText: label,
         suffixIcon: secret
@@ -127,6 +286,7 @@ class _TransferPageState extends State<TransferPage> {
                   _hidePassword
                       ? Icons.visibility_outlined
                       : Icons.visibility_off_outlined,
+                  size: 18,
                 ),
               )
             : null,
@@ -147,151 +307,556 @@ class _TransferPageState extends State<TransferPage> {
     ),
   );
 
-  Widget _server() => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(24),
-      child: Form(
-        key: _form,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget _configDrawer() {
+    final width = math.min(420.0, MediaQuery.sizeOf(context).width * 0.92);
+    return Drawer(
+      width: width,
+      backgroundColor: WorkstationStyle.card,
+      child: SafeArea(
+        child: Form(
+          key: _form,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 8, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            '机位连接',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              color: WorkstationStyle.ink,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _configured ? '已有配置，可按需修改。' : '首次使用请完整填写后保存。',
+                            style: const TextStyle(
+                              color: WorkstationStyle.muted,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: WorkstationStyle.line),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+                  children: [
+                    const Row(
+                      children: [
+                        StatusTag(
+                          label: 'FTP · 被动',
+                          color: WorkstationStyle.accent,
+                          soft: WorkstationStyle.accentSoft,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    _field('名称', _name),
+                    _field('主机', _host),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: _field(
+                            '端口',
+                            _port,
+                            type: TextInputType.number,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(child: _field('远程目录', _directory)),
+                      ],
+                    ),
+                    _field('用户名', _user),
+                    _field('密码', _password, secret: true),
+                    const Text(
+                      '当前版本使用明文 FTP，请用于可信网络。配置保存在本机，密码由系统安全存储保护。',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: WorkstationStyle.muted,
+                        height: 1.4,
+                      ),
+                    ),
+                    if (_message.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        _message,
+                        style: const TextStyle(
+                          color: WorkstationStyle.muted,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _busy || _loading || _autoLocked
+                            ? null
+                            : () => _connect(),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(0, 46),
+                          foregroundColor: WorkstationStyle.ink,
+                          side: const BorderSide(color: WorkstationStyle.line),
+                        ),
+                        child: const Text('测试连接'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: _busy || _loading || _autoLocked
+                            ? null
+                            : () => _connect(save: true),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(0, 46),
+                          backgroundColor: WorkstationStyle.accent,
+                        ),
+                        child: const Text('保存配置'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _stationSummary() => Material(
+    color: _configured
+        ? WorkstationStyle.accentSoft
+        : WorkstationStyle.warnSoft,
+    borderRadius: BorderRadius.circular(12),
+    child: InkWell(
+      onTap: _openConfig,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+        child: Row(
           children: [
-            const Text(
-              '服务器配置',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: WorkstationStyle.card,
+                borderRadius: BorderRadius.circular(9),
+                border: Border.all(color: WorkstationStyle.line),
+              ),
+              child: Icon(
+                _configured ? Icons.cloud_done_outlined : Icons.dns_outlined,
+                color: _configured
+                    ? WorkstationStyle.accent
+                    : WorkstationStyle.warn,
+                size: 18,
+              ),
             ),
-            const SizedBox(height: 8),
-            const Text('FTP · 被动模式 · 原图传输'),
-            const SizedBox(height: 24),
-            _field('名称', _name),
-            _field('主机', _host),
-            _field('端口', _port),
-            _field('用户名', _user),
-            _field('密码', _password, secret: true),
-            _field('远程目录', _directory),
-            const Text(
-              '当前版本使用明文 FTP，请用于可信网络。配置保存在本机，密码由系统安全存储保护。',
-              style: TextStyle(fontSize: 12, color: Color(0xff596579)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _configured ? '当前机位' : '机位尚未配置',
+                    style: const TextStyle(
+                      color: WorkstationStyle.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _configured
+                        ? '${_name.text.trim()}  ·  ${_host.text.trim()}'
+                        : '点击配置 FTP 主机、账号与目录',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: _configured
+                          ? WorkstationStyle.ink
+                          : WorkstationStyle.warn,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 20),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: _busy || _loading || _autoLocked
-                      ? null
-                      : () => _connect(),
-                  icon: const Icon(Icons.link),
-                  label: const Text('测试连接'),
-                ),
-                FilledButton.tonal(
-                  onPressed: _busy || _loading || _autoLocked
-                      ? null
-                      : () => _connect(save: true),
-                  child: const Text('保存配置'),
-                ),
-              ],
+            StatusTag(
+              label: _configured ? '已保存' : '必填',
+              color: _configured ? WorkstationStyle.ok : WorkstationStyle.warn,
+              soft: _configured
+                  ? WorkstationStyle.okSoft
+                  : const Color(0xfffff7ed),
             ),
+            const SizedBox(width: 8),
+            const Icon(Icons.chevron_right, color: WorkstationStyle.muted),
           ],
         ),
       ),
     ),
   );
 
-  Widget _content() => _autoMode
-      ? AutoUploadPanel(
-          key: _autoPanelKey,
-          readProfile: () => _form.currentState!.validate() ? _profile : null,
-          saveProfile: _store.save,
-          onActiveChanged: (active) {
-            if (mounted) setState(() => _autoLocked = active);
-          },
-        )
-      : ManualBatchPanel(
-          readProfile: () => _form.currentState!.validate() ? _profile : null,
-          saveProfile: _store.save,
-          onActiveChanged: (active) {
-            if (mounted) setState(() => _autoLocked = active);
-          },
-        );
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Text('旅派 · 照片传输'),
-      backgroundColor: Colors.white,
-      actions: const [UpdateButton(), SizedBox(width: 12)],
-    ),
-    body: SafeArea(
-      child: Column(
+  Widget _modeChip({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback? onTap,
+  }) => InkWell(
+    onTap: onTap,
+    borderRadius: BorderRadius.circular(9),
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: selected ? WorkstationStyle.accent : Colors.transparent,
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Row(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
-            child: SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(
-                  value: false,
-                  label: Text('手动模式'),
-                  icon: Icon(Icons.upload),
-                ),
-                ButtonSegment(
-                  value: true,
-                  label: Text('自动模式'),
-                  icon: Icon(Icons.folder_open),
-                ),
-              ],
-              selected: {_autoMode},
-              onSelectionChanged: _busy || _loading || _autoLocked
-                  ? null
-                  : (selection) => setState(() => _autoMode = selection.first),
-            ),
+          Icon(
+            icon,
+            size: 16,
+            color: selected ? Colors.white : WorkstationStyle.muted,
           ),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
-            child: Row(
-              children: [
-                if (_busy || _loading)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 12),
-                    child: SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-                Expanded(
-                  child: Text(_autoMode ? '自动监听模式 · 请选择照片接收目录' : _message),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) => SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                child: constraints.maxWidth >= 960
-                    ? Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          SizedBox(width: 350, child: _server()),
-                          const SizedBox(width: 16),
-                          Expanded(child: _content()),
-                        ],
-                      )
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _server(),
-                          const SizedBox(height: 16),
-                          _content(),
-                        ],
-                      ),
-              ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.white : WorkstationStyle.muted,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ],
       ),
+    ),
+  );
+
+  Widget _modeToggle() => Align(
+    alignment: Alignment.centerLeft,
+    child: FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: WorkstationStyle.card,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: WorkstationStyle.line),
+          boxShadow: WorkstationStyle.softShadow,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _modeChip(
+                label: '手动上传模式',
+                icon: Icons.upload_outlined,
+                selected: !_autoMode,
+                onTap: _busy || _loading || _autoLocked
+                    ? null
+                    : () => setState(() => _autoMode = false),
+              ),
+              _modeChip(
+                label: '自动上传模式',
+                icon: Icons.folder_open_outlined,
+                selected: _autoMode,
+                onTap: _busy || _loading || _autoLocked
+                    ? null
+                    : () => setState(() => _autoMode = true),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Widget _unconfiguredEmpty() => DecoratedBox(
+    decoration: WorkstationStyle.surface(),
+    child: LayoutBuilder(
+      builder: (context, bounds) => SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(22, 20, 22, 24),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minHeight: bounds.maxHeight - 44,
+            maxWidth: 480,
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xff2563eb), Color(0xff1e3a8a)],
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Icon(
+                  Icons.dns_outlined,
+                  color: Colors.white,
+                  size: 34,
+                ),
+              ),
+              const SizedBox(height: 22),
+              const Text(
+                '请先配置机位连接',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: WorkstationStyle.ink,
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                '上传前需要主机、账号和远程目录。配置一次后会保存在本机，之后打开即可直接使用。',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: WorkstationStyle.muted,
+                  height: 1.55,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: _openConfig,
+                icon: const Icon(Icons.settings_ethernet),
+                label: const Text('去配置机位'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: WorkstationStyle.accent,
+                  minimumSize: const Size(220, 48),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: _openConfig,
+                child: const Text('也可点击顶部「机位连接」'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Widget _content() {
+    if (!_configured) return _unconfiguredEmpty();
+    return _autoMode
+        ? AutoUploadPanel(
+            key: _autoPanelKey,
+            readProfile: () {
+              final profile = _readProfile();
+              if (profile == null) {
+                unawaited(_showNeedConfigDialog());
+              }
+              return profile;
+            },
+            saveProfile: _store.save,
+            onActiveChanged: (active) {
+              if (mounted) setState(() => _autoLocked = active);
+              _reportActivity(active: active || _busy);
+            },
+            onUploadingChanged: widget.onUploadingChanged,
+          )
+        : ManualBatchPanel(
+            readProfile: () {
+              final profile = _readProfile();
+              if (profile == null) {
+                unawaited(_showNeedConfigDialog());
+              }
+              return profile;
+            },
+            saveProfile: _store.save,
+            onActiveChanged: (active) {
+              if (mounted) setState(() => _autoLocked = active);
+              _reportActivity(active: active || _busy);
+            },
+            onUploadingChanged: widget.onUploadingChanged,
+          );
+  }
+
+  Widget _brandBar() {
+    final narrow = MediaQuery.sizeOf(context).width < 560;
+    final configLabel = _configured
+        ? '机位连接'
+        : (narrow ? '未配置' : '机位连接 · 未配置');
+    return Container(
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: const BoxDecoration(
+        color: WorkstationStyle.card,
+        border: Border(bottom: BorderSide(color: WorkstationStyle.line)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xff2563eb), Color(0xff1e3a8a)],
+              ),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(
+              Icons.photo_camera_back_outlined,
+              color: Colors.white,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '旅派 · 照片传输',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: WorkstationStyle.ink,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  '现场上传工作台',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: WorkstationStyle.muted,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          FilledButton.tonalIcon(
+            onPressed: _openConfig,
+            icon: Badge(
+              isLabelVisible: !_configured,
+              smallSize: 8,
+              child: const Icon(Icons.dns_outlined, size: 18),
+            ),
+            label: Text(configLabel),
+            style: FilledButton.styleFrom(
+              foregroundColor: _configured
+                  ? WorkstationStyle.ink
+                  : WorkstationStyle.accent,
+              backgroundColor: _configured
+                  ? const Color(0xfff8fafc)
+                  : WorkstationStyle.accentSoft,
+              minimumSize: const Size(0, 40),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+          if (!widget.embedded) ...[
+            const SizedBox(width: 8),
+            const UpdateButton(),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _workspace() {
+    final pad = MediaQuery.sizeOf(context).width >= 960 ? 28.0 : 16.0;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1120),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(pad, 20, pad, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (widget.embedded)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: _openConfig,
+                    icon: Badge(
+                      isLabelVisible: !_configured,
+                      smallSize: 8,
+                      child: const Icon(Icons.dns_outlined, size: 18),
+                    ),
+                    label: Text(_configured ? '机位连接' : '机位连接 · 未配置'),
+                  ),
+                ),
+              if (widget.embedded) const SizedBox(height: 8),
+              _stationSummary(),
+              const SizedBox(height: 16),
+              _modeToggle(),
+              if (_busy || _loading) ...[
+                const SizedBox(height: 12),
+                const Row(
+                  children: [
+                    SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '处理中…',
+                        style: TextStyle(color: WorkstationStyle.muted),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 18),
+              Expanded(child: _content()),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    key: _scaffoldKey,
+    backgroundColor: Colors.transparent,
+    endDrawer: _configDrawer(),
+    body: Column(
+      children: [
+        if (!widget.embedded) _brandBar(),
+        Expanded(
+          child: SafeArea(top: false, child: _workspace()),
+        ),
+      ],
     ),
   );
 }

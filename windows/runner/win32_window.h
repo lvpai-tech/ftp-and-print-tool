@@ -12,6 +12,9 @@
 // rendering and input handling
 class Win32Window {
  public:
+  static constexpr wchar_t kClassName[] = L"ai.lvpai.zhenji.WorkstationWindow";
+  static UINT ActivationMessage();
+
   struct Point {
     unsigned int x;
     unsigned int y;
