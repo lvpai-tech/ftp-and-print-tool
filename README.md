@@ -2,7 +2,9 @@
 
 独立 Flutter 应用，共用 Windows / macOS / iOS 的 Dart 上传队列；苹果端包含原生目录授权代码，待 Mac 编译及真机验收。
 
-公开仓可用 GitHub Actions 打 **未签名** macOS 内测包：仓库 Actions 页手动运行 `Build macOS`，下载 Artifact `lvpai-ftp-macos-unsigned`。正式对外分发仍须按 [RELEASING.md](RELEASING.md) 签名与公证。
+公开仓可用 GitHub Actions 打 **macOS 个人跨机包**：仓库 Actions 页手动运行 `Build macOS`，下载 Artifact `lvpai-ftp-macos-personal`。解压后双击「打开旅派客户端.command」；其他 Mac 首次需右键打开或「仍要打开」。包内含临时签名的 `.app`、随包 `print-runtime`（Node + 打印内核）与说明。正式对外分发仍须按 [RELEASING.md](RELEASING.md) 签名与公证，不能把本个人包当公证安装包。
+
+打印内核源码在仓库 `print-runtime/`（自父仓 `print-desktop` 同步）。开发机也可用环境变量指向父仓 `print-desktop`。
 
 拷到 Mac 后的完整运行、签名和测试步骤见 [APPLE_TESTING.md](APPLE_TESTING.md)。
 

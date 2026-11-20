@@ -12,6 +12,9 @@ jobs:
     timeout-minutes: 60
     env:
       PUB_HOSTED_URL: https://pub.flutter-io.cn
+      FLUTTER_STORAGE_BASE_URL: https://storage.flutter-io.cn
+      LVPAI_UPDATE_ENV: test
+      LVPAI_PRINT_NODE_VERSION: v20.18.1
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,21 +41,20 @@ jobs:
       - name: Build macOS release
         run: flutter build macos --release --dart-define=LVPAI_UPDATE_ENV=test
 
-      - name: Package unsigned .app
+      - name: Package personal click-to-run zip
         run: |
           set -euo pipefail
-          APP_PATH="build/macos/Build/Products/Release/lvpai_ftp_client.app"
-          test -d "$APP_PATH"
-          mkdir -p dist
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" dist/lvpai-ftp-macos-unsigned.zip
-          shasum -a 256 dist/lvpai-ftp-macos-unsigned.zip | tee dist/lvpai-ftp-macos-unsigned.sha256
+          chmod +x tool/package_macos_personal.sh
+          tool/package_macos_personal.sh build/macos/Build/Products/Release/lvpai_ftp_client.app
+          test -f dist/lvpai-ftp-macos-personal.zip
+          test -f dist/lvpai-ftp-macos-personal.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lvpai-ftp-macos-unsigned
+          name: lvpai-ftp-macos-personal
           path: |
-            dist/lvpai-ftp-macos-unsigned.zip
-            dist/lvpai-ftp-macos-unsigned.sha256
+            dist/lvpai-ftp-macos-personal.zip
+            dist/lvpai-ftp-macos-personal.sha256
           if-no-files-found: error
           retention-days: 14

@@ -34,9 +34,7 @@ class PrintBridge extends ChangeNotifier {
   /// 发布包只使用随包内核；开发通过显式环境变量指定仓库内核。
   Future<void> start() async {
     try {
-      final runtime =
-          Platform.environment['LVPAI_PRINT_RUNTIME'] ??
-          p.join(p.dirname(Platform.resolvedExecutable), 'print-runtime');
+      final runtime = resolvePrintRuntime();
       final node =
           Platform.environment['LVPAI_PRINT_NODE'] ??
           p.join(runtime, Platform.isWindows ? 'node.exe' : 'node');
@@ -163,5 +161,27 @@ class PrintBridge extends ChangeNotifier {
     if (busy) throw StateError('打印处理中，请等待完成后退出');
     if (connected) await call('shutdown');
     await _process?.stdin.close();
+  }
+
+  /// 环境变量优先；否则可执行文件旁，再尝试 macOS `Contents/Resources/print-runtime`。
+  static String resolvePrintRuntime() {
+    final fromEnv = Platform.environment['LVPAI_PRINT_RUNTIME'];
+    if (fromEnv != null && fromEnv.isNotEmpty) {
+      return fromEnv;
+    }
+    final exeDir = p.dirname(Platform.resolvedExecutable);
+    final beside = p.join(exeDir, 'print-runtime');
+    if (Directory(beside).existsSync()) {
+      return beside;
+    }
+    if (Platform.isMacOS) {
+      final inResources = p.normalize(
+        p.join(exeDir, '..', 'Resources', 'print-runtime'),
+      );
+      if (Directory(inResources).existsSync()) {
+        return inResources;
+      }
+    }
+    return beside;
   }
 }

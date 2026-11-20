@@ -49,6 +49,15 @@ open build/macos/Build/Products/Release
 运行目录中的完整 .app；不要只复制内部可执行文件。不关闭App Sandbox或申请全磁盘访问绕过目录授权。
 Mac原生工程入口：macos/Runner.xcworkspace。签名团队与证书由本机配置，不提交个人凭据。
 
+个人跨机（不申请 Developer ID）可用仓库脚本打临时签名包，含打印内核与「打开旅派客户端.command」：
+
+```sh
+flutter build macos --release --dart-define=LVPAI_UPDATE_ENV=test
+./tool/package_macos_personal.sh
+```
+
+产物在 `dist/lvpai-ftp-macos-personal.zip`。其他 Mac 首次需右键打开；正式对外分发仍按 [RELEASING.md](RELEASING.md)。
+
 ## iOS / iPad
 
 先用模拟器检查界面和编译：

@@ -3,6 +3,7 @@
 .flutter-plugins*
 .packages
 build/
+dist/
 coverage/
 .fvm/
 .venv/

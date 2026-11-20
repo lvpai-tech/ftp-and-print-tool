@@ -1,0 +1,34 @@
+{
+  "base": "https://hilvpai.com/api/operation",
+  "token": "替换为管理端生成的景区打印密钥",
+  "scenicIds": [],
+  "scenicName": "",
+  "scenicCode": "",
+  "autoPrint": false,
+  "pollMs": 3000,
+  "idleBackoffMs": 12000,
+  "resultRetries": 5,
+  "statusHost": "127.0.0.1",
+  "statusPort": 17888,
+  "allowDefaultPrinter": false,
+  "defaultPrinter": "",
+  "printers": {
+    "COVER": "6寸打印机名",
+    "SIZE_6": "6寸打印机名",
+    "ORIGINAL": "6寸打印机名",
+    "CREATIVE": "6寸打印机名"
+  },
+  "command": [
+    "/bin/bash",
+    "{scriptDir}/print-image-mac.sh",
+    "-File",
+    "{file}",
+    "-Printer",
+    "{printer}",
+    "-Copies",
+    "{copies}",
+    "-Kind",
+    "{kind}"
+  ],
+  "statusCommand": null
+}

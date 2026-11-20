@@ -66,6 +66,7 @@ workflow 文件进入默认分支后，在 GitHub Actions 里选择对应的构�
 | `Build Android APK` | `lvpai-ftp-android-debug.apk` | Android 调试签名包，可安装测试手动上传 |
 | `Build iOS` | `lvpai-ftp-ios-unsigned.zip` | iPhone/iPad 设备 Release 构建，内含未签名 `Runner.app`，真机安装需另行签名 |
 | `Build Windows` | `lvpai-ftp-<版本>-<构建号>-windows-x64.zip` | 未签名的完整 x64 Release，SHA-256 见随包的 `release-info.json` |
+| `Build macOS` | `lvpai-ftp-macos-personal.zip` | 个人跨机包：临时签名 `.app` + 随包打印内核 +「打开旅派客户端.command」；其他 Mac 首次需右键打开。不是公证正式包 |
 
 正式 iOS 分发沿用下文的 Xcode、App Store Connect 和 TestFlight 流程。
 
