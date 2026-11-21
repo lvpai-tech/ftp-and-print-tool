@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 
 import '../transfer.dart';
 import '../photo_normalizer.dart';
+import 'cos_upload.dart';
 import 'journal.dart';
 
 class AutoJob {
@@ -76,6 +77,7 @@ class FolderUploader extends ChangeNotifier {
   StreamSubscription<FileSystemEvent>? _events;
   Timer? _timer, _debounce, _progressTimer;
   ServerProfile? _profile;
+  CosUpload? _cos;
   Directory? _root;
   Future<void>? _scanTask, _pumpTask;
   bool running = false, stopping = false, _initialized = false, _closed = false;
@@ -163,7 +165,8 @@ class FolderUploader extends ChangeNotifier {
 
   Future<void> start(
     Directory root,
-    ServerProfile profile, {
+    ServerProfile? profile, {
+    CosUploadProfile? cosProfile,
     bool recursive = true,
     bool includeExisting = false,
   }) async {
@@ -174,6 +177,9 @@ class FolderUploader extends ChangeNotifier {
         !Platform.isIOS) {
       throw StateError('当前平台不支持目录监听');
     }
+    if ((profile == null) == (cosProfile == null)) {
+      throw StateError('请选择一个自动上传通道');
+    }
     final absolute = Directory(await root.resolveSymbolicLinks());
     if (p.isWithin(absolute.path, storage.absolute.path) ||
         p.equals(absolute.path, storage.absolute.path)) {
@@ -181,6 +187,7 @@ class FolderUploader extends ChangeNotifier {
     }
     _root = absolute;
     _profile = profile;
+    _cos = cosProfile == null ? null : CosUpload(cosProfile);
     _recursive = recursive;
     _includeExisting = includeExisting;
     _jobs.clear();
@@ -191,8 +198,10 @@ class FolderUploader extends ChangeNotifier {
     fatalError = null;
     _initialized = false;
     final key = _hash(
-      '${absolute.path}\u0000${profile.host.toLowerCase()}\u0000'
-      '${profile.port}\u0000${profile.user}\u0000${profile.directory}',
+      cosProfile != null
+          ? '${absolute.path}\u0000cos\u0000${cosProfile.queueTarget}'
+          : '${absolute.path}\u0000${profile!.host.toLowerCase()}\u0000'
+                '${profile.port}\u0000${profile.user}\u0000${profile.directory}',
     );
     final journal = QueueJournal(
       File(p.join(storage.path, key, 'queue.jsonl')),
@@ -248,6 +257,8 @@ class FolderUploader extends ChangeNotifier {
       _debounce?.cancel();
       await _events?.cancel();
       _journal = null;
+      _cos?.close();
+      _cos = null;
       await journal.close();
       rethrow;
     }
@@ -432,7 +443,7 @@ class FolderUploader extends ChangeNotifier {
       job.progress = 0;
       await _append(job.toJson());
       _notify();
-      final transfer = PhotoTransfer(_profile!);
+      final transfer = _profile == null ? null : PhotoTransfer(_profile!);
       try {
         final file = File(job.snapshot);
         if (!await file.exists() ||
@@ -440,10 +451,7 @@ class FolderUploader extends ChangeNotifier {
                 job.digest) {
           throw StateError('待传副本丢失或变化，请检查本机存储');
         }
-        await transfer.open(_profile!.directory);
-        await transfer.uploadQueued(file, job.relative, job.id, job.digest, (
-          progress,
-        ) {
+        void onProgress(double progress) {
           job.progress = progress;
           if (!_closed) {
             _progressTimer ??= Timer(
@@ -451,8 +459,33 @@ class FolderUploader extends ChangeNotifier {
               _notify,
             );
           }
-        });
-        job.state = 'done';
+        }
+
+        if (transfer != null) {
+          await transfer.open(_profile!.directory);
+          await transfer.uploadQueued(
+            file,
+            job.relative,
+            job.id,
+            job.digest,
+            onProgress,
+          );
+          job.state = 'done';
+        } else {
+          final status = await _cos!.upload(
+            file,
+            job.id,
+            job.digest,
+            onProgress,
+            recover: job.attempts > 1,
+          );
+          job.state = switch (status) {
+            'GROUPED' => 'grouped',
+            'INGESTED' => 'ingested',
+            _ => 'accepted',
+          };
+          job.nextAttempt = DateTime.now();
+        }
         job.progress = 1;
         job.error = '';
       } catch (error) {
@@ -469,19 +502,65 @@ class FolderUploader extends ChangeNotifier {
       } finally {
         _cancelProgressNotification();
         try {
-          await transfer.close();
+          await transfer?.close();
         } catch (_) {
           message = 'FTP连接关闭异常，已保留任务结果';
         }
       }
       await _append(job.toJson());
-      if (job.state == 'done') {
-        try {
-          final copy = File(job.snapshot);
-          if (await copy.exists()) await copy.delete();
-        } on FileSystemException {
-          message = '已上传，但本机待传副本清理失败';
-        }
+      if (const {'done', 'ingested', 'grouped'}.contains(job.state)) {
+        await _removeSnapshot(job);
+      }
+      _notify();
+    }
+    if (_cos != null) await _refreshCosStatus();
+  }
+
+  Future<void> _removeSnapshot(AutoJob job) async {
+    try {
+      final copy = File(job.snapshot);
+      if (await copy.exists()) await copy.delete();
+    } on FileSystemException {
+      message = '已上传，但本机待传副本清理失败';
+    }
+  }
+
+  Future<void> _refreshCosStatus() async {
+    final due =
+        _jobs.values
+            .where(
+              (job) =>
+                  const {'accepted', 'ingested'}.contains(job.state) &&
+                  !job.nextAttempt.isAfter(DateTime.now()),
+            )
+            .toList()
+          ..sort((a, b) => a.nextAttempt.compareTo(b.nextAttempt));
+    for (final job in due.take(12)) {
+      if (!running) break;
+      job.nextAttempt = DateTime.now().add(const Duration(seconds: 15));
+      late final ({String status, String error}) result;
+      try {
+        result = await _cos!.status(job.id);
+      } catch (_) {
+        message = '暂时无法查询 COS 归集状态，稍后重试';
+        _notify();
+        break;
+      }
+      if (result.status == 'GROUPED') {
+        job.state = 'grouped';
+        job.error = '';
+      } else if (result.status == 'INGESTED' && job.state == 'accepted') {
+        job.state = 'ingested';
+        job.error = '';
+      } else if (result.status == 'FAILED') {
+        job.state = 'failed';
+        job.error = result.error;
+      } else {
+        continue;
+      }
+      await _append(job.toJson());
+      if (job.state == 'grouped' || job.state == 'ingested') {
+        await _removeSnapshot(job);
       }
       _notify();
     }
@@ -519,6 +598,8 @@ class FolderUploader extends ChangeNotifier {
       await _pumpTask;
     } finally {
       try {
+        _cos?.close();
+        _cos = null;
         await _journal?.close();
       } finally {
         _journal = null;

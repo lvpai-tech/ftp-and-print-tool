@@ -87,7 +87,83 @@ class ControlledBridge extends PrintBridge {
   }
 }
 
+class GeneratingQueueBridge extends ControlledBridge {
+  bool pending = true;
+
+  @override
+  Future<dynamic> call(String method, [List<dynamic> args = const []]) async {
+    if (method == 'queryJobs') {
+      final filter = (args.first as Json)['printStatus'];
+      final current = snapshot['state'] as Json;
+      final printPage = current['printPage'] ?? current['jobPage'];
+      snapshot['state'] = {
+        ...current,
+        'jobQuery': {'printStatus': filter},
+        'printPage': printPage,
+        'jobPage': filter == 'GENERATING'
+            ? {
+                'list': [
+                  if (pending)
+                    {
+                      'receiptId': '9007199254740994',
+                      'cardTail': '3893',
+                      'submittedAt': '2026-11-21T01:20:00Z',
+                    },
+                ],
+                'total': pending ? 1 : 0,
+                'pageNum': 1,
+              }
+            : printPage,
+      };
+    }
+    return super.call(method, args);
+  }
+}
+
 void main() {
+  for (final width in [375.0, 1280.0]) {
+    testWidgets('生成中在宽度 $width 显示只读取片单并支持刷新', (tester) async {
+      tester.view.physicalSize = Size(width, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final bridge = GeneratingQueueBridge();
+      await tester.pumpWidget(
+        MaterialApp(home: Workstation(bridge: bridge, embedded: true)),
+      );
+      await tester.pumpAndSettle();
+      bridge.calls.clear();
+
+      await tester.tap(find.text('生成中'));
+      await tester.pumpAndSettle();
+      expect(
+        bridge.arguments['queryJobs']?.first,
+        containsPair('printStatus', 'GENERATING'),
+      );
+      expect(find.text('3893'), findsOneWidget);
+      expect(find.text('小票 #9007199254740994'), findsOneWidget);
+      expect(find.text('2026-11-21 09:20'), findsOneWidget);
+      expect(find.text('AI 创意生成中'), findsOneWidget);
+      expect(find.byType(Checkbox), findsNothing);
+      expect(find.byTooltip('查看照片'), findsNothing);
+      expect(find.text('打印本单'), findsNothing);
+      expect(bridge.calls, ['queryJobs']);
+
+      bridge.pending = false;
+      await tester.tap(find.byTooltip('刷新生成中的任务'));
+      await tester.pumpAndSettle();
+      expect(find.text('暂无正在生成的任务'), findsOneWidget);
+
+      await tester.tap(find.text('待打印'));
+      await tester.pumpAndSettle();
+      expect(
+        bridge.arguments['queryJobs']?.first,
+        containsPair('printStatus', 'UNPRINTED'),
+      );
+      expect(find.text('#9007199254740993'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
   for (final width in [820.0, 1280.0, 1600.0]) {
     testWidgets('工单在 $width 宽度可操作且ID不丢精度', (tester) async {
       tester.view.physicalSize = Size(width, 900);

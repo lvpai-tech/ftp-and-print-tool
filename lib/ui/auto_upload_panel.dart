@@ -7,6 +7,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../auto_upload/cos_upload.dart';
 import '../auto_upload/folder_access.dart';
 import '../auto_upload/folder_uploader.dart';
 import '../branding.dart';
@@ -18,12 +19,16 @@ class AutoUploadPanel extends StatefulWidget {
   final Future<void> Function(ServerProfile) saveProfile;
   final void Function(bool) onActiveChanged;
   final ValueChanged<bool>? onUploadingChanged;
+  final CosUploadProfile? cosProfile;
+  final VoidCallback? onConfigureCos;
   const AutoUploadPanel({
     super.key,
     required this.readProfile,
     required this.saveProfile,
     required this.onActiveChanged,
     this.onUploadingChanged,
+    this.cosProfile,
+    this.onConfigureCos,
   });
   @override
   State<AutoUploadPanel> createState() => _AutoUploadPanelState();
@@ -130,9 +135,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
         _uploader!.removeListener(_refresh);
         _uploader!.dispose();
         _uploader = null;
-        _message = Platform.isIOS
-            ? '监听已停止，队列已保存；回到前台后点击开始监听继续'
-            : '已停止监听，队列已保存';
+        _message = Platform.isIOS ? '监听已停止，队列已保存；回到前台后点击开始监听继续' : '已停止监听，队列已保存';
       } catch (_) {
         _message = '队列关闭失败，请检查磁盘权限并重新启动应用';
       } finally {
@@ -143,8 +146,9 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
       }
       return;
     }
-    final profile = widget.readProfile();
-    if (profile == null) return;
+    final cosProfile = widget.cosProfile;
+    final profile = cosProfile == null ? widget.readProfile() : null;
+    if (profile == null && cosProfile == null) return;
     if (_folder.isEmpty) {
       setState(() => _message = '请先选择接收照片的文件夹');
       return;
@@ -158,7 +162,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
     try {
       _folder = await _access.acquire(_folder);
       final directory = await getApplicationSupportDirectory();
-      await widget.saveProfile(profile);
+      if (profile != null) await widget.saveProfile(profile);
       await _storage.write(
         key: 'ftp.watch.v1',
         value: jsonEncode({'folder': _folder, 'recursive': _recursive}),
@@ -171,6 +175,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
       await uploader.start(
         Directory(_folder),
         profile,
+        cosProfile: cosProfile,
         recursive: _recursive,
         includeExisting: _existing,
       );
@@ -218,15 +223,17 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
 
   String _status(AutoJob job) => switch (job.state) {
     'done' => '上传成功',
+    'accepted' => '已上传 · 等待入库',
+    'ingested' => '已入库 · 等待归卡',
+    'grouped' => '已归卡',
     'uploading' => '上传中 ${(job.progress * 100).round()}%',
     'failed' => '失败 · ${job.error}',
-    _ => job.attempts == 0
-        ? '等待上传'
-        : '等待自动重试（${job.attempts}/3） · ${job.error}',
+    _ =>
+      job.attempts == 0 ? '等待上传' : '等待自动重试（${job.attempts}/3） · ${job.error}',
   };
 
   (Color, Color) _statusColors(AutoJob job) => switch (job.state) {
-    'done' => (WorkstationStyle.ok, WorkstationStyle.okSoft),
+    'done' || 'grouped' => (WorkstationStyle.ok, WorkstationStyle.okSoft),
     'uploading' => (WorkstationStyle.accent, WorkstationStyle.accentSoft),
     'failed' => (WorkstationStyle.bad, WorkstationStyle.badSoft),
     _ => (WorkstationStyle.warn, WorkstationStyle.warnSoft),
@@ -243,7 +250,16 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
     final locked = _active || _working || _loading;
     final pending = jobs.where((j) => j.state == 'pending').length;
     final uploading = jobs.where((j) => j.state == 'uploading').length;
-    final done = jobs.where((j) => j.state == 'done').length;
+    final done = jobs
+        .where(
+          (j) => const {
+            'done',
+            'accepted',
+            'ingested',
+            'grouped',
+          }.contains(j.state),
+        )
+        .length;
     final failed = jobs.where((j) => j.state == 'failed').length;
 
     return DecoratedBox(
@@ -312,6 +328,15 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                           minimumSize: const Size(0, 40),
                         ),
                       ),
+                      if (widget.onConfigureCos != null)
+                        TextButton(
+                          onPressed: locked ? null : widget.onConfigureCos,
+                          child: Text(
+                            widget.cosProfile == null
+                                ? '配置 COS 直传'
+                                : 'COS 直传设置',
+                          ),
+                        ),
                       if (Platform.isIOS)
                         TextButton(
                           onPressed: locked ? null : _inbox,
@@ -518,24 +543,23 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                         ),
                       ),
                     )
-                  else
-                    ...[
-                      for (var index = 0; index < jobs.length; index++) ...[
-                        if (index > 0) const SizedBox(height: 10),
-                        Builder(
-                          builder: (context) {
-                            final job = jobs[index];
-                            final colors = _statusColors(job);
-                            return _JobThumbRow(
-                              job: job,
-                              status: _status(job),
-                              color: colors.$1,
-                              soft: colors.$2,
-                            );
-                          },
-                        ),
-                      ],
+                  else ...[
+                    for (var index = 0; index < jobs.length; index++) ...[
+                      if (index > 0) const SizedBox(height: 10),
+                      Builder(
+                        builder: (context) {
+                          final job = jobs[index];
+                          final colors = _statusColors(job);
+                          return _JobThumbRow(
+                            job: job,
+                            status: _status(job),
+                            color: colors.$1,
+                            soft: colors.$2,
+                          );
+                        },
+                      ),
                     ],
+                  ],
                   const SizedBox(height: 12),
                   const Text(
                     'JPEG / PNG / MPO · 写入稳定且可解码后入队 · 最多自动尝试 3 次。停止后当前照片会完成上传；退出后不再监听。上传后不删除相机原图。',
@@ -556,11 +580,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
 }
 
 class _Stat extends StatelessWidget {
-  const _Stat({
-    required this.label,
-    required this.value,
-    required this.color,
-  });
+  const _Stat({required this.label, required this.value, required this.color});
   final String label, value;
   final Color color;
 
@@ -666,7 +686,7 @@ class _LocalThumb extends StatelessWidget {
   final AutoJob job;
 
   Widget _placeholder() {
-    final done = job.state == 'done';
+    final done = const {'done', 'ingested', 'grouped'}.contains(job.state);
     return ColoredBox(
       color: const Color(0xfff1f5f9),
       child: Icon(
@@ -701,7 +721,7 @@ class _LocalThumb extends StatelessWidget {
                 errorBuilder: (context, error, stackTrace) => _placeholder(),
               ),
             ),
-            if (job.state == 'done')
+            if (const {'done', 'ingested', 'grouped'}.contains(job.state))
               const Align(
                 alignment: Alignment.bottomRight,
                 child: Padding(

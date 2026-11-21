@@ -4,10 +4,13 @@ import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
 
+import '../auto_upload/cos_upload.dart';
 import '../branding.dart';
 import '../profile_store.dart';
 import '../transfer.dart';
 import 'auto_upload_panel.dart';
+import 'cos_upload_dialog.dart';
+import 'app_dialogs.dart';
 import 'design.dart';
 import 'manual_batch_panel.dart';
 import 'update_button.dart';
@@ -45,6 +48,7 @@ class _TransferPageState extends State<TransferPage> {
   final _store = const ProfileStore();
   bool _busy = false, _loading = true, _hidePassword = true;
   bool _hasSavedProfile = false;
+  CosUploadProfile? _cosProfile;
   String _message = '';
 
   @override
@@ -66,6 +70,9 @@ class _TransferPageState extends State<TransferPage> {
         _directory.text = profile.directory;
         _hasSavedProfile = _fieldsComplete();
       }
+      final cosProfile = await _store.loadCos();
+      if (!mounted) return;
+      _cosProfile = cosProfile;
     } catch (_) {
       _message = '无法读取已保存配置，请重新填写；检查系统安全存储权限';
     } finally {
@@ -663,6 +670,11 @@ class _TransferPageState extends State<TransferPage> {
                 onPressed: _openConfig,
                 child: const Text('也可点击顶部「机位连接」'),
               ),
+              if (_autoMode)
+                TextButton(
+                  onPressed: _loading ? null : _configureCos,
+                  child: const Text('配置 COS 自动直传'),
+                ),
             ],
           ),
         ),
@@ -670,11 +682,31 @@ class _TransferPageState extends State<TransferPage> {
     ),
   );
 
+  Future<void> _configureCos() async {
+    if (_autoLocked || _busy || _loading) return;
+    final result = await showDialog<({CosUploadProfile? profile})>(
+      context: context,
+      builder: (context) => CosUploadDialog(initial: _cosProfile),
+    );
+    if (result == null || !mounted) return;
+    try {
+      await _store.saveCos(result.profile);
+      if (mounted) setState(() => _cosProfile = result.profile);
+    } catch (_) {
+      if (!mounted) return;
+      await showAppMessage(context, message: '无法保存配置，请检查系统安全存储权限');
+    }
+  }
+
   Widget _content() {
-    if (!_configured) return _unconfiguredEmpty();
+    if (!_configured && (!_autoMode || _cosProfile == null)) {
+      return _unconfiguredEmpty();
+    }
     return _autoMode
         ? AutoUploadPanel(
             key: _autoPanelKey,
+            cosProfile: _cosProfile,
+            onConfigureCos: _configureCos,
             readProfile: () {
               final profile = _readProfile();
               if (profile == null) {

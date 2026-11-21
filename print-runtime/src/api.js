@@ -39,13 +39,32 @@ async function fetchMe(config) {
  * @param {{ printStatus?: string, createdFrom?: string, createdTo?: string, pageNum?: number, pageSize?: number }} query
  */
 async function listJobs(config, query = {}) {
-  const params = new URLSearchParams();
+  const params = pageParams(query);
   params.set('printStatus', query.printStatus || 'ALL');
-  params.set('pageNum', String(query.pageNum || 1));
-  params.set('pageSize', String(query.pageSize || 20));
+  return callJson(config, 'GET', `/print-agents/jobs?${params.toString()}`);
+}
+
+/** 查看本景区还在生成的取片单，使用独立的只读接口。 */
+async function listGenerating(config, query) {
+  const params = pageParams(query);
+  const page = await callJson(config, 'GET', `/print-agents/generating?${params.toString()}`);
+  if (!page || !Array.isArray(page.list) || !Number.isSafeInteger(page.total) ||
+      !Number.isSafeInteger(page.pageNum) || !Number.isSafeInteger(page.pageSize) ||
+      page.list.some((row) => typeof row?.receiptId !== 'string' || !row.receiptId ||
+        typeof row.submittedAt !== 'string' || !Number.isFinite(Date.parse(row.submittedAt)))) {
+    throw new Error('生成中任务列表响应不完整');
+  }
+  return page;
+}
+
+function pageParams(query) {
+  const params = new URLSearchParams({
+    pageNum: String(query.pageNum || 1),
+    pageSize: String(query.pageSize || 20),
+  });
   if (query.createdFrom) params.set('createdFrom', query.createdFrom);
   if (query.createdTo) params.set('createdTo', query.createdTo);
-  return callJson(config, 'GET', `/print-agents/jobs?${params.toString()}`);
+  return params;
 }
 
 /** 占单并返回打印条目（下载前必须调用）。 */
@@ -123,6 +142,7 @@ module.exports = {
   callJson,
   fetchMe,
   listJobs,
+  listGenerating,
   beginJob,
   continueJob,
   previewJob,

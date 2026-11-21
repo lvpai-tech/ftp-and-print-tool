@@ -1,6 +1,6 @@
 'use strict';
 
-const { listJobs, beginJob, continueJob, requeueJobs, confirmPrintedJobs } = require('./api');
+const { listJobs, listGenerating, beginJob, continueJob, requeueJobs, confirmPrintedJobs } = require('./api');
 const { processClaimedJob } = require('./agent');
 const {
   assertPrinterReady,
@@ -20,13 +20,15 @@ function createScheduler(options = {}) {
   let running = false;
   let printBusy = false;
   let listBusy = false;
+  let listRequest = 0;
+  let listError = '';
   let autoTimer = null;
   let listTimer = null;
   let currentJob = null;
   let lastError = '';
   let phase = 'stopped';
   let jobQuery = {
-    printStatus: 'ALL',
+    printStatus: 'UNPRINTED',
     createdFrom: '',
     createdTo: '',
     pageNum: 1,
@@ -49,6 +51,7 @@ function createScheduler(options = {}) {
       autoPrint,
       printBusy,
       listBusy,
+      listError,
       busy: printBusy || listBusy,
       phase,
       jobQuery: { ...jobQuery },
@@ -68,6 +71,12 @@ function createScheduler(options = {}) {
   }
 
   function setConfig(next) {
+    if (next.base !== config.base || next.token !== config.token) {
+      listRequest += 1;
+      listBusy = false;
+      jobQuery = { ...jobQuery, pageNum: 1 };
+      clearJobPage();
+    }
     config = next;
     if (next && next.autoPrint !== undefined) {
       autoPrint = Boolean(next.autoPrint);
@@ -99,53 +108,63 @@ function createScheduler(options = {}) {
   function setJobQuery(patch = {}) {
     const next = { ...jobQuery, ...patch };
     next.printStatus = String(next.printStatus || 'ALL').toUpperCase();
-    if (!['ALL', 'PRINTED', 'UNPRINTED', 'FAILED'].includes(next.printStatus)) {
-      throw new Error('状态仅支持全部/已打印/未打印/打印失败');
+    if (!['ALL', 'PRINTED', 'UNPRINTED', 'FAILED', 'GENERATING'].includes(next.printStatus)) {
+      throw new Error('状态仅支持全部/已打印/未打印/打印失败/生成中');
     }
     next.pageNum = Math.max(1, Number(next.pageNum) || 1);
     next.pageSize = Math.min(100, Math.max(1, Number(next.pageSize) || 20));
     next.createdFrom = next.createdFrom ? String(next.createdFrom) : '';
     next.createdTo = next.createdTo ? String(next.createdTo) : '';
+    const changed = Object.keys(jobQuery).some((key) => next[key] !== jobQuery[key]);
     jobQuery = next;
-    emit();
+    if (changed) clearJobPage();
     return refreshJobs();
+  }
+
+  function clearJobPage() {
+    jobPage = { list: [], total: 0, pageNum: jobQuery.pageNum, pageSize: jobQuery.pageSize };
+    listError = '';
   }
 
   async function refreshJobs() {
     if (!config || !config.token) {
       throw new Error('未配置打印密钥，无法查询任务');
     }
+    const request = ++listRequest;
+    const query = jobQuery;
+    const generating = query.printStatus === 'GENERATING';
     listBusy = true;
     phase = printBusy ? 'printing' : 'listing';
     emit();
     try {
-      const data = await listJobs(config, {
-        printStatus: jobQuery.printStatus,
-        createdFrom: jobQuery.createdFrom || undefined,
-        createdTo: jobQuery.createdTo || undefined,
-        pageNum: jobQuery.pageNum,
-        pageSize: jobQuery.pageSize,
-      });
+      const data = await (generating ? listGenerating : listJobs)(config, query);
+      if (request !== listRequest) return jobPage;
       jobPage = {
         list: Array.isArray(data && data.list) ? data.list : [],
         total: Number(data && data.total) || 0,
-        pageNum: Number(data && data.pageNum) || jobQuery.pageNum,
-        pageSize: Number(data && data.pageSize) || jobQuery.pageSize,
+        pageNum: Number(data && data.pageNum) || query.pageNum,
+        pageSize: Number(data && data.pageSize) || query.pageSize,
       };
+      listError = '';
       lastError = '';
       phase = printBusy ? 'printing' : 'idle';
       emit();
       return jobPage;
     } catch (error) {
-      lastError = String(error.message || error).slice(0, 480);
+      if (request !== listRequest) return jobPage;
+      if (generating) clearJobPage();
+      listError = String(error.message || error).slice(0, 480);
+      lastError = listError;
       phase = 'error';
       log(`[${new Date().toISOString()}] 任务列表失败：${lastError}`);
       emit();
       throw error;
     } finally {
-      listBusy = false;
-      if (phase === 'listing') phase = printBusy ? 'printing' : 'idle';
-      emit();
+      if (request === listRequest) {
+        listBusy = false;
+        if (phase === 'listing') phase = printBusy ? 'printing' : 'idle';
+        emit();
+      }
     }
   }
 

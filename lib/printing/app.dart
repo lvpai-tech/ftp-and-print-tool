@@ -4,11 +4,15 @@ import '../branding.dart';
 import '../ui/app_dialogs.dart';
 import '../ui/design.dart';
 import '../ui/update_button.dart';
+import 'job_query_time.dart';
 import 'print_bridge.dart';
+import 'ui/date_time_range_field.dart';
 import 'ui/design.dart';
 import 'ui/job_thumbnails.dart';
 import 'ui/preview_dialog.dart';
 import 'ui/settings_panel.dart';
+
+const _generatingFilter = 'GENERATING';
 
 class Workstation extends StatefulWidget {
   const Workstation({
@@ -31,12 +35,13 @@ class _WorkstationState extends State<Workstation> {
   PrintBridge get bridge => widget.bridge;
   int _page = 0;
   int get page => widget.selectedPage ?? _page;
-  String filter = 'ALL';
+  String filter = 'UNPRINTED';
   final selected = <String>{};
   DateTimeRange? dates;
   @override
   void initState() {
     super.initState();
+    filter = bridge.state['jobQuery']?['printStatus'] as String? ?? filter;
     bridge.addListener(changed);
   }
 
@@ -91,14 +96,11 @@ class _WorkstationState extends State<Workstation> {
         'printStatus': filter,
         'pageNum': number,
         'pageSize': 20,
-        'createdFrom': dates == null ? '' : '${date(dates!.start)} 00:00:00',
-        'createdTo': dates == null ? '' : '${date(dates!.end)} 23:59:59',
+        'createdFrom': dates == null ? '' : shanghaiDateTime(dates!.start),
+        'createdTo': dates == null ? '' : shanghaiDateTime(dates!.end),
       },
     ]);
   }
-
-  String date(DateTime d) =>
-      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   void openConfig() => _scaffoldKey.currentState?.openEndDrawer();
 
@@ -547,10 +549,19 @@ class _WorkstationState extends State<Workstation> {
   );
 
   Widget jobsView({bool compact = false}) {
-    final jobs = bridge.jobs;
-    final ids = jobs.map((job) => '${job['id']}').toSet();
+    final state = bridge.state;
+    final generating = filter == _generatingFilter;
+    final loadedFilter = state['jobQuery']?['printStatus'];
+    final matchesFilter =
+        loadedFilter == filter || (loadedFilter == null && !generating);
+    final jobs = matchesFilter ? bridge.jobs : <Json>[];
+    final ids = generating
+        ? <String>{}
+        : jobs.map((job) => '${job['id']}').toSet();
     selected.retainAll(ids);
-    final jobPage = bridge.state['jobPage'];
+    final jobPage = matchesFilter ? state['jobPage'] : null;
+    final listError = matchesFilter ? state['listError'] as String? : null;
+    final loading = state['listBusy'] == true || bridge.working;
     final total = (jobPage?['total'] as num?)?.toInt() ?? 0;
     final number = (jobPage?['pageNum'] as num?)?.toInt() ?? 1;
     final pageSize = (jobPage?['pageSize'] as num?)?.toInt() ?? 20;
@@ -592,23 +603,31 @@ class _WorkstationState extends State<Workstation> {
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
-                      child: _queueColumns(
-                        checkbox: _selectAll(ids),
-                        identity: const Text('取片卡尾号 / 工单'),
-                        photos: const Text('照片预览'),
-                        details: const Text('打印内容'),
-                        status: const Text('状态'),
-                        created: const Text('创建时间'),
-                        action: const Text('操作'),
-                      ),
+                      child: generating
+                          ? _generatingColumns(
+                              identity: const Text('取片卡尾号 / 小票'),
+                              status: const Text('状态'),
+                              submitted: const Text('提交时间'),
+                            )
+                          : _queueColumns(
+                              checkbox: _selectAll(ids),
+                              identity: const Text('取片卡尾号 / 工单'),
+                              photos: const Text('照片预览'),
+                              details: const Text('打印内容'),
+                              status: const Text('状态'),
+                              created: const Text('创建时间'),
+                              action: const Text('操作'),
+                            ),
                     ),
                   ),
                 Expanded(
                   child: jobs.isEmpty
-                      ? const Center(
+                      ? Center(
                           child: Text(
-                            '暂无符合条件的打印任务',
-                            style: TextStyle(color: WorkstationStyle.muted),
+                            _emptyQueueMessage(generating, loading, listError),
+                            style: const TextStyle(
+                              color: WorkstationStyle.muted,
+                            ),
                           ),
                         )
                       : ListView.separated(
@@ -624,8 +643,9 @@ class _WorkstationState extends State<Workstation> {
                             height: 1,
                             color: WorkstationStyle.line,
                           ),
-                          itemBuilder: (context, index) =>
-                              _jobRow(jobs[index], table: table),
+                          itemBuilder: (context, index) => generating
+                              ? _generatingRow(jobs[index], table: table)
+                              : _jobRow(jobs[index], table: table),
                         ),
                 ),
                 const Divider(height: 1, color: WorkstationStyle.line),
@@ -664,6 +684,15 @@ class _WorkstationState extends State<Workstation> {
     );
   }
 
+  String _emptyQueueMessage(bool generating, bool loading, String? listError) {
+    if (!generating) return '暂无符合条件的打印任务';
+    if (loading) return '正在查询生成中的任务…';
+    if (listError != null && listError.isNotEmpty) {
+      return appErrorMessage(listError);
+    }
+    return '暂无正在生成的任务';
+  }
+
   Widget _queueToolbar(int pageNumber) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
     child: Wrap(
@@ -676,6 +705,7 @@ class _WorkstationState extends State<Workstation> {
           children: [
             for (final entry in const {
               'UNPRINTED': '待打印',
+              _generatingFilter: '生成中',
               'FAILED': '需处理',
               'PRINTED': '已打印',
               'ALL': '全部任务',
@@ -706,29 +736,16 @@ class _WorkstationState extends State<Workstation> {
           spacing: 2,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            TextButton.icon(
-              style: _queueButtonStyle(),
-              icon: const Icon(Icons.date_range_outlined, size: 18),
-              label: Text(
-                dates == null
-                    ? '日期'
-                    : '${date(dates!.start)} — ${date(dates!.end)}',
-              ),
-              onPressed: bridge.busy ? null : _pickDates,
+            JobCreatedRangeField(
+              value: dates,
+              enabled: !bridge.busy,
+              onChanged: (range) {
+                setState(() => dates = range);
+                query();
+              },
             ),
-            if (dates != null)
-              IconButton(
-                tooltip: '清除日期',
-                onPressed: bridge.busy
-                    ? null
-                    : () {
-                        setState(() => dates = null);
-                        query();
-                      },
-                icon: const Icon(Icons.close, size: 18),
-              ),
             IconButton(
-              tooltip: '刷新打印任务',
+              tooltip: filter == _generatingFilter ? '刷新生成中的任务' : '刷新打印任务',
               onPressed: bridge.busy ? null : () => query(number: pageNumber),
               icon: const Icon(Icons.refresh, size: 20),
             ),
@@ -744,19 +761,6 @@ class _WorkstationState extends State<Workstation> {
       ],
     ),
   );
-
-  Future<void> _pickDates() async {
-    final range = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2024),
-      lastDate: DateTime.now().add(const Duration(days: 1)),
-      initialDateRange: dates,
-    );
-    if (range != null && mounted) {
-      setState(() => dates = range);
-      await query();
-    }
-  }
 
   void _openLogs() => showDialog<void>(
     context: context,
@@ -902,6 +906,73 @@ class _WorkstationState extends State<Workstation> {
       ],
     ),
   );
+
+  Widget _generatingColumns({
+    required Widget identity,
+    required Widget status,
+    required Widget submitted,
+  }) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+    child: Row(
+      spacing: 12,
+      children: [
+        Expanded(flex: 3, child: identity),
+        Expanded(flex: 2, child: status),
+        Expanded(flex: 2, child: submitted),
+      ],
+    ),
+  );
+
+  Widget _generatingRow(Json receipt, {required bool table}) {
+    final id = receipt['receiptId'] as String;
+    final tail = (receipt['cardTail'] as String?)?.trim() ?? '';
+    final submitted = DateTime.parse(receipt['submittedAt'] as String);
+    final time = formatWallClock(
+      submitted.toUtc().add(const Duration(hours: 8)),
+    ).substring(0, 16);
+    final identity = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          tail.isEmpty ? '无取片卡' : tail,
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            fontFeatures: [FontFeature.tabularFigures()],
+          ),
+        ),
+        Text('小票 #$id', style: _jobMeta),
+      ],
+    );
+    const status = StatusBadge(status: _generatingFilter);
+    final submittedLabel = Text(time, style: _jobMeta);
+    return ColoredBox(
+      key: ValueKey(id),
+      color: WorkstationStyle.card,
+      child: table
+          ? _generatingColumns(
+              identity: identity,
+              status: Align(alignment: Alignment.centerLeft, child: status),
+              submitted: submittedLabel,
+            )
+          : Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 6,
+                children: [
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [identity, status],
+                  ),
+                  submittedLabel,
+                ],
+              ),
+            ),
+    );
+  }
 
   Widget _jobRow(Json job, {required bool table}) {
     final id = '${job['id']}';
@@ -1145,6 +1216,11 @@ class StatusBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final (label, color, background) = switch (status) {
       'QUEUED' => ('待打印', WorkstationStyle.muted, WorkstationStyle.bg),
+      _generatingFilter => (
+        'AI 创意生成中',
+        WorkstationStyle.accent,
+        WorkstationStyle.accentSoft,
+      ),
       'CLAIMED' => (
         '已领取',
         WorkstationStyle.accent,
