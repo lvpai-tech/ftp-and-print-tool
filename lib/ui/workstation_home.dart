@@ -9,7 +9,7 @@ const workstationContentWidth = 1110.0;
 enum WorkModule {
   upload(
     '上传照片',
-    '选图上传，或监听文件夹自动上传',
+    '监听文件夹，通过 COS 自动上传',
     '去上传',
     Icons.cloud_upload_outlined,
     Color(0xffa6dce3),

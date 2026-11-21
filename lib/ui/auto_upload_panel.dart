@@ -11,24 +11,19 @@ import '../auto_upload/cos_upload.dart';
 import '../auto_upload/folder_access.dart';
 import '../auto_upload/folder_uploader.dart';
 import '../branding.dart';
-import '../transfer.dart';
 import 'design.dart';
 
 class AutoUploadPanel extends StatefulWidget {
-  final ServerProfile? Function() readProfile;
-  final Future<void> Function(ServerProfile) saveProfile;
   final void Function(bool) onActiveChanged;
   final ValueChanged<bool>? onUploadingChanged;
-  final CosUploadProfile? cosProfile;
-  final VoidCallback? onConfigureCos;
+  final CosUploadProfile cosProfile;
+  final VoidCallback onConfigureCos;
   const AutoUploadPanel({
     super.key,
-    required this.readProfile,
-    required this.saveProfile,
     required this.onActiveChanged,
     this.onUploadingChanged,
-    this.cosProfile,
-    this.onConfigureCos,
+    required this.cosProfile,
+    required this.onConfigureCos,
   });
   @override
   State<AutoUploadPanel> createState() => _AutoUploadPanelState();
@@ -147,8 +142,6 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
       return;
     }
     final cosProfile = widget.cosProfile;
-    final profile = cosProfile == null ? widget.readProfile() : null;
-    if (profile == null && cosProfile == null) return;
     if (_folder.isEmpty) {
       setState(() => _message = '请先选择接收照片的文件夹');
       return;
@@ -162,7 +155,6 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
     try {
       _folder = await _access.acquire(_folder);
       final directory = await getApplicationSupportDirectory();
-      if (profile != null) await widget.saveProfile(profile);
       await _storage.write(
         key: 'ftp.watch.v1',
         value: jsonEncode({'folder': _folder, 'recursive': _recursive}),
@@ -174,7 +166,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
       _uploader = uploader;
       await uploader.start(
         Directory(_folder),
-        profile,
+        null,
         cosProfile: cosProfile,
         recursive: _recursive,
         includeExisting: _existing,
@@ -328,15 +320,10 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                           minimumSize: const Size(0, 40),
                         ),
                       ),
-                      if (widget.onConfigureCos != null)
-                        TextButton(
-                          onPressed: locked ? null : widget.onConfigureCos,
-                          child: Text(
-                            widget.cosProfile == null
-                                ? '配置 COS 直传'
-                                : 'COS 直传设置',
-                          ),
-                        ),
+                      TextButton(
+                        onPressed: locked ? null : widget.onConfigureCos,
+                        child: const Text('COS 直传设置'),
+                      ),
                       if (Platform.isIOS)
                         TextButton(
                           onPressed: locked ? null : _inbox,

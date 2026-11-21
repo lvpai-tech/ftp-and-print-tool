@@ -2,7 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../auto_upload/cos_upload.dart';
 
-/// Edits the optional automatic-upload profile stored in the system keychain.
+/// Edits the direct-upload profile stored in the system keychain.
 class CosUploadDialog extends StatefulWidget {
   final CosUploadProfile? initial;
 
@@ -33,7 +33,7 @@ class _CosUploadDialogState extends State<CosUploadDialog> {
         _station.text.trim(),
         _token.text.trim(),
       );
-      Navigator.of(context).pop((profile: profile));
+      Navigator.of(context).pop(profile);
     } catch (_) {
       setState(() => _error = '请填写 HTTPS 服务地址、机位 ID 和有效机位密钥');
     }
@@ -64,8 +64,6 @@ class _CosUploadDialogState extends State<CosUploadDialog> {
               enableSuggestions: false,
               decoration: InputDecoration(labelText: '机位密钥', errorText: _error),
             ),
-            const SizedBox(height: 10),
-            const Text('切换时会保留原通道队列，重新选择原通道即可继续。'),
           ],
         ),
       ),
@@ -75,13 +73,7 @@ class _CosUploadDialogState extends State<CosUploadDialog> {
         onPressed: () => Navigator.of(context).pop(),
         child: const Text('取消'),
       ),
-      if (widget.initial != null)
-        TextButton(
-          onPressed: () =>
-              Navigator.of(context).pop((profile: null as CosUploadProfile?)),
-          child: const Text('切回 FTP'),
-        ),
-      FilledButton(onPressed: _save, child: const Text('启用直传')),
+      FilledButton(onPressed: _save, child: const Text('保存配置')),
     ],
   );
 }

@@ -72,7 +72,7 @@ void main() {
       expect(keyed('open-print'), findsOneWidget);
       await open(tester, 'open-upload');
       expect(find.byType(TransferPage), findsOneWidget);
-      expect(find.text('自动上传模式'), findsOneWidget);
+      expect(find.text('请先配置机位连接'), findsOneWidget);
       final transferState = tester.state(find.byType(TransferPage));
       await tester.tap(find.byTooltip('返回工作台'));
       await tester.pumpAndSettle();
@@ -195,9 +195,9 @@ void main() {
     await open(tester, 'open-upload');
     await tester.tap(find.text('去配置机位'));
     await tester.pumpAndSettle();
-    expect(find.text('测试连接'), findsOneWidget);
-    await tester.tap(find.text('测试连接'));
+    expect(find.text('COS 自动直传'), findsOneWidget);
+    await tester.tap(find.text('保存配置'));
     await tester.pumpAndSettle();
-    expect(find.text('请填写主机'), findsOneWidget);
+    expect(find.text('请填写 HTTPS 服务地址、机位 ID 和有效机位密钥'), findsOneWidget);
   });
 }
