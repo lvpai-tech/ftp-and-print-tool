@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/app.dart';
@@ -9,6 +11,16 @@ import 'package:material_ui/material_ui.dart';
 void main() {
   for (final width in [375.0, 768.0, 1280.0]) {
     testWidgets('仅使用 COS 直传，旧 FTP 档案不影响 $width 宽度配置', (tester) async {
+      const folderAccess = MethodChannel('ai.lvpai.ftp/folder-access');
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(folderAccess, (call) async {
+        return switch (call.method) {
+          'restore' => 'authorized-inbox',
+          'release' => null,
+          _ => throw MissingPluginException(call.method),
+        };
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(folderAccess, null));
       FlutterSecureStorage.setMockInitialValues({
         'ftp.profile.v1': jsonEncode({'host': 'ftp.invalid'}),
         'ftp.watch.v1': jsonEncode({'folder': 'test-inbox', 'recursive': true}),
@@ -39,7 +51,8 @@ void main() {
 
       expect(find.text('COS 直传设置'), findsOneWidget);
       expect(find.text('开始监听'), findsOneWidget);
-      expect(find.text('test-inbox'), findsOneWidget);
+      final folder = Platform.isMacOS ? 'authorized-inbox' : 'test-inbox';
+      expect(find.text(folder), findsOneWidget);
       final saved = await const ProfileStore().loadCos();
       expect(saved?.stationId, '317');
 

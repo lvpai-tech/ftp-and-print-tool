@@ -464,7 +464,8 @@ class _QueueFixture {
   static Future<_QueueFixture> open() async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final scratch = await Directory.systemTemp.createTemp('workstation-queue-');
-    final inbox = await Directory(p.join(scratch.path, 'inbox')).create();
+    final createdInbox = await Directory(p.join(scratch.path, 'inbox')).create();
+    final inbox = Directory(await createdInbox.resolveSymbolicLinks());
     final fixture = _QueueFixture(server, scratch, inbox);
     server.listen(fixture._handle);
     addTearDown(() async {
