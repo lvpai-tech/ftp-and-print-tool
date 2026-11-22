@@ -11,9 +11,7 @@ class ProfileStore {
   static const _cosKey = 'cos.auto.profile.v1';
   final FlutterSecureStorage _storage;
 
-  const ProfileStore({
-    FlutterSecureStorage storage = const FlutterSecureStorage(),
-  }) : _storage = storage;
+  const ProfileStore({this._storage = const FlutterSecureStorage()});
 
   Future<ServerProfile?> load() async {
     final value = await _storage.read(key: _key);

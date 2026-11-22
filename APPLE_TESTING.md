@@ -81,7 +81,7 @@ open ios/Runner.xcworkspace
 构建真机未签名产物可用 `flutter build ios --release --no-codesign`，该产物不能直接安装，安装仍需签名。
 
 iPad手动上传可从系统「文件」选择多张 JPG / PNG；相册照片可先在「照片」分享菜单存储到「文件」。
-当前不支持HEIC/RAW，不自动把它们伪装成JPEG。首次连接局域网FTP时允许「本地网络」权限；
+自动收图接入了 HEIF/HEIC、RAW/DNG、TIFF、WebP 和 AVIF 转 JPEG，Apple 构建和实机仍需验证。用目标相机样片确认方向、拍摄时间和归卡。首次连接局域网FTP时允许「本地网络」权限；
 拒绝后需在系统设置中恢复。真机FTP主机填写服务器的局域网地址，127.0.0.1代表iPad自身。
 
 自动模式有两种来源：

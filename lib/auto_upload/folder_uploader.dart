@@ -14,6 +14,8 @@ import 'journal.dart';
 
 class AutoJob {
   final String id, source, relative, signature, digest, snapshot;
+  final bool normalized;
+  final String? captureTime;
   String state;
   String error;
   int attempts;
@@ -26,6 +28,8 @@ class AutoJob {
     required this.signature,
     required this.digest,
     required this.snapshot,
+    this.normalized = false,
+    this.captureTime,
     this.state = 'pending',
     this.error = '',
     this.attempts = 0,
@@ -39,6 +43,8 @@ class AutoJob {
     'signature': signature,
     'digest': digest,
     'snapshot': snapshot,
+    if (normalized) 'normalized': true,
+    if (captureTime != null) 'captureTime': captureTime,
     'state': state,
     'error': error,
     'attempts': attempts,
@@ -51,6 +57,8 @@ class AutoJob {
     signature: v['signature'] as String,
     digest: v['digest'] as String,
     snapshot: v['snapshot'] as String,
+    normalized: v['normalized'] == true,
+    captureTime: v['captureTime'] as String?,
     state: v['state'] as String,
     error: v['error'] as String,
     attempts: v['attempts'] as int,
@@ -62,6 +70,11 @@ class AutoJob {
       try {
         final bytes = await File(path).readAsBytes();
         final expected = digest;
+        if (path == source && needsPhotoTranscode(path)) {
+          final jpeg = await normalizedCameraPhoto(bytes, path);
+          if (sha256.convert(jpeg).toString() == expected) return jpeg;
+          break;
+        }
         final verified = await compute(_verifiedPhoto, (bytes, expected));
         if (verified != null) return verified;
       } on FileSystemException {
@@ -69,6 +82,27 @@ class AutoJob {
       }
     }
     throw StateError('队列照片已移走或内容已变化，请重新选择原图');
+  }
+
+  Future<Uint8List?> readNormalizedThumbnail() async {
+    final codec = await ui.instantiateImageCodec(
+      await readPhotoForReview(),
+      targetWidth: 144,
+      allowUpscaling: false,
+    );
+    try {
+      final frame = await codec.getNextFrame();
+      try {
+        final png = await frame.image.toByteData(
+          format: ui.ImageByteFormat.png,
+        );
+        return png?.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes);
+      } finally {
+        frame.image.dispose();
+      }
+    } finally {
+      codec.dispose();
+    }
   }
 }
 
@@ -78,6 +112,12 @@ Uint8List? _verifiedPhoto((Uint8List, String) request) {
   try {
     final normalized = normalizeJpegPrimary(bytes);
     if (sha256.convert(normalized).toString() == expected) return normalized;
+  } on StateError {
+    // Older queue entries used the first frame without reading the MP Index.
+  }
+  try {
+    final first = normalizeJpegPrimary(bytes, legacyFirstImage: true);
+    if (sha256.convert(first).toString() == expected) return first;
   } on StateError {
     // The source may have been replaced with an incomplete image.
   }
@@ -208,12 +248,10 @@ class FolderUploader extends ChangeNotifier {
       '${s.size}:${s.modified.microsecondsSinceEpoch}';
   String _hash(String value) => sha256.convert(utf8.encode(value)).toString();
 
-  static bool _isPhoto(String path) => const {
-    '.jpg',
-    '.jpeg',
-    '.mpo',
-    '.png',
-  }.contains(p.extension(path).toLowerCase());
+  static bool _isPhoto(String path) {
+    final extension = p.extension(path).toLowerCase();
+    return cameraPhotoExtensions.any((type) => extension == '.$type');
+  }
 
   void _prioritizeSource(String source) {
     _waiting.first.remove(source);
@@ -547,26 +585,43 @@ class FolderUploader extends ChangeNotifier {
         _observations.remove(file.path);
         return false;
       }
-      await normalizePhotoSnapshot(snapshot);
+      final normalized = await normalizePhotoSnapshot(
+        snapshot,
+        sourcePath: file.path,
+      );
       try {
         if (!await validateImage(snapshot)) throw StateError('照片无法解码');
       } catch (_) {
         throw StateError('照片无法解码');
       }
       final digest = (await sha256.bind(snapshot.openRead()).first).toString();
+      final name = p.relative(file.path, from: _root!.path);
+      final relative = p.posix.joinAll(
+        p.split(p.setExtension(name, photoUploadExtension(file.path))),
+      );
+      final raw = isRawCameraPhoto(file.path);
+      final captureTime = _cos != null && (raw || isJpegCameraPhoto(file.path))
+          ? await readJpegCaptureTime(snapshot)
+          : null;
       if (_signature(await file.stat()) != signature) {
         _observations.remove(file.path);
         return false;
       }
-      var relative = p
-          .relative(file.path, from: _root!.path)
-          .split(p.separator)
-          .join('/');
-      if (p.extension(relative).toLowerCase() == '.mpo') {
-        relative = p.setExtension(relative, '.jpg');
-      }
       final id = _hash('$relative\u0000$digest');
-      if (_jobs.containsKey(id)) {
+      final paired =
+          captureTime != null &&
+          _jobs.values.any(
+            (job) =>
+                job.captureTime == captureTime &&
+                (raw
+                    ? isJpegCameraPhoto(job.source)
+                    : isRawCameraPhoto(job.source)) &&
+                p.equals(
+                  p.withoutExtension(job.source),
+                  p.withoutExtension(file.path),
+                ),
+          );
+      if (_jobs.containsKey(id) || paired) {
         if (_cos != null) {
           await _append({
             'type': 'resolvedSource',
@@ -591,6 +646,8 @@ class FolderUploader extends ChangeNotifier {
         signature: signature,
         digest: digest,
         snapshot: snapshot.path,
+        normalized: normalized,
+        captureTime: captureTime,
       );
       // 复制文件的失败与日志写入失败分开处理，持久化失败必须中止。
       await _append(job.toJson());

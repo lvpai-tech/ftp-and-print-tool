@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -12,6 +13,7 @@ import '../auto_upload/cos_upload.dart';
 import '../auto_upload/folder_access.dart';
 import '../auto_upload/folder_uploader.dart';
 import '../branding.dart';
+import '../photo_normalizer.dart';
 import 'card_tail_dialog.dart';
 import 'design.dart';
 
@@ -230,13 +232,14 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
     try {
       final photo = await FilePicker.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['jpg', 'jpeg', 'png', 'mpo'],
+        allowedExtensions: cameraPhotoExtensions,
       );
       final path = photo.singleOrNull?.path;
       if (path == null || !mounted) return;
       await showCardTailDialog(
         context,
-        readPhoto: File(path).readAsBytes,
+        readPhoto: () async =>
+            normalizedCameraPhoto(await File(path).readAsBytes(), path),
         guidance: '请根据候选尾号核对卡面。归集由服务端识别结束照。',
       );
     } catch (_) {
@@ -617,7 +620,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                   ],
                   const SizedBox(height: 12),
                   const Text(
-                    'JPEG / PNG / MPO · 按发现顺序排队，写入稳定且可解码后上传。前一张入库后继续，失败可重试。退出后保留队列和相机原图。',
+                    '支持 JPEG、PNG、MPO、HEIF、RAW / DNG、TIFF、WebP 和 AVIF。按发现顺序排队，前一张入库后继续。',
                     style: TextStyle(
                       fontSize: 12,
                       color: WorkstationStyle.muted,
@@ -743,9 +746,47 @@ class _JobThumbRow extends StatelessWidget {
   }
 }
 
-class _LocalThumb extends StatelessWidget {
+class _LocalThumb extends StatefulWidget {
   const _LocalThumb({required this.job});
   final AutoJob job;
+
+  @override
+  State<_LocalThumb> createState() => _LocalThumbState();
+}
+
+class _LocalThumbState extends State<_LocalThumb> {
+  AutoJob get job => widget.job;
+  Future<Uint8List?>? _normalizedPreview;
+
+  @override
+  void didUpdateWidget(covariant _LocalThumb oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.job.id != job.id) _normalizedPreview = null;
+  }
+
+  Widget _fallbackPreview() {
+    if (job.normalized) {
+      return FutureBuilder<Uint8List?>(
+        future: _normalizedPreview ??= job.readNormalizedThumbnail(),
+        builder: (context, snapshot) => snapshot.hasData
+            ? Image.memory(
+                snapshot.data!,
+                fit: BoxFit.cover,
+                cacheWidth: 144,
+                errorBuilder: (context, error, stackTrace) => _placeholder(),
+              )
+            : _placeholder(),
+      );
+    }
+    return Image.file(
+      File(job.source),
+      width: 72,
+      height: 72,
+      fit: BoxFit.cover,
+      cacheWidth: 144,
+      errorBuilder: (context, error, stackTrace) => _placeholder(),
+    );
+  }
 
   Widget _placeholder() {
     final done = const {'done', 'ingested', 'grouped'}.contains(job.state);
@@ -774,14 +815,7 @@ class _LocalThumb extends StatelessWidget {
               height: 72,
               fit: BoxFit.cover,
               cacheWidth: 144,
-              errorBuilder: (context, error, stackTrace) => Image.file(
-                File(job.source),
-                width: 72,
-                height: 72,
-                fit: BoxFit.cover,
-                cacheWidth: 144,
-                errorBuilder: (context, error, stackTrace) => _placeholder(),
-              ),
+              errorBuilder: (context, error, stackTrace) => _fallbackPreview(),
             ),
             if (const {'done', 'ingested', 'grouped'}.contains(job.state))
               const Align(

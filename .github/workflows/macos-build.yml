@@ -11,7 +11,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     env:
-      PUB_HOSTED_URL: https://pub.flutter-io.cn
+      PUB_HOSTED_URL: https://pub.dev
       FLUTTER_STORAGE_BASE_URL: https://storage.flutter-io.cn
       LVPAI_UPDATE_ENV: test
       LVPAI_PRINT_NODE_VERSION: v20.18.1
