@@ -41,183 +41,322 @@ class _ThumbScheduler {
   }
 }
 
+typedef _ThumbKey = ({String jobId, String contentSummary});
+typedef _ScenicScope = ({String base, String profileId, String scenicIds});
+
+/// 列表行销毁后，当前景区的缩略图和下载任务仍可被新行复用。
+class _JobThumbnailCache {
+  _JobThumbnailCache(this.scope);
+
+  static final _scopedCaches = Expando<_JobThumbnailCache>();
+  static const _maxEntries = 64;
+  static const _maxBytes = 16 * 1024 * 1024;
+
+  final _ScenicScope scope;
+  final _entries = <_ThumbKey, _ThumbCacheEntry>{};
+  final _inflight = <_ThumbKey, Future<_ThumbCacheEntry>>{};
+  int _storedBytes = 0;
+
+  static _JobThumbnailCache forBridge(PrintBridge bridge) {
+    final config = bridge.config;
+    final scope = (
+      base: '${config['base'] ?? ''}',
+      profileId: '${config['activeScenicProfileId'] ?? ''}',
+      scenicIds: (config['scenicIds'] as List?)?.join(',') ?? '',
+    );
+    final existing = _scopedCaches[bridge];
+    if (existing != null && existing.scope == scope) return existing;
+    return _scopedCaches[bridge] = _JobThumbnailCache(scope);
+  }
+
+  _ThumbCacheEntry? peek(_ThumbKey key) {
+    final entry = _entries.remove(key);
+    if (entry != null) _entries[key] = entry;
+    return entry;
+  }
+
+  Future<_ThumbCacheEntry> load(
+    PrintBridge bridge,
+    _ThumbKey key, {
+    List<String>? originalUrls,
+    int? originalPhotoCount,
+  }) {
+    final cached = peek(key);
+    if (cached != null) return Future.value(cached);
+    final pending = _inflight[key];
+    if (pending != null) return pending;
+    final future =
+        _ThumbScheduler.run(
+              () => originalUrls == null
+                  ? _download(bridge, key.jobId)
+                  : _downloadOriginals(
+                      bridge,
+                      originalUrls,
+                      originalPhotoCount!,
+                    ),
+            )
+            .then((entry) {
+              _remember(key, entry);
+              return entry;
+            })
+            .whenComplete(() {
+              _inflight.remove(key);
+            });
+    _inflight[key] = future;
+    return future;
+  }
+
+  void _remember(_ThumbKey key, _ThumbCacheEntry entry) {
+    if (entry.byteCount > _maxBytes) return;
+    _entries[key] = entry;
+    _storedBytes += entry.byteCount;
+    while (_entries.length > _maxEntries || _storedBytes > _maxBytes) {
+      final evicted = _entries.remove(_entries.keys.first)!;
+      _storedBytes -= evicted.byteCount;
+    }
+  }
+
+  void _checkScope(PrintBridge bridge) {
+    if (!identical(this, forBridge(bridge))) {
+      throw StateError('景区已切换，请重新加载缩略图');
+    }
+  }
+
+  Future<_ThumbCacheEntry> _download(PrintBridge bridge, String jobId) async {
+    _checkScope(bridge);
+    final job = await bridge.call('previewJob', [jobId]);
+    _checkScope(bridge);
+    if (job is! Map) throw StateError('预览清单无效');
+    final raw = (job['items'] as List? ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    final photos = raw.where((item) => item['kind'] != 'COVER').toList();
+    final loaded = <_ThumbItem>[];
+    for (final item in photos.take(3)) {
+      final url = '${item['fileUrl'] ?? ''}';
+      if (url.isEmpty) continue;
+      loaded.add(
+        await _downloadItem(
+          bridge,
+          '$url${url.contains('?') ? '&' : '?'}thumbnail=true',
+          '${item['label'] ?? item['kind'] ?? '照片'}',
+          (item['copies'] as num?)?.toInt() ?? 1,
+        ),
+      );
+    }
+    final count = raw.fold<int>(
+      0,
+      (sum, item) => sum + ((item['copies'] as num?)?.toInt() ?? 1),
+    );
+    final displayed = loaded.fold<int>(0, (sum, item) => sum + item.copies);
+    return _ThumbCacheEntry(items: loaded, remaining: count - displayed);
+  }
+
+  Future<_ThumbCacheEntry> _downloadOriginals(
+    PrintBridge bridge,
+    List<String> urls,
+    int count,
+  ) async {
+    final loaded = <_ThumbItem>[];
+    for (final url in urls) {
+      loaded.add(await _downloadItem(bridge, url, '原片', 1));
+    }
+    return _ThumbCacheEntry(items: loaded, remaining: count - loaded.length);
+  }
+
+  Future<_ThumbItem> _downloadItem(
+    PrintBridge bridge,
+    String url,
+    String label,
+    int copies,
+  ) async {
+    _checkScope(bridge);
+    final image = await bridge.call('previewJobImage', [url]);
+    _checkScope(bridge);
+    if (image is! Map || image['dataUrl'] is! String) {
+      throw StateError('缩略图响应无效');
+    }
+    final dataUrl = image['dataUrl'] as String;
+    return _ThumbItem(
+      label: label,
+      copies: copies,
+      bytes: base64Decode(dataUrl.split(',').last),
+    );
+  }
+}
+
+class _ThumbCacheEntry {
+  _ThumbCacheEntry({required this.items, required this.remaining})
+    : byteCount = items.fold(0, (sum, item) => sum + item.bytes.lengthInBytes);
+
+  final List<_ThumbItem> items;
+  final int remaining;
+  final int byteCount;
+}
+
 class JobThumbnails extends StatefulWidget {
   const JobThumbnails({
     super.key,
     required this.bridge,
     required this.jobId,
     required this.contentSummary,
-    required this.onOpenPreview,
-  });
+    required VoidCallback this.onOpenPreview,
+  }) : originalUrls = null,
+       originalPhotoCount = null;
+
+  JobThumbnails.originals({
+    super.key,
+    required this.bridge,
+    required String receiptId,
+    required List<String> this.originalUrls,
+    required int this.originalPhotoCount,
+  }) : jobId = 'receipt:$receiptId',
+       contentSummary = '$originalPhotoCount:${originalUrls.join(',')}',
+       onOpenPreview = null;
 
   final PrintBridge bridge;
   final String jobId;
   final String contentSummary;
-  final VoidCallback onOpenPreview;
+  final VoidCallback? onOpenPreview;
+  final List<String>? originalUrls;
+  final int? originalPhotoCount;
 
   @override
   State<JobThumbnails> createState() => _JobThumbnailsState();
 }
 
 class _JobThumbnailsState extends State<JobThumbnails> {
-  List<_ThumbItem>? items;
-  int remaining = 0;
-  String? error;
-  var attempt = 0;
+  late _JobThumbnailCache _cache;
+  late _ThumbKey _key;
+  _ThumbCacheEntry? _entry;
+  String? _error;
+  int _attempt = 0;
+
+  _ThumbKey get _widgetKey =>
+      (jobId: widget.jobId, contentSummary: widget.contentSummary);
 
   @override
   void initState() {
     super.initState();
-    load();
+    _useCache(_JobThumbnailCache.forBridge(widget.bridge), _widgetKey);
   }
 
   @override
   void didUpdateWidget(covariant JobThumbnails oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.bridge != widget.bridge ||
-        oldWidget.jobId != widget.jobId ||
-        oldWidget.contentSummary != widget.contentSummary) {
-      load();
+    final cache = _JobThumbnailCache.forBridge(widget.bridge);
+    if (!identical(_cache, cache) || _key != _widgetKey) {
+      _useCache(cache, _widgetKey);
     }
   }
 
-  @override
-  void dispose() {
-    attempt++;
-    super.dispose();
+  void _useCache(_JobThumbnailCache cache, _ThumbKey key) {
+    _attempt++;
+    _cache = cache;
+    _key = key;
+    _entry = cache.peek(key);
+    _error = null;
+    if (_entry == null) unawaited(_load());
   }
 
-  Future<void> load() async {
-    final token = ++attempt;
-    setState(() {
-      items = null;
-      remaining = 0;
-      error = null;
-    });
+  Future<void> _load() async {
+    final attempt = ++_attempt;
     try {
-      final result = await _ThumbScheduler.run(() async {
-        if (token != attempt) return null;
-        final job = await widget.bridge.call('previewJob', [widget.jobId]);
-        if (job is! Map) throw StateError('预览清单无效');
-        final raw = (job['items'] as List? ?? [])
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
-        final photos = raw.where((item) => item['kind'] != 'COVER').toList();
-        final loaded = <_ThumbItem>[];
-        for (final item in photos.take(3)) {
-          if (token != attempt) return null;
-          final url = '${item['fileUrl'] ?? ''}';
-          if (url.isEmpty) continue;
-          final image = await widget.bridge.call('previewJobImage', [
-            '$url${url.contains('?') ? '&' : '?'}thumbnail=true',
-          ]);
-          if (image is! Map || image['dataUrl'] is! String) {
-            throw StateError('缩略图响应无效');
-          }
-          final dataUrl = image['dataUrl'] as String;
-          final bytes = base64Decode(dataUrl.split(',').last);
-          loaded.add(
-            _ThumbItem(
-              label: '${item['label'] ?? item['kind'] ?? '照片'}',
-              copies: (item['copies'] as num?)?.toInt() ?? 1,
-              bytes: bytes,
-            ),
-          );
-        }
-        final count = raw.fold<int>(
-          0,
-          (sum, item) => sum + ((item['copies'] as num?)?.toInt() ?? 1),
-        );
-        final displayed = loaded.fold<int>(0, (sum, item) => sum + item.copies);
-        return (items: loaded, remaining: count - displayed);
-      });
-      if (!mounted || token != attempt || result == null) return;
-      setState(() {
-        items = result.items;
-        remaining = result.remaining;
-      });
-    } catch (e) {
-      if (!mounted || token != attempt) return;
-      setState(() => error = appErrorMessage(e));
+      final entry = await _cache.load(
+        widget.bridge,
+        _key,
+        originalUrls: widget.originalUrls,
+        originalPhotoCount: widget.originalPhotoCount,
+      );
+      if (!mounted || attempt != _attempt) return;
+      setState(() => _entry = entry);
+    } catch (error) {
+      if (!mounted || attempt != _attempt) return;
+      setState(() => _error = appErrorMessage(error));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (error != null) {
+    final entry = _entry;
+    final openPreview = widget.onOpenPreview;
+    if (_error != null && entry == null) {
       return Wrap(
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          TextButton(
-            onPressed: widget.onOpenPreview,
-            child: const Text('查看照片'),
-          ),
+          if (openPreview != null)
+            TextButton(onPressed: openPreview, child: const Text('查看照片'))
+          else
+            const Text('原片缩略图加载失败'),
           IconButton(
-            tooltip: '重试缩略图：$error',
-            onPressed: load,
+            tooltip: '重试缩略图：$_error',
+            onPressed: () {
+              setState(() => _error = null);
+              unawaited(_load());
+            },
             icon: const Icon(Icons.refresh, size: 18),
           ),
         ],
       );
     }
-    if (items == null) {
-      return TextButton(
-        onPressed: widget.onOpenPreview,
-        child: const Text('缩略图加载中…'),
-      );
+    if (entry == null) {
+      if (openPreview == null) return const Text('原片缩略图加载中…');
+      return TextButton(onPressed: openPreview, child: const Text('图片加载中'));
     }
-    if (items!.isEmpty) {
-      return TextButton(
-        onPressed: widget.onOpenPreview,
-        child: const Text('查看打印预览'),
-      );
+    if (entry.items.isEmpty) {
+      return TextButton(onPressed: openPreview, child: const Text('查看打印预览'));
     }
     return Align(
       alignment: Alignment.centerLeft,
       widthFactor: 1,
-      child: Tooltip(
-        message: '查看照片',
-        child: TextButton(
-          onPressed: widget.onOpenPreview,
-          style: TextButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            minimumSize: const Size(44, 44),
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.all(Radius.circular(6)),
+      child: openPreview == null
+          ? _tiles(entry)
+          : Tooltip(
+              message: '查看照片',
+              child: TextButton(
+                onPressed: openPreview,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  minimumSize: const Size(44, 44),
+                  shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(6)),
+                  ),
+                ),
+                child: _tiles(entry),
+              ),
             ),
-          ),
-          child: Wrap(
-            spacing: 4,
-            runSpacing: 4,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              for (final item in items!)
-                Container(
-                  width: 36,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: WorkstationStyle.bg,
-                    border: Border.all(color: WorkstationStyle.line),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Image.memory(
-                    item.bytes,
-                    fit: BoxFit.contain,
-                    semanticLabel: '${item.label} ×${item.copies}',
-                  ),
-                ),
-              if (remaining > 0)
-                Text(
-                  '+$remaining',
-                  style: const TextStyle(color: muted, fontSize: 12),
-                ),
-            ],
-          ),
-        ),
-      ),
     );
   }
+
+  Widget _tiles(_ThumbCacheEntry entry) => Wrap(
+    spacing: 4,
+    runSpacing: 4,
+    crossAxisAlignment: WrapCrossAlignment.center,
+    children: [
+      for (final item in entry.items)
+        Container(
+          width: 36,
+          height: 44,
+          decoration: BoxDecoration(
+            color: WorkstationStyle.bg,
+            border: Border.all(color: WorkstationStyle.line),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Image.memory(
+            item.bytes,
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+            semanticLabel: '${item.label} ×${item.copies}',
+          ),
+        ),
+      if (entry.remaining > 0)
+        Text(
+          '+${entry.remaining}',
+          style: const TextStyle(color: muted, fontSize: 12),
+        ),
+    ],
+  );
 }
 
 class _ThumbItem {

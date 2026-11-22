@@ -25,7 +25,15 @@ test('生成中使用只读接口，晚返回的旧页与旧景区响应不会�
       if (url.searchParams.get('pageNum') === '2') {
         waiting(() => sendPage([receipt]));
       } else {
-        sendPage([malformed ? { ...receipt, receiptId: '' } : receipt]);
+        const details = {
+          originalPhotoCount: 1,
+          originalThumbnailUrls: ['/print-agents/generating/9007199254740994/original-thumbnails/1'],
+          estimatedTotalSheets: 8,
+          estimatedContentSummary: '开头片×1、原片×1、创意×6',
+        };
+        sendPage([{ ...receipt, ...details, ...(malformed ? {
+          originalThumbnailUrls: ['/print-agents/generating/2/original-thumbnails/1'],
+        } : {}) }]);
       }
     } else {
       sendPage([{ id: '12', status: 'QUEUED' }]);
@@ -59,6 +67,7 @@ test('生成中使用只读接口，晚返回的旧页与旧景区响应不会�
 
   const generating = await scheduler.setJobQuery({ printStatus: 'GENERATING' });
   assert.equal(generating.list[0].receiptId, '9007199254740994');
+  assert.equal(generating.list[0].estimatedTotalSheets, 8);
   malformed = true;
   await assert.rejects(scheduler.refreshJobs(), /响应不完整/);
   assert.match(scheduler.getState().listError, /响应不完整/);

@@ -89,6 +89,9 @@ class ControlledBridge extends PrintBridge {
 
 class GeneratingQueueBridge extends ControlledBridge {
   bool pending = true;
+  bool hasDetails = true;
+  static const thumbnailBase =
+      '/print-agents/generating/9007199254740994/original-thumbnails';
 
   @override
   Future<dynamic> call(String method, [List<dynamic> args = const []]) async {
@@ -108,6 +111,16 @@ class GeneratingQueueBridge extends ControlledBridge {
                       'receiptId': '9007199254740994',
                       'cardTail': '3893',
                       'submittedAt': '2026-11-21T01:20:00Z',
+                      if (hasDetails) ...{
+                        'originalPhotoCount': 4,
+                        'originalThumbnailUrls': [
+                          '$thumbnailBase/101',
+                          '$thumbnailBase/102',
+                          '$thumbnailBase/103',
+                        ],
+                        'estimatedTotalSheets': 11,
+                        'estimatedContentSummary': '开头片×1、原片×4、创意×6',
+                      },
                     },
                 ],
                 'total': pending ? 1 : 0,
@@ -121,7 +134,12 @@ class GeneratingQueueBridge extends ControlledBridge {
 }
 
 void main() {
-  for (final width in [375.0, 1280.0]) {
+  for (final (width, table) in [
+    (375.0, false),
+    (760.0, false),
+    (768.0, true),
+    (1280.0, true),
+  ]) {
     testWidgets('生成中在宽度 $width 显示只读取片单并支持刷新', (tester) async {
       tester.view.physicalSize = Size(width, 800);
       tester.view.devicePixelRatio = 1;
@@ -133,6 +151,18 @@ void main() {
       );
       await tester.pumpAndSettle();
       bridge.calls.clear();
+      final queueColumns = {
+        '取片卡尾号 / 工单': '取片卡尾号 / 小票',
+        '照片预览': '照片预览',
+        '打印内容': '打印内容',
+        '状态': '状态',
+        '创建时间': '提交时间',
+      };
+      final columnStarts = table
+          ? queueColumns.keys
+                .map((label) => tester.getTopLeft(find.text(label)).dx)
+                .toList()
+          : const <double>[];
 
       await tester.tap(find.text('生成中'));
       await tester.pumpAndSettle();
@@ -144,10 +174,34 @@ void main() {
       expect(find.text('小票 #9007199254740994'), findsOneWidget);
       expect(find.text('2026-11-21 09:20'), findsOneWidget);
       expect(find.text('AI 创意生成中'), findsOneWidget);
+      if (table) {
+        final generatingStarts = queueColumns.values.map(
+          (label) => tester.getTopLeft(find.text(label)).dx,
+        );
+        expect(generatingStarts, orderedEquals(columnStarts));
+      } else {
+        expect(find.text('照片预览'), findsNothing);
+      }
+      expect(find.text('预计 11 张'), findsOneWidget);
+      expect(find.text('开头片×1、原片×4、创意×6'), findsOneWidget);
+      expect(find.byType(Image), findsNWidgets(3));
+      expect(find.text('+1'), findsOneWidget);
+      expect(bridge.arguments['previewJobImage'], [
+        '${GeneratingQueueBridge.thumbnailBase}/103',
+      ]);
       expect(find.byType(Checkbox), findsNothing);
       expect(find.byTooltip('查看照片'), findsNothing);
+      expect(find.text('操作'), findsNothing);
       expect(find.text('打印本单'), findsNothing);
-      expect(bridge.calls, ['queryJobs']);
+      expect(bridge.calls, ['queryJobs', ...List.filled(3, 'previewJobImage')]);
+
+      if (width == 1280) {
+        bridge.hasDetails = false;
+        await tester.tap(find.byTooltip('刷新生成中的任务'));
+        await tester.pumpAndSettle();
+        expect(find.text('当前服务未提供打印明细'), findsOneWidget);
+        expect(find.text('当前服务未提供原片预览'), findsOneWidget);
+      }
 
       bridge.pending = false;
       await tester.tap(find.byTooltip('刷新生成中的任务'));

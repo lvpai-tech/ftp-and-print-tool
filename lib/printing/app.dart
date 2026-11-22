@@ -603,21 +603,17 @@ class _WorkstationState extends State<Workstation> {
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
-                      child: generating
-                          ? _generatingColumns(
-                              identity: const Text('取片卡尾号 / 小票'),
-                              status: const Text('状态'),
-                              submitted: const Text('提交时间'),
-                            )
-                          : _queueColumns(
-                              checkbox: _selectAll(ids),
-                              identity: const Text('取片卡尾号 / 工单'),
-                              photos: const Text('照片预览'),
-                              details: const Text('打印内容'),
-                              status: const Text('状态'),
-                              created: const Text('创建时间'),
-                              action: const Text('操作'),
-                            ),
+                      child: _queueColumns(
+                        checkbox: generating ? null : _selectAll(ids),
+                        identity: Text(
+                          generating ? '取片卡尾号 / 小票' : '取片卡尾号 / 工单',
+                        ),
+                        photos: const Text('照片预览'),
+                        details: const Text('打印内容'),
+                        status: const Text('状态'),
+                        time: Text(generating ? '提交时间' : '创建时间'),
+                        action: generating ? null : const Text('操作'),
+                      ),
                     ),
                   ),
                 Expanded(
@@ -884,41 +880,28 @@ class _WorkstationState extends State<Workstation> {
   );
 
   Widget _queueColumns({
-    required Widget checkbox,
+    Widget? checkbox,
     required Widget identity,
     required Widget photos,
     required Widget details,
     required Widget status,
-    required Widget created,
-    required Widget action,
+    required Widget time,
+    Widget? action,
   }) => Padding(
     padding: const EdgeInsets.only(left: 4, right: 16),
     child: Row(
       spacing: 10,
       children: [
-        SizedBox(width: 44, child: checkbox),
+        SizedBox(
+          width: 44,
+          child: checkbox ?? const SizedBox(height: kMinInteractiveDimension),
+        ),
         Expanded(flex: 14, child: identity),
         Expanded(flex: 22, child: photos),
         Expanded(flex: 19, child: details),
         Expanded(flex: 10, child: status),
-        Expanded(flex: 12, child: created),
+        Expanded(flex: 12, child: time),
         SizedBox(width: 104, child: Center(child: action)),
-      ],
-    ),
-  );
-
-  Widget _generatingColumns({
-    required Widget identity,
-    required Widget status,
-    required Widget submitted,
-  }) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-    child: Row(
-      spacing: 12,
-      children: [
-        Expanded(flex: 3, child: identity),
-        Expanded(flex: 2, child: status),
-        Expanded(flex: 2, child: submitted),
       ],
     ),
   );
@@ -946,31 +929,65 @@ class _WorkstationState extends State<Workstation> {
     );
     const status = StatusBadge(status: _generatingFilter);
     final submittedLabel = Text(time, style: _jobMeta);
+    final originalCount = receipt['originalPhotoCount'] as int?;
+    final estimatedTotal = receipt['estimatedTotalSheets'] as int?;
+    final summary = receipt['estimatedContentSummary'] as String?;
+    final photos = originalCount != null && originalCount > 0
+        ? JobThumbnails.originals(
+            bridge: bridge,
+            receiptId: id,
+            originalUrls: (receipt['originalThumbnailUrls'] as List)
+                .cast<String>(),
+            originalPhotoCount: originalCount,
+          )
+        : Text(switch (originalCount) {
+            0 => '无原片',
+            _ when summary == null => '当前服务未提供原片预览',
+            _ => '原片待核',
+          }, style: _jobMeta);
+    final details = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (estimatedTotal != null)
+          Text(
+            '预计 $estimatedTotal 张',
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        Text(summary ?? '当前服务未提供打印明细', style: _jobMeta),
+      ],
+    );
     return ColoredBox(
       key: ValueKey(id),
       color: WorkstationStyle.card,
-      child: table
-          ? _generatingColumns(
-              identity: identity,
-              status: Align(alignment: Alignment.centerLeft, child: status),
-              submitted: submittedLabel,
-            )
-          : Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                spacing: 6,
-                children: [
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [identity, status],
-                  ),
-                  submittedLabel,
-                ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: table
+            ? _queueColumns(
+                identity: identity,
+                photos: photos,
+                details: details,
+                status: Align(alignment: Alignment.centerLeft, child: status),
+                time: submittedLabel,
+              )
+            : Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  spacing: 6,
+                  children: [
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [identity, status],
+                    ),
+                    photos,
+                    details,
+                    submittedLabel,
+                  ],
+                ),
               ),
-            ),
+      ),
     );
   }
 
@@ -1074,7 +1091,7 @@ class _WorkstationState extends State<Workstation> {
                 photos: photos,
                 details: details,
                 status: Align(alignment: Alignment.centerLeft, child: status),
-                created: Text(time, style: _jobMeta),
+                time: Text(time, style: _jobMeta),
                 action: action,
               )
             : Padding(

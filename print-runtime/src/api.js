@@ -51,10 +51,26 @@ async function listGenerating(config, query) {
   if (!page || !Array.isArray(page.list) || !Number.isSafeInteger(page.total) ||
       !Number.isSafeInteger(page.pageNum) || !Number.isSafeInteger(page.pageSize) ||
       page.list.some((row) => typeof row?.receiptId !== 'string' || !row.receiptId ||
-        typeof row.submittedAt !== 'string' || !Number.isFinite(Date.parse(row.submittedAt)))) {
+        typeof row.submittedAt !== 'string' || !Number.isFinite(Date.parse(row.submittedAt)) ||
+        !validGeneratingDetails(row))) {
     throw new Error('生成中任务列表响应不完整');
   }
   return page;
+}
+
+const generatingThumbnailPath = /^\/print-agents\/generating\/([1-9]\d*)\/original-thumbnails\/[1-9]\d*$/;
+
+function validGeneratingDetails(row) {
+  const fields = ['originalThumbnailUrls', 'originalPhotoCount', 'estimatedTotalSheets', 'estimatedContentSummary'];
+  // 已部署的旧接口没有预览和明细；界面会明确标记该服务版本不提供这些信息。
+  if (fields.every((field) => !Object.hasOwn(row, field))) return true;
+  const { originalThumbnailUrls: urls, originalPhotoCount: count, estimatedTotalSheets: total,
+    estimatedContentSummary: summary } = row;
+  return (count === null || (Number.isSafeInteger(count) && count >= 0)) &&
+    Array.isArray(urls) && urls.length === Math.min(count ?? 0, 3) &&
+    urls.every((url) => typeof url === 'string' && generatingThumbnailPath.exec(url)?.[1] === row.receiptId) &&
+    (total === null || (Number.isSafeInteger(total) && total > 0 && count !== null && total >= count)) &&
+    typeof summary === 'string' && summary.trim().length > 0;
 }
 
 function pageParams(query) {
@@ -143,6 +159,7 @@ module.exports = {
   fetchMe,
   listJobs,
   listGenerating,
+  generatingThumbnailPath,
   beginJob,
   continueJob,
   previewJob,

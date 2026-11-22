@@ -199,11 +199,15 @@ async function createRuntime(options = {}) {
 
   /** 打前核对：按 fileUrl 下载一张图，返回 data URL（主进程持有 token）。 */
   async function previewJobImage(fileUrl) {
-    const { downloadFile } = require('./api');
-    if (!fileUrl || typeof fileUrl !== 'string' || !fileUrl.startsWith('/print-agents/jobs/')) {
+    const { downloadFile, generatingThumbnailPath } = require('./api');
+    if (!fileUrl || typeof fileUrl !== 'string') {
       throw new Error('预览地址无效');
     }
-    if (!fileUrl.includes('/preview-files/')) {
+    const generating = generatingThumbnailPath.test(fileUrl);
+    if (!generating && !fileUrl.startsWith('/print-agents/jobs/')) {
+      throw new Error('预览地址无效');
+    }
+    if (!generating && !fileUrl.includes('/preview-files/')) {
       throw new Error('预览只能使用 preview-files 地址');
     }
     const previewUrl = new URL(fileUrl, 'http://print.local');
