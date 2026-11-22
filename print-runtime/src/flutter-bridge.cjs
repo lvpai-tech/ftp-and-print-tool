@@ -8,7 +8,8 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { createRuntime } = require('./runtime');
 const { normalizeConfig, saveConfig, DEFAULT_OPERATION_BASE } = require('./config');
-const { fetchMe } = require('./api');
+const { fetchMe, listBatchStations, listPhotoBatches, correctPhotoBatch } = require('./api');
+const { CUPS_SOCKET } = require('./mac-printer');
 
 const execute = promisify(execFile);
 
@@ -22,7 +23,9 @@ async function listPrinters() {
     return typeof result === 'string' ? [result] : result;
   }
   if (process.platform === 'darwin') {
-    const { stdout } = await execute('/usr/bin/lpstat', ['-e'], { timeout: 20000 });
+    const { stdout } = await execute('/usr/bin/lpstat', ['-e'], {
+      timeout: 20000, env: { ...process.env, CUPS_SERVER: CUPS_SOCKET },
+    });
     return stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
   }
   throw new Error('当前仅支持 Windows / macOS 打印机');
@@ -43,7 +46,7 @@ async function serve({ input = process.stdin, send, configPath, root }) {
   async function boot() {
     bridge = await createRuntime({ configPath,
       lockDir: path.join(path.dirname(configPath), '.runtime'), skipLock: true,
-      forceManualStart: true, onStateChange: emit });
+      forceManualStart: true, includePrintIssues: true, onStateChange: emit });
     // 每次启动均须现场主动开启自动打印，避免重启即出纸。
     bridge.start();
   }
@@ -51,7 +54,7 @@ async function serve({ input = process.stdin, send, configPath, root }) {
   const read = readline.createInterface({ input, crlfDelay: Infinity });
   const mutations = new Set(['configure', 'saveConfig', 'autoPrint', 'printJobs', 'continueJobs',
     'markUnprinted', 'confirmPrinted', 'queryJobs', 'refreshJobs', 'trialPrintItem', 'downloadJobZip',
-    'addScenicProfile', 'activateScenicProfile', 'deleteScenicProfile', 'updateScenicProfile']);
+    'addScenicProfile', 'activateScenicProfile', 'deleteScenicProfile', 'updateScenicProfile', 'correctPhotoBatch']);
   async function dispatch(method, args) {
     if (method === 'snapshot') return snapshot();
     if (method === 'listPrinters') return listPrinters();
@@ -123,6 +126,9 @@ async function serve({ input = process.stdin, send, configPath, root }) {
       return snapshot();
     }
     if (!bridge) throw new Error('请先验证景区打印密钥');
+    if (method === 'listBatchStations') return listBatchStations(bridge.runtime.getConfig());
+    if (method === 'listPhotoBatches') return listPhotoBatches(bridge.runtime.getConfig(), args[0]);
+    if (method === 'correctPhotoBatch') return correctPhotoBatch(bridge.runtime.getConfig(), ...args);
     if (method === 'saveConfig') {
       await bridge.applyConfigPatch(args[0]);
       return snapshot();

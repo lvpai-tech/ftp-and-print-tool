@@ -4,14 +4,13 @@
 
 公开仓可用 GitHub Actions 打 **macOS 个人跨机包**：仓库 Actions 页手动运行 `Build macOS`，下载 Artifact `lvpai-ftp-macos-personal`。解压后双击「打开旅派客户端.command」；其他 Mac 首次需右键打开或「仍要打开」。包内含临时签名的 `.app`、随包 `print-runtime`（Node + 打印内核）与说明。正式对外分发仍须按 [RELEASING.md](RELEASING.md) 签名与公证，不能把本个人包当公证安装包。
 
-打印内核源码在仓库 `print-runtime/`（自父仓 `print-desktop` 同步）。开发机也可用环境变量指向父仓 `print-desktop`。
+Windows 和 macOS 打印使用本仓的 [Node 打印内核](print-runtime/README.md)。
 
 拷到 Mac 后的完整运行、签名和测试步骤见 [APPLE_TESTING.md](APPLE_TESTING.md)。
 
 ## 设计与维护
 
-主界面上方为机位摘要与「手动上传模式 / 自动上传模式」切换；FTP 配置收在右侧抽屉，
-未保存配置时显示空状态引导。连接/上传必须使用实际 FTP 服务，不内置服务器地址、样例照片或假成功。
+Windows 和 macOS 工作台首页提供「上传照片」与「打印照片」。上传页通过「COS 直传设置」保存 HTTPS 服务地址、机位 ID 和机位密钥，再选择相机照片落盘目录开始监听。未配置机位时，应用提示先完成配置。
 
 源码边界：
 
@@ -19,12 +18,10 @@
 | --- | --- |
 | `lib/main.dart` | 启动入口 |
 | `lib/app.dart` | 应用主题及页面入口 |
-| `lib/ui/transfer_page.dart` | 表单、选图、队列交互与进度展示 |
+| `lib/ui/transfer_page.dart` | 机位配置和自动监听入口 |
 | `lib/profile_store.dart` | 系统安全存储，界面不处理存储格式 |
-| `lib/transfer.dart` | 配置模型和真实 FTP 传输 |
+| `lib/auto_upload/cos_upload.dart` | 申请上传会话、直传 COS、确认上传及查询归集状态 |
 | `lib/ui/auto_upload_panel.dart` | 自动模式设置、状态与任务列表 |
-| `lib/ui/manual_batch_panel.dart` | 手动建议分组、照片增减、结束照核对和逐批确认上传 |
-| `lib/manual_batch/` | 条码识别、不可变副本、持久化批次及最后提交清单 |
 | `lib/auto_upload/folder_uploader.dart` | 稳定检测、扫描补偿、任务调度与重试 |
 | `lib/auto_upload/journal.dart` | 队列追加日志、恢复与独占锁 |
 | `lib/auto_upload/folder_access.dart` | 平台目录授权通道，苹果端使用原生安全书签 |
@@ -33,25 +30,21 @@
 | `site/`、`tool/package_release.py` | 独立静态下载页与本地打包工具 |
 | `windows/`、`macos/`、`ios/` | 各平台原生工程与权限 |
 
-保持同一份 Dart 业务源码，不引入浏览器运行时、在线字体或图片素材库。自动模式沿用原流程；
-手动模式监听只在本机建议分组，可增减照片，点击上传后固定成员，失败重试原批次。
-手动批次需要配套Java接收逻辑；FTP传输成功不等于归卡成功，必须检查服务端回执。
-详细协议及隔离规则见父仓 `creative-travel-shoot` 文档 `docs/project/FTP手动批次上传-20261119.md`。
+工作台通过运营 API 获取机位专属上传授权，将原片直传 COS，再查询服务端入库与归卡状态。生产已停用 FTP 收图，仓库保留旧版 FTP 传输和手动批次源码及隔离测试。
 
 体积基线（Windows x64 release 0.3.0+3，2026-11-18）：ZIP为12,285,224字节，约11.7 MiB。
 完整包包含EXE、Flutter引擎、插件DLL和data；SDK、编译器、源码、测试与业务照片不打进发布包。
 这是该版本构建实测，并非后续版本的体积保证。
 
-## Windows 打印工作台
+## 桌面打印工作台
 
 在打印页「景区密钥档案 → 添加景区」输入从旅派运营后台获取的工作台打印密钥，再激活对应档案。每个档案只拉取该密钥授权的景区任务，各景区共用打印机路由。打印中或自动打印开启时无法切换。
 
-打印页通过父仓 `print-desktop/src/flutter-bridge.cjs` 调用共享运行时。开发时可用 `LVPAI_PRINT_RUNTIME` 指向父仓的 `print-desktop`，并用 `LVPAI_PRINT_NODE` 指定 Node 可执行文件。发布包默认读取程序目录的 `print-runtime/`，打包时须确认包含待发布的运行时版本。景区档案名称应取自该档案密钥的服务端鉴权结果，验证两把景区密钥时分别检查显示名称与待打印列表。
+打印页通过 `print-runtime/src/flutter-bridge.cjs` 启动打印内核。开发联调和测试见[打印内核说明](print-runtime/README.md)，打包见[发布手册](RELEASING.md)。景区档案名称应取自该档案密钥的服务端鉴权结果，验证两把景区密钥时分别检查显示名称与待打印列表。
 
 ## 两台电脑接续开发
 
-统一 Flutter **3.50.0 / Dart 3.14.0**，`.fvmrc`记录版本；使用FVM时先`fvm install`，
-再将下述`flutter`替换成`fvm flutter`。不用FVM则自行安装同版本Flutter，不默认升级依赖。
+CI 和 `.fvmrc` 固定 Flutter **3.50.0 / Dart 3.14.0**。复现该版本时先运行 `fvm install`，再将下述 `flutter` 替换成 `fvm flutter`。Windows 本地开发已用用户级 Flutter 3.50.1 验证。
 `pubspec.lock`和三个原生工程均需进Git；`.dart_tool`、SDK和build目录在每台机器重新生成。
 不要把Windows的build、缓存或本机SDK复制到Mac。可复制整个源码目录（排除缓存），或使用本轮提供的独立源码包。
 
@@ -78,37 +71,21 @@ Mac首次运行仍需核验签名、Keychain保存后重启恢复、中文文件
 iPad沿用`ios/`工程，已增加Keychain权限、局域网用途说明、系统目录选择和本机CameraInbox目录、
 书签恢复及前后台监听停止逻辑；仍需在Mac上配置签名，编译并完成真机验收。
 
-## 手动模式
-
-- 配置一台 FTP 服务器，测试登录与目标目录，保存到系统安全存储。
-- 多选 JPEG / PNG 原图、顺序上传、进度展示、失败重试、当前文件结束后停止。
-- 被动 FTP / 二进制传输；服务器确认完成且远端 SIZE 与本地一致后标成功。
-- 上传前查询同名文件，发现同名则拒绝；失败不自动覆盖重传。失败留下的部分文件需要人工核对；当前不支持断点续传、并行写入同名文件的原子防覆盖。
-- 明文 FTP，仅适用于可信网络；FTPS、SFTP、直接连接相机及系统后台服务不属于当前实现。
-- 测试连接只验证登录与切换目录，不声称验证写权限。
-
 ## 自动监听
 
-先让相机 WiFi SD 卡配套软件将照片保存到电脑文件夹，再在应用切换「自动监听」，
-选择这个文件夹，确认服务器后点击「开始监听」。应用监听本地落盘，不接管 SD 卡无线传输协议。
+先让相机配套软件将照片保存到本地文件夹。打开「上传照片」，设置 COS 直传机位，选择落盘目录后点击「开始监听」。
 
 - 默认包含子文件夹，首次开始只处理之后新增或变化的 JPEG / PNG；勾选「同时扫描已有照片」可补传历史图。
 - 文件大小和修改时间连续稳定 3 秒后，复制到应用私有待传区，检查图片头尾、解码及 SHA-256，再入队。
-- 文件事件加每 2 秒补扫，按顺序批量传输；界面区分等待写入、待传、成功和失败。
-- 自动创建远端相对子目录。先上传任务专属 `.part` 文件，下载校验 SHA-256，再改为正式文件名并复核。
-  同路径同内容可恢复成功，同名不同内容明确报错。校验需要远端读权限，会额外下载照片两次，增加流量及耗时。
+- 文件事件加每 2 秒补扫。照片首次被发现时保存队列位置，写完并通过解码检查后上传。若补扫发现多张照片且无法确定顺序，上传页会请你选择下一张。
+- 上传任务使用服务端签发的 COS PUT 地址。前一张确认已入库后才上传下一张。队首原片还在写入、被移走或传输失败时，上传页会标出该文件。将原片放回，或按提示重试后继续。
 - 网络失败最多自动尝试 3 次，之后保留失败任务供手动重试；停止会等待当前文件结束，原照片不删除。
 - 来源和目标对应的任务日志在系统应用支持目录 `auto-upload/`，每次状态变化刷盘；
   重启后再次开始监听会恢复未完成任务，并补扫关闭期间新增照片。首次忽略的旧照片记录保留。
-  日志不含 FTP 密码，但包含本地文件路径；待传副本占用磁盘，成功后清理。
-- 桌面端最小化后继续工作，退出应用停止；iOS切到后台/锁屏停止派发新任务，系统可能中断当前传输，
-  回到前台需再次点击开始监听补扫和恢复；暂未实现托盘、开机启动和睡眠唤醒专项处理。
+  日志不含机位密钥，但包含本地文件路径；待传副本占用磁盘，成功后清理。
+- 桌面端可在托盘继续监听，退出前须停止监听及活动任务。iOS 切换后台或锁屏会停止监听，回到前台后点「开始监听」恢复。
 
-请为此客户端使用专属远程目录。标准 FTP 的改名无法保证多个独立写入方之间的原子防覆盖，
-队列锁仅防止本机同队列双实例。源文件若内容变化却保持大小及修改时间不变，不保证能发现。
-当前保留全部历史任务日志，尚无历史清理/压缩界面，长期海量任务需后续补充。
-
-Windows 已完成隔离 FTP 自动流程验证，真实相机及 WiFi SD 卡尚未联调。
+Windows 已在蓝月谷 A99 用合成照片复验 COS 直传和后台归卡。现场实拍、移动端和 macOS 真机仍待验收。
 macOS以系统选择器授权并保存只读安全书签；失效或撤权时明确报错并要求重新选择。
 iPad自动监听已启用，仅限前台和有权限读取的本机目录。可选择系统目录，或使用「本机收图文件夹」，
 通过「文件 → 我的 iPad → 帧集快拍 → CameraInbox」存图。相机软件必须支持写入该目录，
@@ -116,20 +93,17 @@ iPad自动监听已启用，仅限前台和有权限读取的本机目录。可�
 
 ## Windows 开发
 
-使用上文固定的 Flutter 3.50.0 和 Visual Studio 的 Desktop development with C++ 工作负载。
-在本目录执行：
+使用 PowerShell 7、Flutter、已加入 `PATH` 的 Node.js 22 和 Visual Studio 的 Desktop development with C++ 工作负载。先从系统托盘退出已运行的工作台，再在本目录启动源码调试。
 
 ```powershell
-$env:PUB_HOSTED_URL='https://pub.flutter-io.cn'
-$env:FLUTTER_STORAGE_BASE_URL='https://storage.flutter-io.cn'
-flutter pub get --enforce-lockfile
-flutter analyze
-flutter test
-flutter run -d windows
-flutter build windows --release
+.\run-windows.ps1
 ```
 
-本仓本机 SDK（不入库）为 `../.local/flutter-sdk/bin/flutter.bat`。
+脚本从 `PATH` 或 `%USERPROFILE%\develop\flutter` 查找 Flutter，也可用 `-Flutter` 指定 `flutter.bat`。保存 Dart 修改后，在运行终端按 `r` 热重载，修改入口或初始化逻辑后按 `R` 热重启。修改 Windows 原生代码、依赖或 Node 打印内核后，按 `q` 退出并重跑命令。
+
+上传使用系统安全存储中的机位档案。接生产时，在「COS 直传设置」填写 `https://hilvpai.com` 和对应生产机位凭据。打印运营 API 默认是 `https://hilvpai.com/api/operation`，可在启动前用 `PRINT_AGENT_BASE` 显式选择；打印页需激活对应景区密钥档案。
+
+Windows 本地 Debug 构建已通过用户级 Flutter 3.50.1 验证。需要复现 CI 时使用上文的 FVM 配置。严格校验依赖锁文件时运行 `flutter pub get --enforce-lockfile`；下载工具链和依赖的镜像配置见上文的接续开发步骤。
 2026-11-18 已通过管理员命令补齐 **C++ CMake tools for Windows**、
 **Desktop development with C++** 工作负载及 **C++ ATL**（安全存储插件编译所需）。
 Windows release 构建通过，EXE 为 `build/windows/x64/runner/Release/lvpai_ftp_client.exe`。
@@ -179,17 +153,17 @@ Windows先执行`$env:FTP_TEST_PORT='输出端口'`再执行`flutter test`。
 Windows 0.3.0+3 测试 ZIP 为 12,285,224 字节（约 11.7 MiB），尚未签署 Windows 代码签名。
 新增更新功能后静态检查通过，17 项客户端测试通过（含回环 FTP 真实传输）；
 管理发布/清单 5 项受控测试和下载页桌面/手机浏览器测试通过。
-本轮仅本地实现与打包，下载页和安装包尚未发布线上；Mac/iOS 原生编译、签名及真机验收仍需 Mac。
+上述记录是 2026-11-18 的本地构建结果。发布渠道与签名要求见[发布手册](RELEASING.md)。
 
 
 ## 上传前照片标准化
 
-自动监听及手动批次均在写入稳定后复制到私有队列，然后在后台隔离任务中标准化。
+自动监听在文件写入稳定后复制到私有队列，再在后台隔离任务中标准化。
 JPEG中的MPF多图索引（包括扩展名仍为JPG的文件）会被移除，只上传第一张主JPEG；
 显式MPO文件上传扩展名为.jpg。不会重压缩像素，EXIF拍摄时间/方向及ICC段原样保留，
 不烘焙方向、不伪造缺失的拍摄时间。相机源文件不修改。
 普通JPEG/PNG保持原字节；损坏JPEG主图明确报错，不用附图替代。实际解码沿用入队校验。
-转换发生在计算待传摘要和大小之前，手动清单与重试校验均以转换后的固定副本为准。
+转换发生在计算待传摘要和大小之前，重试校验以转换后的固定副本为准。
 MPO改为.jpg后若与远端已有同名不同内容冲突，沿用显式冲突保护，禁止覆盖。
 本轮支持JPEG/PNG及MPO主图；未增加HEIF、RAW或TIFF解码，不代表苹果真机已验证。
 生产历史照片不随客户端升级自动转换或重试。

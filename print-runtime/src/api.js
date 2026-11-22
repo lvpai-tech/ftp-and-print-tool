@@ -5,7 +5,7 @@
  * Token 仅放请求头，调用方不得把 token 或图片内容写入日志。
  */
 
-async function call(config, method, route, body) {
+async function call(config, method, route, body, signal) {
   const response = await fetch(config.base + route, {
     method,
     headers: {
@@ -13,12 +13,13 @@ async function call(config, method, route, body) {
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   });
   return response;
 }
 
-async function callJson(config, method, route, body) {
-  const response = await call(config, method, route, body);
+async function callJson(config, method, route, body, signal) {
+  const response = await call(config, method, route, body, signal);
   const payload = await response.json().catch(() => null);
   if (!payload || payload.code !== 200) {
     const detail = payload && payload.code != null
@@ -27,6 +28,25 @@ async function callJson(config, method, route, body) {
     throw new Error(`${method} ${route} 失败：${detail}`);
   }
   return payload.data;
+}
+
+function listBatchStations(config) {
+  return callJson(config, 'GET', '/print-agents/photo-batches/stations', undefined, AbortSignal.timeout(30000));
+}
+
+function batchStationRoute(stationId) {
+  if (typeof stationId !== 'string' || !/^[1-9]\d*$/.test(stationId)) throw new Error('机位编号无效');
+  return `/print-agents/photo-batches/stations/${stationId}`;
+}
+
+function listPhotoBatches(config, { stationId, from, to }) {
+  const params = new URLSearchParams({ from, to });
+  return callJson(config, 'GET', `${batchStationRoute(stationId)}?${params}`, undefined, AbortSignal.timeout(30000));
+}
+
+function correctPhotoBatch(config, stationId, correction) {
+  return callJson(config, 'POST', `${batchStationRoute(stationId)}/corrections`, correction,
+    AbortSignal.timeout(120000));
 }
 
 /** 用当前密钥查询绑定景区；失败显式抛错，不做静默兜底。 */
@@ -38,10 +58,10 @@ async function fetchMe(config) {
  * 分页查询本景区打印任务。
  * @param {{ printStatus?: string, createdFrom?: string, createdTo?: string, pageNum?: number, pageSize?: number }} query
  */
-async function listJobs(config, query = {}) {
+async function listJobs(config, query = {}, signal) {
   const params = pageParams(query);
   params.set('printStatus', query.printStatus || 'ALL');
-  return callJson(config, 'GET', `/print-agents/jobs?${params.toString()}`);
+  return callJson(config, 'GET', `/print-agents/jobs?${params.toString()}`, undefined, signal);
 }
 
 /** 查看本景区还在生成的取片单，使用独立的只读接口。 */
@@ -119,12 +139,21 @@ async function downloadFile(config, fileUrl) {
   return { buffer, contentType };
 }
 
+function printJobIds(ids) {
+  return (ids || []).flatMap((id) => {
+    const exact = String(id);
+    if (!/^[1-9][0-9]*$/.test(exact)) return [];
+    const number = Number(exact);
+    return [Number.isSafeInteger(number) ? number : exact];
+  });
+}
+
 /**
  * 将失败/已打印任务改回未打印（QUEUED）。
  * @param {string[]|number[]} ids
  */
 async function requeueJobs(config, ids) {
-  const list = (ids || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+  const list = printJobIds(ids);
   if (!list.length) throw new Error('请勾选要标记的任务');
   return callJson(config, 'POST', '/print-agents/jobs/requeue', { ids: list });
 }
@@ -134,7 +163,7 @@ async function requeueJobs(config, ids) {
  * @param {string[]|number[]} ids
  */
 async function confirmPrintedJobs(config, ids) {
-  const list = (ids || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+  const list = printJobIds(ids);
   if (!list.length) throw new Error('请勾选要确认的任务');
   return callJson(config, 'POST', '/print-agents/jobs/confirm-printed', { ids: list });
 }
@@ -159,6 +188,9 @@ module.exports = {
   fetchMe,
   listJobs,
   listGenerating,
+  listBatchStations,
+  listPhotoBatches,
+  correctPhotoBatch,
   generatingThumbnailPath,
   beginJob,
   continueJob,

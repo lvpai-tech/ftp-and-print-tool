@@ -4,6 +4,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../ui/app_dialogs.dart';
+import '../../ui/design.dart';
 import '../print_bridge.dart';
 import 'design.dart';
 
@@ -12,10 +13,12 @@ class PreviewDialog extends StatefulWidget {
     super.key,
     required this.bridge,
     required this.jobId,
+    required this.cardTail,
     required this.perform,
   });
   final PrintBridge bridge;
   final String jobId;
+  final String cardTail;
   final Perform perform;
   @override
   State<PreviewDialog> createState() => _PreviewDialogState();
@@ -28,6 +31,12 @@ class _PreviewDialogState extends State<PreviewDialog> {
   String? error;
   bool loading = true;
   bool actionBusy = false;
+
+  String get _titleTail {
+    final tail = widget.cardTail.trim();
+    return tail.isEmpty ? '无取片卡' : tail;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -75,190 +84,366 @@ class _PreviewDialogState extends State<PreviewDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: !actionBusy,
-    child: Dialog(
-      child: SizedBox(
-        width: 1000,
-        height: 700,
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '工单 #${widget.jobId} · 打印预览',
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: '关闭预览',
-                    onPressed: actionBusy ? null : () => Navigator.pop(context),
-                    icon: const Icon(Icons.close),
-                  ),
-                ],
-              ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  items.isEmpty
-                      ? '只读预览，不占用工单'
-                      : '${items[index]['label']} × ${items[index]['copies']}',
-                  style: const TextStyle(color: muted),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: loading
-                    ? const Center(child: CircularProgressIndicator())
-                    : error != null
-                    ? Center(
+  Widget build(BuildContext context) {
+    final sheetLabel = items.isEmpty
+        ? '只读预览，不占用工单'
+        : '${items[index]['label']} × ${items[index]['copies']}';
+    return PopScope(
+      canPop: !actionBusy,
+      child: Dialog(
+        backgroundColor: WorkstationStyle.card,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: WorkstationStyle.line),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1040, maxHeight: 760),
+          child: SizedBox(
+            width: 1000,
+            height: 700,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(28, 22, 16, 0),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
                         child: Column(
-                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(error!),
-                            TextButton(
-                              onPressed: load,
-                              child: const Text('重试'),
-                            ),
-                          ],
-                        ),
-                      )
-                    : items.isEmpty
-                    ? const Center(child: Text('暂无照片'))
-                    : FutureBuilder<dynamic>(
-                        key: ValueKey(items[index]['fileUrl']),
-                        future: image,
-                        builder: (context, snapshot) {
-                          if (snapshot.hasError) {
-                            return Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
+                            Text.rich(
+                              TextSpan(
                                 children: [
-                                  Text(appErrorMessage(snapshot.error!)),
-                                  TextButton(
-                                    onPressed: showImage,
-                                    child: const Text('重试图片'),
+                                  const TextSpan(
+                                    text: '取片码 ',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w500,
+                                      color: WorkstationStyle.muted,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: _titleTail,
+                                    style: const TextStyle(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w700,
+                                      color: WorkstationStyle.ink,
+                                      fontFeatures: [
+                                        FontFeature.tabularFigures(),
+                                      ],
+                                    ),
+                                  ),
+                                  const TextSpan(
+                                    text: '  ·  打印预览',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w500,
+                                      color: WorkstationStyle.muted,
+                                    ),
                                   ),
                                 ],
                               ),
-                            );
-                          }
-                          if (snapshot.connectionState !=
-                                  ConnectionState.done ||
-                              !snapshot.hasData) {
-                            return const Center(
-                              child: CircularProgressIndicator(),
-                            );
-                          }
-                          final bytes = base64Decode(
-                            (snapshot.data['dataUrl'] as String)
-                                .split(',')
-                                .last,
-                          );
-                          return InteractiveViewer(
-                            minScale: .5,
-                            maxScale: 5,
-                            child: Center(
-                              child: Image.memory(
-                                bytes,
-                                fit: BoxFit.contain,
-                                gaplessPlayback: false,
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              sheetLabel,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: WorkstationStyle.muted,
+                                fontFeatures: [FontFeature.tabularFigures()],
                               ),
                             ),
-                          );
-                        },
+                          ],
+                        ),
                       ),
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 12,
-                runSpacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  OutlinedButton(
-                    onPressed: items.isEmpty || actionBusy
-                        ? null
-                        : () async {
-                            setState(() => actionBusy = true);
-                            final ok = await widget.perform('trialPrintItem', [
-                              items[index],
-                            ]);
-                            if (!mounted) return;
-                            setState(() => actionBusy = false);
-                            if (ok) {
-                              if (!context.mounted) return;
-                              await showAppMessage(
-                                context,
-                                message: '试打印命令已受理，请核对实物；工单状态未修改。',
-                              );
-                            }
-                          },
-                    child: const Text('试打印当前张（实际出纸）'),
+                      IconButton(
+                        tooltip: '关闭预览',
+                        onPressed: actionBusy
+                            ? null
+                            : () => Navigator.pop(context),
+                        style: IconButton.styleFrom(
+                          foregroundColor: WorkstationStyle.muted,
+                          minimumSize: const Size(40, 40),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        icon: const Icon(Icons.close_rounded, size: 22),
+                      ),
+                    ],
                   ),
-                  IconButton(
-                    tooltip: '上一张',
-                    onPressed: index == 0 || actionBusy
-                        ? null
-                        : () {
-                            index--;
-                            showImage();
-                          },
-                    icon: const Icon(Icons.chevron_left),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(28, 18, 28, 12),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: const Color(0xfff4f6fa),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: WorkstationStyle.line),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(13),
+                        child: _previewBody(),
+                      ),
+                    ),
                   ),
-                  Text('${items.isEmpty ? 0 : index + 1} / ${items.length}'),
-                  IconButton(
-                    tooltip: '下一张',
-                    onPressed: index >= items.length - 1 || actionBusy
-                        ? null
-                        : () {
-                            index++;
-                            showImage();
-                          },
-                    icon: const Icon(Icons.chevron_right),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(28, 4, 28, 22),
+                  child: Row(
+                    children: [
+                      OutlinedButton(
+                        onPressed: items.isEmpty || actionBusy
+                            ? null
+                            : _trialPrint,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: WorkstationStyle.ink,
+                          side: const BorderSide(color: WorkstationStyle.line),
+                          minimumSize: const Size(0, 42),
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          textStyle: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        child: const Text('试打印当前张（实际出纸）'),
+                      ),
+                      const Spacer(),
+                      _Pager(
+                        index: items.isEmpty ? 0 : index + 1,
+                        total: items.length,
+                        onPrevious: index == 0 || actionBusy
+                            ? null
+                            : () {
+                                index--;
+                                showImage();
+                              },
+                        onNext: index >= items.length - 1 || actionBusy
+                            ? null
+                            : () {
+                                index++;
+                                showImage();
+                              },
+                      ),
+                      const Spacer(),
+                      FilledButton(
+                        onPressed: items.isEmpty || actionBusy
+                            ? null
+                            : _downloadZip,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: WorkstationStyle.accent,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size(0, 42),
+                          padding: const EdgeInsets.symmetric(horizontal: 18),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          textStyle: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        child: const Text('下载本单 ZIP'),
+                      ),
+                    ],
                   ),
-                  FilledButton(
-                    onPressed: items.isEmpty || actionBusy
-                        ? null
-                        : () async {
-                            final location = await getSaveLocation(
-                              suggestedName: 'print-${widget.jobId}.zip',
-                              acceptedTypeGroups: [
-                                const XTypeGroup(
-                                  label: 'ZIP',
-                                  extensions: ['zip'],
-                                ),
-                              ],
-                            );
-                            if (location == null || !mounted) return;
-                            setState(() => actionBusy = true);
-                            final ok = await widget.perform('downloadJobZip', [
-                              widget.jobId,
-                              location.path,
-                            ]);
-                            if (!mounted) return;
-                            setState(() => actionBusy = false);
-                            if (ok) {
-                              if (!context.mounted) return;
-                              await showAppMessage(
-                                context,
-                                message: 'ZIP 已保存：${location.path}',
-                              );
-                            }
-                          },
-                    child: const Text('下载本单 ZIP'),
-                  ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
+
+  Widget _previewBody() {
+    if (loading) {
+      return const Center(
+        child: SizedBox(
+          width: 28,
+          height: 28,
+          child: CircularProgressIndicator(strokeWidth: 2.5),
+        ),
+      );
+    }
+    if (error != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(error!, style: const TextStyle(color: WorkstationStyle.bad)),
+            const SizedBox(height: 10),
+            TextButton(onPressed: load, child: const Text('重试')),
+          ],
+        ),
+      );
+    }
+    if (items.isEmpty) {
+      return const Center(
+        child: Text('暂无照片', style: TextStyle(color: WorkstationStyle.muted)),
+      );
+    }
+    return FutureBuilder<dynamic>(
+      key: ValueKey(items[index]['fileUrl']),
+      future: image,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  appErrorMessage(snapshot.error!),
+                  style: const TextStyle(color: WorkstationStyle.bad),
+                ),
+                const SizedBox(height: 10),
+                TextButton(onPressed: showImage, child: const Text('重试图片')),
+              ],
+            ),
+          );
+        }
+        if (snapshot.connectionState != ConnectionState.done ||
+            !snapshot.hasData) {
+          return const Center(
+            child: Text(
+              '图片加载中',
+              style: TextStyle(color: WorkstationStyle.muted, fontSize: 13),
+            ),
+          );
+        }
+        final bytes = base64Decode(
+          (snapshot.data['dataUrl'] as String).split(',').last,
+        );
+        return InteractiveViewer(
+          minScale: .5,
+          maxScale: 5,
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: WorkstationStyle.card,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0x14000000)),
+                  boxShadow: WorkstationStyle.softShadow,
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(9),
+                  child: Image.memory(
+                    bytes,
+                    fit: BoxFit.contain,
+                    gaplessPlayback: true,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _trialPrint() async {
+    setState(() => actionBusy = true);
+    final ok = await widget.perform('trialPrintItem', [items[index]]);
+    if (!mounted) return;
+    setState(() => actionBusy = false);
+    if (ok) {
+      await showAppMessage(context, message: '试打印命令已受理，请核对实物；工单状态未修改。');
+    }
+  }
+
+  Future<void> _downloadZip() async {
+    final location = await getSaveLocation(
+      suggestedName: 'print-${widget.jobId}.zip',
+      acceptedTypeGroups: [
+        const XTypeGroup(label: 'ZIP', extensions: ['zip']),
+      ],
+    );
+    if (location == null || !mounted) return;
+    setState(() => actionBusy = true);
+    final ok = await widget.perform('downloadJobZip', [
+      widget.jobId,
+      location.path,
+    ]);
+    if (!mounted) return;
+    setState(() => actionBusy = false);
+    if (ok) {
+      await showAppMessage(context, message: 'ZIP 已保存：${location.path}');
+    }
+  }
+}
+
+class _Pager extends StatelessWidget {
+  const _Pager({
+    required this.index,
+    required this.total,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final int index;
+  final int total;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: WorkstationStyle.bg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: WorkstationStyle.line),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: '上一张',
+            onPressed: onPrevious,
+            style: IconButton.styleFrom(
+              foregroundColor: WorkstationStyle.ink,
+              disabledForegroundColor: WorkstationStyle.muted.withValues(
+                alpha: .35,
+              ),
+              minimumSize: const Size(36, 36),
+              padding: EdgeInsets.zero,
+            ),
+            icon: const Icon(Icons.chevron_left_rounded, size: 22),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              '$index / $total',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: WorkstationStyle.ink,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: '下一张',
+            onPressed: onNext,
+            style: IconButton.styleFrom(
+              foregroundColor: WorkstationStyle.ink,
+              disabledForegroundColor: WorkstationStyle.muted.withValues(
+                alpha: .35,
+              ),
+              minimumSize: const Size(36, 36),
+              padding: EdgeInsets.zero,
+            ),
+            icon: const Icon(Icons.chevron_right_rounded, size: 22),
+          ),
+        ],
+      ),
+    );
+  }
 }

@@ -59,6 +59,7 @@ async function createRuntime(options = {}) {
 
   const scheduler = createScheduler({
     config: runtime.config,
+    includePrintIssues: options.includePrintIssues,
     history,
     autoPrint: Boolean(runtime.config.autoPrint),
     log: (msg) => logLine(msg, 'info'),

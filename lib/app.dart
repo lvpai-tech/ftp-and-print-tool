@@ -7,11 +7,13 @@ import 'ui/workstation_shell.dart';
 import 'workstation_session.dart';
 
 class PhotoFtpApp extends StatelessWidget {
-  const PhotoFtpApp({super.key, this.session});
+  const PhotoFtpApp({super.key, this.session, this.navigatorKey});
   final WorkstationSession? session;
+  final GlobalKey<NavigatorState>? navigatorKey;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
+    navigatorKey: navigatorKey,
     debugShowCheckedModeBanner: false,
     title: session == null ? '$appBrandName · FTP 上传' : workstationTitle,
     theme: ThemeData(

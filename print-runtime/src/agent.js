@@ -6,6 +6,7 @@ const path = require('node:path');
 const { claimJob, downloadFile, reportResult } = require('./api');
 const { resolvePrinter, runPrintCommand, summarizePrinters } = require('./print');
 const { assertPrinterReady, watchAfterSubmit, cancelPendingLvpaiJobs } = require('./printer-status');
+const { usesMacPrintScript } = require('./mac-printer');
 
 const CHECK_PAPER_HINT =
   '请核对实物：剩余未出点「继续打印」；纸已齐点「确认已打印」；要整单重打先「标记未打印」';
@@ -59,6 +60,8 @@ async function processClaimedJob(config, job, hooks = {}) {
   const skipPrint = Boolean(hooks.skipPrint || config.skipPrint);
   const ignorePaperOut = Boolean(hooks.ignorePaperOut);
   const checkPrinter = !skipPrint && Array.isArray(config.statusCommand);
+  const requireCupsJobId = checkPrinter && (usesMacPrintScript(config.command)
+    || config.statusCommand.some((part) => part.includes('{jobId}')));
   let completedSheets = startAt;
   let printerSummary = '';
   const fileCache = new Map();
@@ -87,22 +90,25 @@ async function processClaimedJob(config, job, hooks = {}) {
       } else {
         if (checkPrinter) await assertPrinterReady(config, printer, { ignorePaperOut });
         const submittedAt = Date.now();
-        await runPrintCommand(config, item, cached.file, printer);
+        const { cupsJobId } = await runPrintCommand(config, item, cached.file, printer);
         usedPrinters.push({ kind: item.kind, printer });
         if (checkPrinter) {
           try {
+            if (requireCupsJobId && cupsJobId == null) throw new Error('系统已受理，但未返回可核对的 CUPS 作业编号');
             await watchAfterSubmit(config, [printer], submittedAt, {
               ...hooks.watchOptions,
               settleMs: sheetSettleMs,
               ignorePaperOut,
+              cupsJobId: requireCupsJobId ? cupsJobId : undefined,
             });
           } catch (error) {
-            try {
-              await cancelPendingLvpaiJobs(config, printer);
-            } catch {
-              /* 取消队列失败不覆盖缺纸原因 */
+            let cancellation = '';
+            if (!requireCupsJobId || cupsJobId != null) {
+              const { cancelled } = await cancelPendingLvpaiJobs(config, printer, requireCupsJobId ? cupsJobId : undefined)
+                .catch(() => ({ cancelled: 0 }));
+              if (requireCupsJobId) cancellation = `。CUPS 作业 ${cupsJobId}${cancelled ? '已受理取消' : '未确认取消'}`;
             }
-            throw new Error(`${error.message}。${CHECK_PAPER_HINT}`);
+            throw new Error(`${error.message}${cancellation}。${CHECK_PAPER_HINT}`);
           }
         }
         completedSheets = index + 1;

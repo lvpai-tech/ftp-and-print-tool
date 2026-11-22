@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
+import 'package:lvpai_ftp_client/auto_upload/folder_uploader.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
@@ -144,15 +146,237 @@ void main() {
       );
     },
   );
+
+  test('慢写原片重启保序，重试和等待入库期间结束照不发送', () async {
+    final fixture = await _QueueFixture.open();
+    await fixture.run(() async {
+      final uploader = fixture.uploader();
+      final original = File(p.join(fixture.inbox.path, 'z-original.png'));
+      final ending = File(p.join(fixture.inbox.path, 'a-ending.png'));
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+      await original.create();
+      await _until(() => uploader.settling == 1, '发现原片');
+      await ending.writeAsBytes(await _png());
+      await _until(() => uploader.settling == 2, '发现结束照');
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(fixture.prepared, isEmpty);
+      expect(uploader.orderWaitMessage, contains('z-original.png'));
+
+      await uploader.stop();
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+      await original.delete();
+      await _until(
+        () => uploader.orderWaitMessage?.contains('请将原片放回') == true,
+        '提示队首原片移走',
+      );
+      expect(fixture.prepared, isEmpty);
+      fixture.failNextUpload = true;
+      await original.writeAsBytes(await _png());
+      await _until(
+        () => uploader.jobs.any((job) => job.error.isNotEmpty),
+        '首次传输失败并准备重试',
+        describe: () =>
+            '${uploader.issues} ${uploader.fatalError} ${fixture.prepared}',
+      );
+      final originalJob = uploader.jobs.singleWhere(
+        (job) => job.source == original.path,
+      );
+      expect(fixture.prepared.toSet(), {originalJob.id});
+      expect(uploader.orderWaitMessage, contains('等待重试'));
+
+      await _until(
+        () => originalJob.state == 'accepted',
+        '原片 COS 受理',
+        describe: () => '${originalJob.state} ${originalJob.error}',
+      );
+      await _until(
+        () => fixture.statusQueries.contains(originalJob.id),
+        '开始查询入库',
+      );
+      expect(fixture.prepared.toSet(), {originalJob.id});
+      expect(uploader.orderWaitMessage, contains('等待服务端入库'));
+
+      fixture.ingested.add(originalJob.id);
+      await _until(() => fixture.prepared.toSet().length == 2, '放行结束照');
+      expect(originalJob.state, 'ingested');
+      expect(
+        fixture.prepared.last,
+        uploader.jobs.singleWhere((job) => job.source == ending.path).id,
+      );
+      await _until(() => fixture.uploaded.length == 2, '结束照上传成功');
+    });
+  });
+
+  test('同次补扫没有发现顺序时须确认，确认结果重启后保留', () async {
+    final fixture = await _QueueFixture.open();
+    await fixture.run(() async {
+      final uploader = fixture.uploader();
+      final original = File(p.join(fixture.inbox.path, 'z-original.png'));
+      final ending = File(p.join(fixture.inbox.path, 'a-ending.png'));
+      await original.create();
+      await ending.writeAsBytes(await _png());
+      await uploader.start(
+        fixture.inbox,
+        null,
+        cosProfile: fixture.profile,
+        includeExisting: true,
+      );
+      expect(uploader.sourcesNeedingOrder.toSet(), {
+        original.path,
+        ending.path,
+      });
+      expect(fixture.prepared, isEmpty);
+      uploader.confirmNextSource(original.path);
+      await _until(
+        () => uploader.orderWaitMessage?.contains('z-original.png') == true,
+        '确认原片优先',
+      );
+      await uploader.stop();
+      await uploader.start(
+        fixture.inbox,
+        null,
+        cosProfile: fixture.profile,
+        includeExisting: true,
+      );
+      expect(uploader.sourcesNeedingOrder, isEmpty);
+      expect(uploader.orderWaitMessage, contains('z-original.png'));
+      expect(fixture.prepared, isEmpty);
+    });
+  });
+}
+
+Future<void> _until(
+  bool Function() condition,
+  String description, {
+  String Function()? describe,
+}) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 8));
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('等待$description超时 ${describe?.call() ?? ''}');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+}
+
+Future<List<int>> _png() async {
+  final recorder = ui.PictureRecorder();
+  ui.Canvas(recorder).drawColor(const ui.Color(0xff123456), ui.BlendMode.src);
+  final picture = recorder.endRecording();
+  final image = await picture.toImage(12, 12);
+  try {
+    return (await image.toByteData(
+      format: ui.ImageByteFormat.png,
+    ))!.buffer.asUint8List();
+  } finally {
+    image.dispose();
+    picture.dispose();
+  }
+}
+
+class _QueueFixture {
+  final HttpServer server;
+  final Directory scratch, inbox;
+  final transport = HttpClient();
+  final prepared = <String>[];
+  final uploaded = <String>{};
+  final ingested = <String>{};
+  final statusQueries = <String>{};
+  final profile = CosUploadProfile(
+    'https://workstation.example',
+    '19',
+    'a' * 64,
+  );
+  bool failNextUpload = false;
+
+  _QueueFixture(this.server, this.scratch, this.inbox);
+
+  static Future<_QueueFixture> open() async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final scratch = await Directory.systemTemp.createTemp('workstation-queue-');
+    final inbox = await Directory(p.join(scratch.path, 'inbox')).create();
+    final fixture = _QueueFixture(server, scratch, inbox);
+    server.listen(fixture._handle);
+    addTearDown(() async {
+      fixture.transport.close(force: true);
+      await server.close(force: true);
+      await scratch.delete(recursive: true);
+    });
+    return fixture;
+  }
+
+  Future<void> run(Future<void> Function() body) => HttpOverrides.runZoned(
+    body,
+    createHttpClient: (_) =>
+        _LocalTransport(transport, server.port, closeTransport: false),
+  );
+
+  FolderUploader uploader() {
+    final uploader = FolderUploader(
+      storage: Directory(p.join(scratch.path, 'state')),
+      stableFor: const Duration(milliseconds: 80),
+      scanInterval: const Duration(milliseconds: 30),
+      retryDelay: const Duration(milliseconds: 300),
+    );
+    addTearDown(() async {
+      await uploader.stop();
+      uploader.dispose();
+    });
+    return uploader;
+  }
+
+  Future<void> _handle(HttpRequest request) async {
+    final response = request.response;
+    if (request.method == 'PUT') {
+      await request.drain<void>();
+      if (failNextUpload) {
+        failNextUpload = false;
+        response.statusCode = 503;
+      } else {
+        uploaded.add(request.uri.pathSegments.last);
+      }
+      await response.close();
+      return;
+    }
+
+    final path = request.uri.path;
+    final Map<String, Object> data;
+    if (path.endsWith('/sessions')) {
+      final payload =
+          jsonDecode(await utf8.decoder.bind(request).join()) as Map;
+      final id = payload['requestId'] as String;
+      prepared.add(id);
+      data = {
+        'status': 'AWAITING_UPLOAD',
+        'uploadUrl': 'https://private.cos.ap-guangzhou.myqcloud.com/$id',
+        'uploadHeaders': {
+          'Content-Length': '${payload['byteLength']}',
+          'Content-Type': payload['contentType'],
+          'x-cos-forbid-overwrite': 'true',
+          'x-cos-acl': 'private',
+        },
+      };
+    } else if (request.method == 'GET') {
+      final id = request.uri.pathSegments.last;
+      statusQueries.add(id);
+      data = {'status': ingested.contains(id) ? 'INGESTED' : 'PROCESSING'};
+    } else {
+      final id = request.uri.pathSegments[request.uri.pathSegments.length - 2];
+      data = {'status': uploaded.contains(id) ? 'QUEUED' : 'AWAITING_UPLOAD'};
+    }
+    response.write(jsonEncode({'code': 200, 'data': data}));
+    await response.close();
+  }
 }
 
 // Keeps the real Dart HTTP stream behavior and maps the two endpoints to a local fixture.
 class _LocalTransport implements HttpClient {
   final HttpClient transport;
   final int port;
+  final bool closeTransport;
   final hosts = <String>[];
 
-  _LocalTransport(this.transport, this.port);
+  _LocalTransport(this.transport, this.port, {this.closeTransport = true});
 
   @override
   set connectionTimeout(Duration? timeout) =>
@@ -174,7 +398,9 @@ class _LocalTransport implements HttpClient {
   Future<HttpClientRequest> putUrl(Uri url) => openUrl('PUT', url);
 
   @override
-  void close({bool force = false}) => transport.close(force: force);
+  void close({bool force = false}) {
+    if (closeTransport) transport.close(force: force);
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

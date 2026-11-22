@@ -28,6 +28,8 @@ __pycache__/
 .env.*
 !.env.example
 .runtime/
+.local/
+/print-runtime/config.json
 uploads/
 *.log
 # Keep pubspec.lock, native runners, CMake and Xcode project sources.

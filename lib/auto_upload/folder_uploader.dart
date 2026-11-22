@@ -56,6 +56,32 @@ class AutoJob {
     attempts: v['attempts'] as int,
     nextAttempt: DateTime.fromMillisecondsSinceEpoch(v['nextAttempt'] as int),
   );
+
+  Future<Uint8List> readPhotoForReview() async {
+    for (final path in [snapshot, source]) {
+      try {
+        final bytes = await File(path).readAsBytes();
+        final expected = digest;
+        final verified = await compute(_verifiedPhoto, (bytes, expected));
+        if (verified != null) return verified;
+      } on FileSystemException {
+        // The uploaded snapshot can be cleaned up while this row is open.
+      }
+    }
+    throw StateError('队列照片已移走或内容已变化，请重新选择原图');
+  }
+}
+
+Uint8List? _verifiedPhoto((Uint8List, String) request) {
+  final (bytes, expected) = request;
+  if (sha256.convert(bytes).toString() == expected) return bytes;
+  try {
+    final normalized = normalizeJpegPrimary(bytes);
+    if (sha256.convert(normalized).toString() == expected) return normalized;
+  } on StateError {
+    // The source may have been replaced with an incomplete image.
+  }
+  return null;
 }
 
 class _Observation {
@@ -72,6 +98,10 @@ class FolderUploader extends ChangeNotifier {
   final Map<String, AutoJob> _jobs = {};
   final Map<String, String> _seen = {}, _ignored = {};
   final Map<String, _Observation> _observations = {};
+  // Singletons have a known position. Larger groups wait for an operator's order.
+  final List<List<String>> _waiting = [];
+  final Set<String> _fileEvents = {};
+  String? _confirmedSource;
   final Map<String, String> issues = {};
   QueueJournal? _journal;
   StreamSubscription<FileSystemEvent>? _events;
@@ -86,7 +116,31 @@ class FolderUploader extends ChangeNotifier {
   String watcherNotice = '';
   String? fatalError;
   List<AutoJob> get jobs => _jobs.values.toList().reversed.toList();
-  int get settling => _observations.length;
+  int get settling => _cos == null
+      ? _observations.length
+      : _waiting.fold(0, (count, group) => count + group.length);
+  List<String> get sourcesNeedingOrder =>
+      _waiting.isNotEmpty && _waiting.first.length > 1
+      ? List.unmodifiable(_waiting.first)
+      : const [];
+
+  String? get orderWaitMessage {
+    if (_cos == null) return null;
+    for (final job in _jobs.values) {
+      final reason = switch (job.state) {
+        'accepted' => '等待服务端入库，后续照片暂缓上传',
+        'failed' => '上传或入库失败，重试后继续上传后续照片',
+        'pending' when job.attempts > 0 => '等待重试，后续照片暂缓上传',
+        _ => null,
+      };
+      if (reason != null) return '${job.relative}：$reason';
+      if (job.state == 'pending' || job.state == 'uploading') return null;
+    }
+    if (_waiting.isEmpty || _waiting.first.length > 1) return null;
+    final source = _waiting.first.single;
+    final reason = issues[source] ?? '等待文件写完，后续照片暂缓上传';
+    return '${p.relative(source, from: _root!.path)}：$reason';
+  }
 
   FolderUploader({
     required this.storage,
@@ -154,6 +208,33 @@ class FolderUploader extends ChangeNotifier {
       '${s.size}:${s.modified.microsecondsSinceEpoch}';
   String _hash(String value) => sha256.convert(utf8.encode(value)).toString();
 
+  static bool _isPhoto(String path) => const {
+    '.jpg',
+    '.jpeg',
+    '.mpo',
+    '.png',
+  }.contains(p.extension(path).toLowerCase());
+
+  void _prioritizeSource(String source) {
+    _waiting.first.remove(source);
+    _waiting.insert(0, [source]);
+    if (_waiting[1].isEmpty) _waiting.removeAt(1);
+  }
+
+  void _resolveSource(String source) {
+    if (_waiting.isEmpty || !_waiting.first.remove(source)) return;
+    if (_waiting.first.isEmpty) _waiting.removeAt(0);
+  }
+
+  void confirmNextSource(String source) {
+    if (running &&
+        _confirmedSource == null &&
+        sourcesNeedingOrder.contains(source)) {
+      _confirmedSource = source;
+      _tick();
+    }
+  }
+
   Future<void> _append(Map<String, dynamic> event) async {
     try {
       await _journal!.append(event);
@@ -194,6 +275,9 @@ class FolderUploader extends ChangeNotifier {
     _seen.clear();
     _ignored.clear();
     _observations.clear();
+    _waiting.clear();
+    _fileEvents.clear();
+    _confirmedSource = null;
     issues.clear();
     fatalError = null;
     _initialized = false;
@@ -218,11 +302,28 @@ class FolderUploader extends ChangeNotifier {
             }
           case 'ignore':
             _ignored[event['source'] as String] = event['signature'] as String;
+          case 'arrival':
+            _waiting.addAll(
+              (event['groups'] as List).map(
+                (group) => List<String>.from(group as List),
+              ),
+            );
+          case 'nextSource':
+            _prioritizeSource(event['source'] as String);
+          case 'resolvedSource':
+            final source = event['source'] as String;
+            _seen[source] = event['signature'] as String;
+            _resolveSource(source);
           case 'job':
             final job = AutoJob.fromJson(event);
             if (job.state == 'uploading') job.state = 'pending';
+            // Status updates for older jobs cannot consume a later observation
+            // of a different photo written to the same filename.
+            if (!_jobs.containsKey(job.id)) {
+              _resolveSource(job.source);
+              _seen[job.source] = job.signature;
+            }
             _jobs[job.id] = job;
-            _seen[job.source] = job.signature;
           default:
             throw StateError('队列日志版本无法识别');
         }
@@ -235,7 +336,21 @@ class FolderUploader extends ChangeNotifier {
         _events = absolute
             .watch(recursive: recursive)
             .listen(
-              (_) {
+              (event) {
+                if (_cos != null && !event.isDirectory) {
+                  if (event is FileSystemDeleteEvent ||
+                      event is FileSystemMoveEvent) {
+                    _fileEvents.remove(p.canonicalize(event.path));
+                  }
+                  final path = switch (event) {
+                    FileSystemCreateEvent() => event.path,
+                    FileSystemMoveEvent() => event.destination,
+                    _ => null,
+                  };
+                  if (path != null && _isPhoto(path)) {
+                    _fileEvents.add(p.canonicalize(path));
+                  }
+                }
                 _debounce?.cancel();
                 _debounce = Timer(const Duration(milliseconds: 300), _tick);
               },
@@ -301,13 +416,7 @@ class FolderUploader extends ChangeNotifier {
         recursive: _recursive,
         followLinks: false,
       )) {
-        if (entity is File &&
-            [
-              '.jpg',
-              '.jpeg',
-              '.mpo',
-              '.png',
-            ].contains(p.extension(entity.path).toLowerCase())) {
+        if (entity is File && _isPhoto(entity.path)) {
           files.add(entity);
         }
       }
@@ -337,104 +446,186 @@ class FolderUploader extends ChangeNotifier {
     final present = files.map((f) => f.path).toSet();
     _observations.removeWhere((path, _) => !present.contains(path));
     issues.removeWhere((path, _) => !present.contains(path));
-    for (final file in files) {
-      if (!running) break;
-      final stat = await file.stat();
-      if (stat.type != FileSystemEntityType.file) continue;
-      final signature = _signature(stat);
-      if (_seen[file.path] == signature ||
-          (!_includeExisting && _ignored[file.path] == signature)) {
-        _observations.remove(file.path);
-        continue;
-      }
-      final observed = _observations[file.path];
-      if (observed == null || observed.signature != signature) {
-        _observations[file.path] = _Observation(signature, DateTime.now());
-        issues.remove(file.path);
-        continue;
-      }
-      if (DateTime.now().difference(observed.since) < stableFor ||
-          stat.size == 0) {
-        continue;
-      }
-      File? snapshot;
-      try {
-        final tempDir = Directory(
-          p.join(_journal!.file.parent.path, 'pending'),
-        );
-        await tempDir.create(recursive: true);
-        snapshot = File(
-          p.join(
-            tempDir.path,
-            'capture-${DateTime.now().microsecondsSinceEpoch}${photoUploadExtension(file.path)}',
-          ),
-        );
-        await file.copy(snapshot.path);
-        if (_signature(await file.stat()) != signature ||
-            await snapshot.length() != stat.size) {
-          _observations.remove(file.path);
-          continue;
-        }
-        await normalizePhotoSnapshot(snapshot);
-        try {
-          if (!await validateImage(snapshot)) throw StateError('照片无法解码');
-        } catch (_) {
-          throw StateError('照片无法解码');
-        }
-        final digest = (await sha256.bind(snapshot.openRead()).first)
-            .toString();
-        if (_signature(await file.stat()) != signature) {
-          _observations.remove(file.path);
-          continue;
-        }
-        var relative = p
-            .relative(file.path, from: _root!.path)
-            .split(p.separator)
-            .join('/');
-        if (p.extension(relative).toLowerCase() == '.mpo') {
-          relative = p.setExtension(relative, '.jpg');
-        }
-        final id = _hash('$relative\u0000$digest');
-        if (_jobs.containsKey(id)) {
-          _seen[file.path] = signature;
-          _observations.remove(file.path);
-          continue;
-        }
-        final stableSnapshot = await snapshot.rename(
-          p.join(tempDir.path, '$id${photoUploadExtension(file.path)}'),
-        );
-        snapshot = stableSnapshot;
-        final job = AutoJob(
-          id: id,
-          source: file.path,
-          relative: relative,
-          signature: signature,
-          digest: digest,
-          snapshot: snapshot.path,
-        );
-        // 复制文件的失败与日志写入失败分开处理，持久化失败必须中止。
-        await _append(job.toJson());
-        _jobs[id] = job;
-        _seen[file.path] = signature;
-        _observations.remove(file.path);
-        issues.remove(file.path);
-        snapshot = null;
-      } on FileSystemException {
-        issues[file.path] = '照片不可读取或磁盘写入失败，等待重试';
-      } on StateError catch (e) {
-        issues[file.path] = '${e.message}，等待重新检测';
-      } finally {
-        if (snapshot != null && await snapshot.exists()) {
-          await snapshot.delete();
+    if (_cos != null) {
+      await _scanInOrder(files);
+    } else {
+      for (final file in files) {
+        if (!running) break;
+        final stat = await file.stat();
+        if (stat.type == FileSystemEntityType.file &&
+            _observe(file.path, stat)) {
+          await _enqueue(file, stat);
         }
       }
     }
     _notify();
   }
 
+  bool _observe(String source, FileStat stat, {bool reserved = false}) {
+    final signature = _signature(stat);
+    if (!reserved &&
+        (_seen[source] == signature ||
+            (!_includeExisting && _ignored[source] == signature))) {
+      _observations.remove(source);
+      return false;
+    }
+    final observed = _observations[source];
+    if (observed == null || observed.signature != signature) {
+      _observations[source] = _Observation(signature, DateTime.now());
+      issues.remove(source);
+      return false;
+    }
+    return stat.size > 0 &&
+        DateTime.now().difference(observed.since) >= stableFor;
+  }
+
+  Future<void> _scanInOrder(List<File> files) async {
+    final reserved = _waiting.expand((group) => group).toSet();
+    final discovered = <String, String>{};
+    final ready = <String, FileStat>{};
+    final present = <String>{};
+    final listed = <String>{};
+    for (final file in files) {
+      if (!running) return;
+      final key = p.canonicalize(file.path);
+      listed.add(key);
+      final stat = await file.stat();
+      if (stat.type != FileSystemEntityType.file) continue;
+      present.add(file.path);
+      final isReserved = reserved.contains(file.path);
+      if (_observe(file.path, stat, reserved: isReserved)) {
+        ready[file.path] = stat;
+      }
+      if (!isReserved && _observations.containsKey(file.path)) {
+        discovered[key] = file.path;
+      }
+    }
+    final ordered = [
+      for (final key in _fileEvents)
+        if (discovered.containsKey(key)) discovered[key]!,
+    ];
+    _fileEvents.removeWhere(listed.contains);
+    if (discovered.isNotEmpty && running) {
+      final groups = discovered.length == ordered.length
+          ? ordered.map((source) => [source]).toList()
+          : [discovered.values.toList()];
+      await _append({'type': 'arrival', 'groups': groups});
+      _waiting.addAll(groups);
+    }
+    final confirmed = _confirmedSource;
+    _confirmedSource = null;
+    if (confirmed != null && sourcesNeedingOrder.contains(confirmed)) {
+      await _append({'type': 'nextSource', 'source': confirmed});
+      _prioritizeSource(confirmed);
+    }
+    while (running && _waiting.isNotEmpty && _waiting.first.length == 1) {
+      final source = _waiting.first.single;
+      if (!present.contains(source)) {
+        issues[source] = '文件不在监听目录，请将原片放回后继续上传';
+        break;
+      }
+      final stat = ready[source];
+      if (stat == null || !await _enqueue(File(source), stat)) break;
+    }
+  }
+
+  Future<bool> _enqueue(File file, FileStat stat) async {
+    final signature = _signature(stat);
+    File? snapshot;
+    try {
+      final tempDir = Directory(p.join(_journal!.file.parent.path, 'pending'));
+      await tempDir.create(recursive: true);
+      snapshot = File(
+        p.join(
+          tempDir.path,
+          'capture-${DateTime.now().microsecondsSinceEpoch}${photoUploadExtension(file.path)}',
+        ),
+      );
+      await file.copy(snapshot.path);
+      if (_signature(await file.stat()) != signature ||
+          await snapshot.length() != stat.size) {
+        _observations.remove(file.path);
+        return false;
+      }
+      await normalizePhotoSnapshot(snapshot);
+      try {
+        if (!await validateImage(snapshot)) throw StateError('照片无法解码');
+      } catch (_) {
+        throw StateError('照片无法解码');
+      }
+      final digest = (await sha256.bind(snapshot.openRead()).first).toString();
+      if (_signature(await file.stat()) != signature) {
+        _observations.remove(file.path);
+        return false;
+      }
+      var relative = p
+          .relative(file.path, from: _root!.path)
+          .split(p.separator)
+          .join('/');
+      if (p.extension(relative).toLowerCase() == '.mpo') {
+        relative = p.setExtension(relative, '.jpg');
+      }
+      final id = _hash('$relative\u0000$digest');
+      if (_jobs.containsKey(id)) {
+        if (_cos != null) {
+          await _append({
+            'type': 'resolvedSource',
+            'source': file.path,
+            'signature': signature,
+          });
+          _resolveSource(file.path);
+        }
+        _seen[file.path] = signature;
+        _observations.remove(file.path);
+        issues.remove(file.path);
+        return true;
+      }
+      final stableSnapshot = await snapshot.rename(
+        p.join(tempDir.path, '$id${photoUploadExtension(file.path)}'),
+      );
+      snapshot = stableSnapshot;
+      final job = AutoJob(
+        id: id,
+        source: file.path,
+        relative: relative,
+        signature: signature,
+        digest: digest,
+        snapshot: snapshot.path,
+      );
+      // 复制文件的失败与日志写入失败分开处理，持久化失败必须中止。
+      await _append(job.toJson());
+      _jobs[id] = job;
+      _resolveSource(file.path);
+      _seen[file.path] = signature;
+      _observations.remove(file.path);
+      issues.remove(file.path);
+      snapshot = null;
+      return true;
+    } on FileSystemException {
+      issues[file.path] = '照片不可读取或磁盘写入失败，等待重试';
+    } on StateError catch (e) {
+      issues[file.path] = '${e.message}，等待重新检测';
+    } finally {
+      if (snapshot != null && await snapshot.exists()) {
+        await snapshot.delete();
+      }
+    }
+    return false;
+  }
+
   Future<void> _pump() async {
     for (final job in _jobs.values.toList()) {
       if (!running) break;
+      if (_cos != null && job.state == 'accepted') {
+        await _refreshCosStatus(priority: job);
+        if (job.state == 'accepted' || job.state == 'failed') return;
+      }
+      if (_cos != null &&
+          (job.state == 'failed' ||
+              (job.state == 'pending' &&
+                  job.nextAttempt.isAfter(DateTime.now())))) {
+        break;
+      }
       if (job.state != 'pending' || job.nextAttempt.isAfter(DateTime.now())) {
         continue;
       }
@@ -512,6 +703,9 @@ class FolderUploader extends ChangeNotifier {
         await _removeSnapshot(job);
       }
       _notify();
+      if (_cos != null && job.state != 'ingested' && job.state != 'grouped') {
+        break;
+      }
     }
     if (_cos != null) await _refreshCosStatus();
   }
@@ -525,7 +719,7 @@ class FolderUploader extends ChangeNotifier {
     }
   }
 
-  Future<void> _refreshCosStatus() async {
+  Future<void> _refreshCosStatus({AutoJob? priority}) async {
     final due =
         _jobs.values
             .where(
@@ -534,10 +728,17 @@ class FolderUploader extends ChangeNotifier {
                   !job.nextAttempt.isAfter(DateTime.now()),
             )
             .toList()
-          ..sort((a, b) => a.nextAttempt.compareTo(b.nextAttempt));
+          ..sort((a, b) {
+            if (a == b) return 0;
+            if (a == priority) return -1;
+            if (b == priority) return 1;
+            return a.nextAttempt.compareTo(b.nextAttempt);
+          });
     for (final job in due.take(12)) {
       if (!running) break;
-      job.nextAttempt = DateTime.now().add(const Duration(seconds: 15));
+      job.nextAttempt = DateTime.now().add(
+        job.state == 'accepted' ? scanInterval : const Duration(seconds: 15),
+      );
       late final ({String status, String error}) result;
       try {
         result = await _cos!.status(job.id);

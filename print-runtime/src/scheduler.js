@@ -35,6 +35,8 @@ function createScheduler(options = {}) {
     pageSize: 20,
   };
   let jobPage = { list: [], total: 0, pageNum: 1, pageSize: 20 };
+  let printIssues = null;
+  let printIssuesError = '';
 
   const history = options.history;
   const onStateChange = typeof options.onStateChange === 'function' ? options.onStateChange : () => {};
@@ -52,6 +54,8 @@ function createScheduler(options = {}) {
       printBusy,
       listBusy,
       listError,
+      printIssues,
+      printIssuesError,
       busy: printBusy || listBusy,
       phase,
       jobQuery: { ...jobQuery },
@@ -74,7 +78,7 @@ function createScheduler(options = {}) {
     if (next.base !== config.base || next.token !== config.token) {
       listRequest += 1;
       listBusy = false;
-      jobQuery = { ...jobQuery, pageNum: 1 };
+      jobQuery = { ...jobQuery, pageNum: 1, ...(options.includePrintIssues ? { issuePage: 1 } : {}) };
       clearJobPage();
     }
     config = next;
@@ -113,9 +117,10 @@ function createScheduler(options = {}) {
     }
     next.pageNum = Math.max(1, Number(next.pageNum) || 1);
     next.pageSize = Math.min(100, Math.max(1, Number(next.pageSize) || 20));
+    if (options.includePrintIssues) next.issuePage = Math.max(1, Number(next.issuePage) || 1);
     next.createdFrom = next.createdFrom ? String(next.createdFrom) : '';
     next.createdTo = next.createdTo ? String(next.createdTo) : '';
-    const changed = Object.keys(jobQuery).some((key) => next[key] !== jobQuery[key]);
+    const changed = Object.keys(next).some((key) => next[key] !== jobQuery[key]);
     jobQuery = next;
     if (changed) clearJobPage();
     return refreshJobs();
@@ -124,6 +129,38 @@ function createScheduler(options = {}) {
   function clearJobPage() {
     jobPage = { list: [], total: 0, pageNum: jobQuery.pageNum, pageSize: jobQuery.pageSize };
     listError = '';
+    printIssues = null;
+    printIssuesError = '';
+  }
+
+  async function refreshPrintIssues(request, query) {
+    if (!options.includePrintIssues || query.printStatus !== 'UNPRINTED') return;
+    const pageSize = 10;
+    const params = { ...query, printStatus: 'EXCEPTIONS', pageSize, pageNum: query.issuePage || 1 };
+    try {
+      const signal = AbortSignal.timeout(10000);
+      const valid = (data) => Array.isArray(data?.list) && Number.isInteger(data.total)
+        && Number.isInteger(data.pageNum) && Number.isInteger(data.pageSize);
+      let data = await listJobs(config, params, signal);
+      if (request !== listRequest) return;
+      if (!valid(data)) throw new Error('打印异常列表响应不完整');
+      const lastPage = Math.max(1, Math.ceil(data.total / pageSize));
+      if (params.pageNum > lastPage) {
+        data = await listJobs(config, { ...params, pageNum: lastPage }, signal);
+        if (request !== listRequest) return;
+        jobQuery.issuePage = lastPage;
+      }
+      if (!valid(data)) {
+        throw new Error('打印异常列表响应不完整');
+      }
+      printIssues = data;
+      printIssuesError = '';
+    } catch (error) {
+      if (request !== listRequest) return;
+      printIssues = null;
+      printIssuesError = String(error.message || error).slice(0, 480);
+    }
+    emit();
   }
 
   async function refreshJobs() {
@@ -136,6 +173,7 @@ function createScheduler(options = {}) {
     listBusy = true;
     phase = printBusy ? 'printing' : 'listing';
     emit();
+    const issues = refreshPrintIssues(request, query);
     try {
       const data = await (generating ? listGenerating : listJobs)(config, query);
       if (request !== listRequest) return jobPage;
@@ -160,6 +198,7 @@ function createScheduler(options = {}) {
       emit();
       throw error;
     } finally {
+      await issues;
       if (request === listRequest) {
         listBusy = false;
         if (phase === 'listing') phase = printBusy ? 'printing' : 'idle';
@@ -251,7 +290,8 @@ function createScheduler(options = {}) {
     }
     if (printBusy) throw new Error('正在打印中，请稍候');
 
-    const byId = new Map((jobPage.list || []).map((row) => [String(row.id), row]));
+    const rows = mode === 'continue' ? [...jobPage.list, ...(printIssues?.list || [])] : jobPage.list;
+    const byId = new Map(rows.map((row) => [String(row.id), row]));
     for (const id of list) {
       const row = byId.get(id);
       const status = row && row.status ? String(row.status) : '';

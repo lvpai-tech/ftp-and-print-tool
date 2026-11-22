@@ -38,11 +38,5 @@ class WorkstationSession extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool canExit() {
-    if (transferActive || printBridge.busy) {
-      report('照片监听、上传或打印仍在进行。请先停止监听、完成当前任务后再退出。');
-      return false;
-    }
-    return true;
-  }
+  bool canExit() => !transferActive && !printBridge.busy;
 }

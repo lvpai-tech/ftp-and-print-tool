@@ -52,10 +52,39 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+# Use Microsoft's CPU NuGet package, pinned to the mobile runtime version.
+set(ORT_VERSION "1.28.0")
+set(ORT_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/onnxruntime-${ORT_VERSION}")
+set(ORT_ARCHIVE "${ORT_DIR}.zip")
+set(ORT_PACKAGE "microsoft.ml.onnxruntime/${ORT_VERSION}/microsoft.ml.onnxruntime.${ORT_VERSION}.nupkg")
+set(ORT_SHA512 "d97d83d031fa744cd67dab61e88deecc8b6c3c11b1a98951b0fcf73852bb4bd4df935d0c71674a19e80d8d3f0a98e02d9129e8df24c5f5ea38de60ef9fdb1a97")
+set(ONNXRUNTIME_INCLUDE_DIR "${ORT_DIR}/build/native/include")
+if(FLUTTER_TARGET_PLATFORM STREQUAL "windows-arm64")
+  set(ORT_NATIVE_DIR "${ORT_DIR}/runtimes/win-arm64/native")
+else()
+  set(ORT_NATIVE_DIR "${ORT_DIR}/runtimes/win-x64/native")
+endif()
+set(ONNXRUNTIME_LIBRARY "${ORT_NATIVE_DIR}/onnxruntime.lib")
+if(NOT EXISTS "${ONNXRUNTIME_LIBRARY}" OR
+   NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime_cxx_api.h" OR
+   NOT EXISTS "${ORT_NATIVE_DIR}/onnxruntime.dll")
+  file(MAKE_DIRECTORY "${ORT_DIR}")
+  file(DOWNLOAD "https://api.nuget.org/v3-flatcontainer/${ORT_PACKAGE}"
+    "${ORT_ARCHIVE}" EXPECTED_HASH "SHA512=${ORT_SHA512}" TLS_VERIFY ON TIMEOUT 300)
+  execute_process(COMMAND "${CMAKE_COMMAND}" -E tar xf "${ORT_ARCHIVE}"
+    WORKING_DIRECTORY "${ORT_DIR}" RESULT_VARIABLE ORT_EXTRACT_RESULT)
+  if(NOT ORT_EXTRACT_RESULT EQUAL 0 OR NOT EXISTS "${ONNXRUNTIME_LIBRARY}")
+    message(FATAL_ERROR "Could not extract the ONNX Runtime CPU package")
+  endif()
+endif()
+set(USE_SYSTEM_ONNXRUNTIME ON)
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)
+if(MSVC)
+  target_compile_options(flutter_onnxruntime_plugin PRIVATE /utf-8)
+endif()
 
 
 # === Installation ===
@@ -86,6 +115,11 @@ if(PLUGIN_BUNDLED_LIBRARIES)
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
 endif()
+install(FILES "${ORT_NATIVE_DIR}/onnxruntime.dll"
+  "${ORT_NATIVE_DIR}/onnxruntime_providers_shared.dll"
+  DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
+install(FILES "${ORT_DIR}/LICENSE" "${ORT_DIR}/ThirdPartyNotices.txt"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/onnxruntime" COMPONENT Runtime)
 
 # Copy the native assets provided by the hook/build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")

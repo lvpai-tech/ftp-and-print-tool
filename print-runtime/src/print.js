@@ -3,6 +3,7 @@
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { appRoot } = require('./paths');
+const { parseCupsJobId } = require('./mac-printer');
 
 /**
  * 按 item.kind 解析本机打印机名。缺映射且无兜底时抛错（整单 FAILED）。
@@ -37,7 +38,7 @@ function buildCommandArgs(config, item, file, printer) {
 }
 
 /**
- * 运行打印命令；退出码 0 为受理成功。stdout/stderr 仅截取末尾用于失败原因，不含图片内容。
+ * 运行打印命令；退出码 0 为受理成功。保留可用于逐张跟踪的 CUPS 作业 ID。
  */
 function runPrintCommand(config, item, file, printer) {
   const args = buildCommandArgs(config, item, file, printer);
@@ -47,8 +48,10 @@ function runPrintCommand(config, item, file, printer) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
+    let stdout = '';
     child.stdout.on('data', (chunk) => {
       output = (output + chunk).slice(-300);
+      stdout = (stdout + chunk).slice(-4096);
     });
     child.stderr.on('data', (chunk) => {
       output = (output + chunk).slice(-300);
@@ -57,7 +60,7 @@ function runPrintCommand(config, item, file, printer) {
       reject(new Error(`无法启动打印命令：${error.message}`));
     });
     child.on('close', (code) => {
-      if (code === 0) resolve({ printer, kind: item.kind });
+      if (code === 0) resolve({ printer, kind: item.kind, cupsJobId: parseCupsJobId(stdout, printer) });
       else reject(new Error(`打印命令退出码${code}：${output.trim()}`));
     });
   });

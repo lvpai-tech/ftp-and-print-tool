@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
@@ -11,6 +12,7 @@ import '../auto_upload/cos_upload.dart';
 import '../auto_upload/folder_access.dart';
 import '../auto_upload/folder_uploader.dart';
 import '../branding.dart';
+import 'card_tail_dialog.dart';
 import 'design.dart';
 
 class AutoUploadPanel extends StatefulWidget {
@@ -224,6 +226,24 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
       job.attempts == 0 ? '等待上传' : '等待自动重试（${job.attempts}/3） · ${job.error}',
   };
 
+  Future<void> _pickCardPhoto() async {
+    try {
+      final photo = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['jpg', 'jpeg', 'png', 'mpo'],
+      );
+      final path = photo.singleOrNull?.path;
+      if (path == null || !mounted) return;
+      await showCardTailDialog(
+        context,
+        readPhoto: File(path).readAsBytes,
+        guidance: '请根据候选尾号核对卡面。归集由服务端识别结束照。',
+      );
+    } catch (_) {
+      if (mounted) setState(() => _message = '无法选取照片，请检查文件访问权限');
+    }
+  }
+
   (Color, Color) _statusColors(AutoJob job) => switch (job.state) {
     'done' || 'grouped' => (WorkstationStyle.ok, WorkstationStyle.okSoft),
     'uploading' => (WorkstationStyle.accent, WorkstationStyle.accentSoft),
@@ -239,6 +259,8 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
         Platform.isLinux ||
         Platform.isIOS;
     final jobs = _uploader?.jobs ?? <AutoJob>[];
+    final orderWait = _uploader?.orderWaitMessage;
+    final unordered = _uploader?.sourcesNeedingOrder ?? const <String>[];
     final locked = _active || _working || _loading;
     final pending = jobs.where((j) => j.state == 'pending').length;
     final uploading = jobs.where((j) => j.state == 'uploading').length;
@@ -361,11 +383,19 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                     ),
                   ],
                   const SizedBox(height: 14),
-                  if (!supported)
+                  if (!supported) ...[
                     const Text(
                       '当前平台不支持自动目录模式。',
                       style: TextStyle(color: WorkstationStyle.bad),
                     ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        onPressed: _pickCardPhoto,
+                        child: const Text('从照片识别尾号'),
+                      ),
+                    ),
+                  ],
                   Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
@@ -382,7 +412,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
                             _Stat(
-                              label: '等待写入',
+                              label: '待准备',
                               value: '${_uploader?.settling ?? 0}',
                               color: WorkstationStyle.muted,
                             ),
@@ -397,7 +427,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                               color: WorkstationStyle.warn,
                             ),
                             _Stat(
-                              label: '成功',
+                              label: '已上传',
                               value: '$done',
                               color: WorkstationStyle.ok,
                             ),
@@ -485,6 +515,39 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                         fontSize: 12,
                       ),
                     ),
+                  if (orderWait != null)
+                    Text(
+                      orderWait,
+                      style: const TextStyle(
+                        color: WorkstationStyle.warn,
+                        fontSize: 12,
+                      ),
+                    ),
+                  if (unordered.isNotEmpty)
+                    OutlinedButton(
+                      onPressed: () async {
+                        final source = await showDialog<String>(
+                          context: context,
+                          builder: (context) => SimpleDialog(
+                            title: const Text('选择下一张上传的照片'),
+                            children: [
+                              for (final source in unordered)
+                                SimpleDialogOption(
+                                  onPressed: () =>
+                                      Navigator.pop(context, source),
+                                  child: Text(
+                                    p.relative(source, from: _folder),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        );
+                        if (mounted && source != null) {
+                          _uploader?.confirmNextSource(source);
+                        }
+                      },
+                      child: const Text('多张照片同时被发现，确认上传顺序'),
+                    ),
                   ...?_uploader?.issues.entries
                       .take(8)
                       .map(
@@ -542,6 +605,11 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                             status: _status(job),
                             color: colors.$1,
                             soft: colors.$2,
+                            onReview: () => showCardTailDialog(
+                              context,
+                              readPhoto: job.readPhotoForReview,
+                              guidance: '请根据候选尾号核对卡面。归集由服务端识别结束照。',
+                            ),
                           );
                         },
                       ),
@@ -549,7 +617,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                   ],
                   const SizedBox(height: 12),
                   const Text(
-                    'JPEG / PNG / MPO · 写入稳定且可解码后入队 · 最多自动尝试 3 次。停止后当前照片会完成上传；退出后不再监听。上传后不删除相机原图。',
+                    'JPEG / PNG / MPO · 按发现顺序排队，写入稳定且可解码后上传。前一张入库后继续，失败可重试。退出后保留队列和相机原图。',
                     style: TextStyle(
                       fontSize: 12,
                       color: WorkstationStyle.muted,
@@ -606,12 +674,14 @@ class _JobThumbRow extends StatelessWidget {
     required this.status,
     required this.color,
     required this.soft,
+    required this.onReview,
   });
 
   final AutoJob job;
   final String status;
   final Color color;
   final Color soft;
+  final VoidCallback onReview;
 
   @override
   Widget build(BuildContext context) {
@@ -661,6 +731,11 @@ class _JobThumbRow extends StatelessWidget {
               const SizedBox(width: 10),
               StatusTag(label: status, color: color, soft: soft),
             ],
+            IconButton(
+              tooltip: '识别取片卡尾号',
+              onPressed: onReview,
+              icon: const Icon(Icons.document_scanner_outlined),
+            ),
           ],
         ),
       ),

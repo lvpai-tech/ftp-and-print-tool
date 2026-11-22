@@ -2,6 +2,8 @@
 # 工作台出图：把图片交给 macOS 打印系统（CUPS）。
 # 退出码 0 才表示打印机已受理。版式沿用系统等比铺满，不假定纸张规格。
 set -u
+export LC_ALL=C
+export CUPS_SERVER=/private/var/run/cupsd
 
 File=""
 Printer=""
@@ -52,6 +54,7 @@ if [[ -n "$Printer" ]]; then
   lp_args=(-d "$Printer" "${lp_args[@]}")
 fi
 
+# 将 lp 的作业编号留在 stdout，供 Node 逐张跟踪。
 if ! /usr/bin/lp "${lp_args[@]}" "$File"; then
   echo "打印系统未受理：$Kind" >&2
   exit 1

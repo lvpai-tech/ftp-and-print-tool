@@ -1,8 +1,13 @@
+import 'dart:io';
+
 import 'package:material_ui/material_ui.dart';
+import 'package:path/path.dart' as p;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../branding.dart';
 import '../printing/app.dart';
 import '../workstation_session.dart';
+import 'app_dialogs.dart';
 import 'transfer_page.dart';
 import 'update_button.dart';
 import 'workstation_home.dart';
@@ -41,6 +46,37 @@ class _WorkstationShellState extends State<WorkstationShell> {
   void _open(WorkModule module) {
     FocusScope.of(context).unfocus();
     setState(() => _module = module);
+  }
+
+  Future<void> _showUninstallHelp() async {
+    final openFolder = await showAppConfirm(
+      context,
+      title: '卸载客户端',
+      message:
+          '当前为 ZIP 便携版。先打开程序文件夹，'
+          '等上传、打印完成并停止监听后，从托盘选择「退出客户端」。\n\n'
+          '退出后删除本客户端解压出来的程序文件。请保留收图文件夹和照片。',
+      action: '打开程序文件夹',
+    );
+    if (!openFolder || !mounted) return;
+
+    final folder = p.dirname(Platform.resolvedExecutable);
+    try {
+      if (await launchUrl(
+        p.toUri(folder),
+        mode: LaunchMode.externalApplication,
+      )) {
+        return;
+      }
+    } catch (_) {
+      // 系统拒绝打开时，提供可复制的原始路径。
+    }
+    if (!mounted) return;
+    await showAppMessage(
+      context,
+      title: '无法打开程序文件夹',
+      message: '请复制下面的路径，在文件资源管理器的地址栏中打开。\n\n$folder',
+    );
   }
 
   @override
@@ -105,7 +141,19 @@ class _WorkstationShellState extends State<WorkstationShell> {
                                 disabledForegroundColor: Colors.white54,
                               ),
                             ),
-                            child: const UpdateButton(),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const UpdateButton(),
+                                if (Platform.isWindows) ...[
+                                  const SizedBox(width: 8),
+                                  TextButton(
+                                    onPressed: _showUninstallHelp,
+                                    child: const Text('卸载客户端…'),
+                                  ),
+                                ],
+                              ],
+                            ),
                           )
                         else
                           const UpdateButton(),

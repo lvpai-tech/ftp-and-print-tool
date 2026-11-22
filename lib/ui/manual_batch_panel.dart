@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import '../auto_upload/folder_access.dart';
 import '../manual_batch/batch_workspace.dart';
 import '../transfer.dart';
+import 'card_tail_dialog.dart';
 import 'design.dart';
 
 /// 摄影师确认批次的桌面工作区；任何识别或监听操作都不会上传。
@@ -221,6 +222,17 @@ class _ManualBatchPanelState extends State<ManualBatchPanel> {
                     : '识别到卡片，请核对用途',
                 style: const TextStyle(fontSize: 12),
               ),
+              if (ending && photo.secret == null)
+                TextButton(
+                  onPressed: _locked
+                      ? null
+                      : () => showCardTailDialog(
+                          context,
+                          readPhoto: File(photo.snapshot).readAsBytes,
+                          guidance: '上传批次需要可读条形码，请换一张清晰结束照或补拍。',
+                        ),
+                  child: const Text('识别尾号'),
+                ),
               if (batch != null && batch.editable)
                 Wrap(
                   children: [

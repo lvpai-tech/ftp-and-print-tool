@@ -1,10 +1,14 @@
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/app.dart';
+import 'package:lvpai_ftp_client/desktop_lifecycle.dart';
 import 'package:lvpai_ftp_client/ui/transfer_page.dart';
 import 'package:lvpai_ftp_client/workstation_session.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:tray_manager/tray_manager.dart';
 
 import 'printing_workstation_test.dart' show ControlledBridge;
 
@@ -184,6 +188,145 @@ void main() {
     bridge.working = false;
     expect(session.canExit(), true);
   });
+
+  testWidgets('托盘退出受阻时唤起窗口，只弹一次，任务完成后可以重试', (tester) async {
+    final nativeCalls = <String>[];
+    final messenger = tester.binding.defaultBinaryMessenger;
+    const windowChannel = MethodChannel('window_manager');
+    const trayChannel = MethodChannel('tray_manager');
+    var minimized = true;
+    var trayDestroyFails = true;
+    messenger.setMockMethodCallHandler(windowChannel, (call) async {
+      nativeCalls.add('window:${call.method}');
+      if (call.method == 'isMinimized') return minimized;
+      if (call.method == 'restore') minimized = false;
+      return null;
+    });
+    messenger.setMockMethodCallHandler(trayChannel, (call) async {
+      nativeCalls.add('tray:${call.method}');
+      if (call.method == 'destroy' && trayDestroyFails) {
+        throw PlatformException(code: 'test', message: '托盘暂时无法关闭');
+      }
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(windowChannel, null);
+      messenger.setMockMethodCallHandler(trayChannel, null);
+    });
+
+    final bridge = WorkstationBridge();
+    final session = WorkstationSession(bridge);
+    final navigatorKey = GlobalKey<NavigatorState>();
+    final lifecycle = DesktopLifecycle(session, navigatorKey);
+    final exit = MenuItem(key: 'exit', label: '退出客户端');
+    await tester.pumpWidget(
+      PhotoFtpApp(session: session, navigatorKey: navigatorKey),
+    );
+    await tester.pumpAndSettle();
+
+    session.setTransferActive(true);
+    final blocked = lifecycle.onTrayMenuItemClick(exit);
+    await tester.pumpAndSettle();
+    expect(nativeCalls, [
+      'window:isMinimized',
+      'window:restore',
+      'window:show',
+      'window:focus',
+    ]);
+    final dialog = find.byType(AlertDialog);
+    expect(dialog, findsOneWidget);
+    expect(find.text('当前无法退出'), findsOneWidget);
+    expect(find.textContaining('等当前任务完成后再退出'), findsOneWidget);
+    expect(find.byType(MaterialBanner), findsNothing);
+
+    // 即使任务在弹窗打开时完成，也需要等用户关闭提示后再发起退出。
+    session.setTransferActive(false);
+    await lifecycle.onTrayMenuItemClick(exit);
+    await tester.pumpAndSettle();
+    expect(dialog, findsOneWidget);
+    expect(bridge.calls, isNot(contains('shutdown')));
+    expect(nativeCalls, isNot(contains('window:destroy')));
+
+    await tester.tap(find.text('知道了'));
+    await tester.pumpAndSettle();
+    await blocked;
+    expect(dialog, findsNothing);
+
+    final failed = lifecycle.onTrayMenuItemClick(exit);
+    await tester.pumpAndSettle();
+    expect(find.text('退出失败'), findsOneWidget);
+    expect(find.textContaining('托盘暂时无法关闭'), findsOneWidget);
+    expect(nativeCalls, isNot(contains('window:destroy')));
+    await tester.tap(find.text('知道了'));
+    await tester.pumpAndSettle();
+    await failed;
+
+    trayDestroyFails = false;
+    await lifecycle.onTrayMenuItemClick(exit);
+    expect(bridge.calls, contains('shutdown'));
+    expect(nativeCalls.sublist(nativeCalls.length - 2), [
+      'tray:destroy',
+      'window:destroy',
+    ]);
+  });
+
+  testWidgets('Windows 首页卸载入口在检查更新旁，确认后打开程序文件夹', (tester) async {
+    final messenger = tester.binding.defaultBinaryMessenger;
+    const launchChannel = MethodChannel('plugins.flutter.io/url_launcher');
+    final launched = <Uri>[];
+    var launchSucceeds = true;
+    messenger.setMockMethodCallHandler(launchChannel, (call) async {
+      expectSync(call.method, 'launch');
+      launched.add(Uri.parse(call.arguments['url'] as String));
+      return launchSucceeds;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(launchChannel, null);
+    });
+
+    final bridge = WorkstationBridge();
+    final session = WorkstationSession(bridge)..setTransferActive(true);
+    await tester.pumpWidget(PhotoFtpApp(session: session));
+    await tester.pumpAndSettle();
+
+    final uninstall = find.text('卸载客户端…');
+    final update = find.text('检查更新');
+    expect(uninstall, findsOneWidget);
+    expect(tester.getCenter(uninstall).dy, tester.getCenter(update).dy);
+    expect(
+      tester.getCenter(uninstall).dx,
+      greaterThan(tester.getCenter(update).dx),
+    );
+    await tester.tap(uninstall);
+    await tester.pumpAndSettle();
+    expect(find.text('卸载客户端'), findsOneWidget);
+    expect(find.textContaining('请保留收图文件夹和照片'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(launched, isEmpty);
+
+    await tester.tap(uninstall);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('打开程序文件夹'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    final folder = File(Platform.resolvedExecutable).parent.path;
+    expect(launched.map((uri) => uri.toFilePath()), [folder]);
+
+    launchSucceeds = false;
+    await tester.tap(uninstall);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('打开程序文件夹'));
+    await tester.pumpAndSettle();
+    expect(find.text('无法打开程序文件夹'), findsOneWidget);
+    expect(find.textContaining(folder), findsOneWidget);
+    await tester.tap(find.text('知道了'));
+    await tester.pumpAndSettle();
+    expect(session.transferActive, isTrue);
+    expect(bridge.calls, isNot(contains('shutdown')));
+    await open(tester, 'open-upload');
+    expect(uninstall, findsNothing);
+  }, skip: !Platform.isWindows);
 
   testWidgets('打印不可用时，上传仍能打开机位配置', (tester) async {
     final bridge = ControlledBridge()

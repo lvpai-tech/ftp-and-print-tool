@@ -126,6 +126,27 @@ void main() {
       await tester.pumpAndSettle();
       expect(profileSaved, isFalse);
       expect(work.batches.single.state, 'draft');
+
+      final setEnding = find.text('设为结束照');
+      await tester.ensureVisible(setEnding);
+      await tester.runAsync(() async {
+        await tester.tap(setEnding);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+      expect(work.batches.single.secret, isNull);
+      final upload = find.widgetWithText(FilledButton, '上传此批次');
+      expect(tester.widget<FilledButton>(upload).onPressed, isNull);
+      final review = find.text('识别尾号');
+      await tester.ensureVisible(review);
+      await tester.tap(review);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('识别取片卡尾号'), findsOneWidget);
+      await tester.tap(find.text('关闭'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(work.batches.single.secret, isNull);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       PaintingBinding.instance.imageCache.clear();

@@ -11,7 +11,10 @@ import sys
 import tempfile
 import zipfile
 
-APP = pathlib.Path(__file__).resolve().parents[1]
+from bundle_print_runtime import bundle, require_bundle
+
+# Keep a Windows subst drive in the path passed to Flutter and MSBuild.
+APP = pathlib.Path(__file__).absolute().parents[1]
 
 
 def run(*args):
@@ -25,6 +28,8 @@ def main():
                         choices=['windows-x64', 'macos-arm64', 'macos-x64'])
     parser.add_argument('--channel', required=True, choices=['local', 'test', 'prd'])
     parser.add_argument('--flutter', default='flutter')
+    parser.add_argument('--node', help='Windows: path to x64 Node executable (defaults to PATH)')
+    parser.add_argument('--node-license', help='Windows: path to the corresponding Node LICENSE')
     parser.add_argument('--app', type=pathlib.Path, help='Mac: signed release .app, matching current pubspec version')
     parser.add_argument('--notary-profile', help='Mac: existing notarytool Keychain profile, no credentials in repo')
     parser.add_argument('--sign-identity', help='Mac: Developer ID Application identity for signing the DMG')
@@ -59,12 +64,20 @@ def main():
             release = APP / 'build/windows/x64/runner/Release'
             if not (release / 'lvpai_ftp_client.exe').is_file():
                 raise RuntimeError('release EXE is missing')
+            runtime = staging / 'print-runtime'
+            bundle(runtime, args.node, args.node_license)
             with zipfile.ZipFile(package, 'w', zipfile.ZIP_DEFLATED) as archive:
                 for path in sorted(release.rglob('*')):
+                    relative = path.relative_to(release)
+                    if relative.parts[0].casefold() == 'print-runtime':
+                        continue
                     if path.is_symlink():
                         raise RuntimeError('unexpected symlink in Windows release')
                     if path.is_file() and path.suffix.lower() != '.pdb':
-                        archive.write(path, path.relative_to(release).as_posix())
+                        archive.write(path, relative.as_posix())
+                for path in sorted(runtime.rglob('*')):
+                    if path.is_file():
+                        archive.write(path, path.relative_to(staging).as_posix())
         else:
             if sys.platform != 'darwin' or not args.app or not args.notary_profile or not args.sign_identity:
                 parser.error('Mac requires macOS, --app, --notary-profile and --sign-identity')
@@ -80,8 +93,12 @@ def main():
                                        check=True, capture_output=True, text=True)
             if 'Authority=Developer ID Application:' not in signature.stderr or 'runtime' not in signature.stderr:
                 raise RuntimeError('app must have Developer ID Application signature and hardened runtime')
-            run('lipo', '-verify_arch', 'arm64' if args.platform == 'macos-arm64' else 'x86_64',
-                app / 'Contents/MacOS' / info['CFBundleExecutable'])
+            arch = 'arm64' if args.platform == 'macos-arm64' else 'x86_64'
+            runtime = app / 'Contents/Resources/print-runtime'
+            require_bundle(runtime, windows=False)
+            run('codesign', '--verify', '--strict', runtime / 'node')
+            run('lipo', '-verify_arch', arch, app / 'Contents/MacOS' / info['CFBundleExecutable'])
+            run('lipo', '-verify_arch', arch, runtime / 'node')
             content = staging / 'image'
             content.mkdir()
             shutil.copytree(app, content / app.name, symlinks=True)

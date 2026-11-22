@@ -1,0 +1,50 @@
+{
+  "base": "https://hilvpai.com/api/operation",
+  "token": "替换为管理端生成的景区打印密钥",
+  "scenicIds": [],
+  "scenicName": "",
+  "scenicCode": "",
+  "autoPrint": false,
+  "pollMs": 3000,
+  "idleBackoffMs": 12000,
+  "resultRetries": 5,
+  "statusHost": "127.0.0.1",
+  "statusPort": 17888,
+  "allowDefaultPrinter": false,
+  "defaultPrinter": "",
+  "printers": {
+    "COVER": "6寸打印机名",
+    "SIZE_6": "6寸打印机名",
+    "ORIGINAL": "6寸打印机名",
+    "CREATIVE": "6寸打印机名"
+  },
+  "command": [
+    "powershell",
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "{scriptDir}/print-image.ps1",
+    "-File",
+    "{file}",
+    "-Printer",
+    "{printer}",
+    "-Copies",
+    "{copies}",
+    "-Kind",
+    "{kind}"
+  ],
+  "statusCommand": [
+    "powershell",
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "{scriptDir}/printer-status.ps1",
+    "-Printer",
+    "{printer}"
+  ],
+  "printerSettleMs": 30000,
+  "printerWatchMaxMs": 600000,
+  "printerPollMs": 2000
+}

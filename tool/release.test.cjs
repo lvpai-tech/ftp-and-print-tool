@@ -26,7 +26,7 @@ test('download manifest shares version/platform/hash contract and refuses malici
 function bridge(api = {}, confirm = true) {
   const calls = [];
   const client = { getToken: () => 'controlled-test', ...api };
-  const window = { crypto: webcrypto, confirm: () => confirm,
+  const window = { crypto: webcrypto, OperationControls: { confirm: async () => confirm },
     LvpaiLiveCore: { isLiveEnabled: () => true, requireApi: () => client } };
   const context = vm.createContext({ window, document: { addEventListener() {} }, Uint8Array, console,
     setInterval: () => 1, clearInterval() {}, setTimeout() {}, fetch: async (url, options) => {

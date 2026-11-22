@@ -3,10 +3,11 @@
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { appRoot } = require('./paths');
+const { cancelMacJob } = require('./mac-printer');
 
 /**
  * 打印机就绪检查与送打后观察。
- * 打印命令退出码0只代表Windows假脱机已受理，缺纸、卡纸等由驱动稍后上报；
+ * 打印命令退出码0表示系统队列已受理，缺纸、卡纸等由驱动稍后上报；
  * 这里读取驱动状态拦截已知异常，但仍不能证明纸张真正出纸。
  */
 
@@ -42,6 +43,7 @@ const JOB_FAULTS = {
   Deleting: '已被取消',
   Deleted: '已被取消',
 };
+const CUPS_JOB_FAULTS = { ...PRINTER_FAULTS, ...JOB_FAULTS, Unconfirmed: '已转交设备，无法确认出纸' };
 
 /** 队列中单个打印作业的已结束状态。 */
 const JOB_DONE = new Set(['Complete', 'Printed']);
@@ -57,23 +59,25 @@ function describe(flags, table) {
   return flags.filter((flag) => table[flag]).map((flag) => table[flag]);
 }
 
-function buildStatusArgs(config, printer) {
+function buildStatusArgs(config, printer, jobId) {
   const scriptDir = config.scriptDir || path.join(appRoot(), 'scripts');
+  const values = { printer, scriptDir, node: process.execPath, jobId: String(jobId ?? '') };
   return config.statusCommand.map((part) =>
-    part.replace(/\{(printer|scriptDir)\}/g, (_, key) => (key === 'printer' ? printer : scriptDir)),
+    part.replace(/\{(printer|scriptDir|node|jobId)\}/g, (_, key) => values[key]),
   );
 }
 
 /**
  * 运行 statusCommand 读取打印机状态。命令失败或输出不是约定JSON时抛错，调用方按未就绪处理。
- * @returns {Promise<{printer:string, printerStatus:string, jobs:Array<{id:number, documentName:string, status:string, submittedAt:string}>}>}
+ * @returns {Promise<{printer:string, printerStatus:string, jobs:Array<{id:number, documentName:string, status:string, submittedAt?:string}>}>}
  */
-function probePrinter(config, printer) {
-  const args = buildStatusArgs(config, printer);
+function probePrinter(config, printer, jobId) {
+  const args = buildStatusArgs(config, printer, jobId);
   return new Promise((resolve, reject) => {
     const child = spawn(args[0], args.slice(1), {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+      signal: AbortSignal.timeout(15000),
     });
     let stdout = '';
     let stderr = '';
@@ -160,26 +164,29 @@ async function watchAfterSubmit(config, printers, sinceMs, options = {}) {
   const maxMs = config.printerWatchMaxMs;
   const pollMs = config.printerPollMs;
   const ignorePaperOut = Boolean(options.ignorePaperOut);
+  const exactJob = options.cupsJobId != null;
+  const jobFaults = exactJob ? CUPS_JOB_FAULTS : JOB_FAULTS;
   const startedAt = now();
   const settledSince = new Map();
   const pending = new Set(printers);
 
   while (pending.size) {
     for (const printer of [...pending]) {
-      const snapshot = await probePrinter(config, printer);
+      const snapshot = await probePrinter(config, printer, options.cupsJobId);
       const faults = printerFaults(snapshot);
-      const ours = snapshot.jobs.filter((job) =>
-        String(job.documentName || '').startsWith('lvpai-')
-          && Date.parse(job.submittedAt) >= sinceMs - 5000,
-      );
+      const ours = exactJob
+        ? snapshot.jobs.filter((job) => job.id === options.cupsJobId)
+        : snapshot.jobs.filter((job) =>
+          String(job.documentName || '').startsWith('lvpai-') && Date.parse(job.submittedAt) >= sinceMs - 5000);
       for (const job of ours) {
-        faults.push(...describe(splitFlags(job.status), JOB_FAULTS).map((text) => `作业${text}`));
+        faults.push(...describe(splitFlags(job.status), jobFaults).map((text) => `作业${text}`));
       }
       const blocking = filterPrinterFaults(faults, { ignorePaperOut });
       if (blocking.length) {
         throw new Error(`已送打印机后出现异常：${printer}（${[...new Set(blocking)].join('、')}）`);
       }
-      const jobsDone = ours.every((job) => splitFlags(job.status).some((flag) => JOB_DONE.has(flag)));
+      const jobsDone = (!exactJob || ours.length === 1)
+        && ours.every((job) => splitFlags(job.status).some((flag) => JOB_DONE.has(flag)));
       const busy = splitFlags(snapshot.printerStatus).some((flag) => PRINTER_BUSY.has(flag));
       if (!jobsDone || busy) {
         settledSince.delete(printer);
@@ -192,18 +199,23 @@ async function watchAfterSubmit(config, printers, sinceMs, options = {}) {
     }
     if (!pending.size) return;
     if (now() - startedAt >= maxMs) {
-      throw new Error(`等待打印机完成超时（${Math.round(maxMs / 1000)}秒）：${[...pending].join('、')}`);
+      const jobLabel = options.cupsJobId == null ? '' : `，CUPS 作业 ${options.cupsJobId}`;
+      throw new Error(`等待打印机完成超时（${Math.round(maxMs / 1000)}秒${jobLabel}）：${[...pending].join('、')}`);
     }
     await wait(pollMs);
   }
 }
 
 /**
- * 尽力取消本机队列中尚未结束的 lvpai-* 作业，避免补纸后驱动自动续打造成多打。
- * 无 statusCommand 或非 Windows 时为空操作；取消失败不抛给业务主路径。
+ * macOS 按 CUPS 作业 ID 取消，Windows 沿用 lvpai-* 过滤。
+ * 取消失败不覆盖送打后的原始异常。
  */
-async function cancelPendingLvpaiJobs(config, printer) {
+async function cancelPendingLvpaiJobs(config, printer, cupsJobId) {
   if (!printer || !Array.isArray(config.statusCommand)) return { cancelled: 0 };
+  if (cupsJobId != null) {
+    const cancelled = await cancelMacJob(printer, cupsJobId).catch(() => false);
+    return { cancelled: cancelled ? 1 : 0 };
+  }
   const platform = config.platform || process.platform;
   if (platform !== 'win32') return { cancelled: 0 };
   const safe = String(printer).replace(/'/g, "''");

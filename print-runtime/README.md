@@ -1,19 +1,11 @@
-# 随包打印内核
+# 桌面打印内核
 
-这份目录是 Flutter 客户端打包时使用的 Node 打印内核，对应父仓 `print-desktop` 的运行时子集。
+`src/flutter-bridge.cjs` 是 Flutter 的启动入口。它通过标准输入输出接收命令和返回状态，使用 Node 内置模块调用运营打印接口，并通过 `scripts/` 里的 Windows 或 macOS 命令出纸。Windows 使用 `printer-status.ps1` 读取打印机和队列状态。macOS 通过本机 CUPS 的 IPP 接口读取驱动上报的缺纸、卡纸及作业状态，根据 `lp` 返回的作业 ID 逐张观察。
 
-- `src/`：`flutter-bridge.cjs` 及打印调度、出纸、配置等脚本（仅 Node 内置模块）
-- `scripts/print-image-mac.sh` / `print-image.ps1`：本机出纸命令
-- `config.mac.example.json`：示例配置，不会自动加载
+Windows 默认从 EXE 旁加载 `print-runtime/`，macOS 还会查找 `.app/Contents/Resources/print-runtime/`。打包脚本从本目录读取源码、系统脚本和示例配置，并加入 Node 和许可证。景区密钥和打印机路由由应用保存在用户应用支持目录的 `printing/config.json`。
 
-开发时仍可用环境变量指向父仓：
+Windows 从源码联调打印页见[客户端开发说明](../README.md#windows-开发)。
 
-```sh
-export LVPAI_PRINT_RUNTIME=/path/to/creative-travel-shoot/print-desktop
-export LVPAI_PRINT_NODE=$(command -v node)
-```
+macOS 对应的命令为 `export LVPAI_PRINT_RUNTIME="$PWD/print-runtime"` 和 `export LVPAI_PRINT_NODE="$(command -v node)"`，然后运行 `flutter run -d macos`。
 
-发布包默认使用可执行文件旁或 `Contents/Resources/print-runtime`。  
-父仓 `print-desktop` 有行为变更时，把对应文件同步回这里后再构建。
-
-不要把 Node 二进制提交进 Git；macOS 个人包由 workflow / `tool/package_macos_personal.sh` 在构建时下载。
+使用 Node 22 从仓库根目录运行 `node --test 'print-runtime/test/*.test.cjs'`。测试使用受控本机服务与命令，实体出纸单独验收。打包方式见[发布手册](../RELEASING.md)。

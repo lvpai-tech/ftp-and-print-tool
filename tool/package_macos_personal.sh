@@ -18,11 +18,6 @@ if [[ ! -d "$APP_PATH" ]]; then
   echo "找不到应用：$APP_PATH" >&2
   exit 1
 fi
-if [[ ! -f "$ROOT/print-runtime/src/flutter-bridge.cjs" ]]; then
-  echo "缺少 print-runtime/src/flutter-bridge.cjs" >&2
-  exit 1
-fi
-
 ARCH="$(uname -m)"
 case "$ARCH" in
   arm64) NODE_ARCH=arm64 ;;
@@ -39,23 +34,14 @@ mkdir -p "$STAGE"
 ditto "$APP_PATH" "$STAGE/lvpai_ftp_client.app"
 APP="$STAGE/lvpai_ftp_client.app"
 RUNTIME="$APP/Contents/Resources/print-runtime"
-mkdir -p "$RUNTIME/scripts"
-ditto "$ROOT/print-runtime/src" "$RUNTIME/src"
-cp "$ROOT/print-runtime/scripts/print-image-mac.sh" "$RUNTIME/scripts/"
-chmod 755 "$RUNTIME/scripts/print-image-mac.sh"
-if [[ -f "$ROOT/print-runtime/config.mac.example.json" ]]; then
-  cp "$ROOT/print-runtime/config.mac.example.json" "$RUNTIME/"
-fi
-
 NODE_TGZ="$WORK/node.tar.gz"
 NODE_URL="https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-darwin-${NODE_ARCH}.tar.gz"
 echo "下载 Node ${NODE_VERSION} (${NODE_ARCH})…"
 curl -fsSL "$NODE_URL" -o "$NODE_TGZ"
 mkdir -p "$WORK/node"
 tar -xzf "$NODE_TGZ" -C "$WORK/node" --strip-components=1
-cp "$WORK/node/bin/node" "$RUNTIME/node"
-chmod 755 "$RUNTIME/node"
-"$RUNTIME/node" --check "$RUNTIME/src/flutter-bridge.cjs"
+python3 "$ROOT/tool/bundle_print_runtime.py" --destination "$RUNTIME" \
+  --node "$WORK/node/bin/node" --node-license "$WORK/node/LICENSE"
 
 # 个人包：临时签名，不带 App Sandbox，避免无开发证书时无法启动。
 find "$APP/Contents/Frameworks" -name '*.framework' -maxdepth 1 -print0 2>/dev/null \

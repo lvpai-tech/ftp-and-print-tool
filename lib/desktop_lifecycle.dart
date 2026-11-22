@@ -3,12 +3,17 @@ import 'package:material_ui/material_ui.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 import 'branding.dart';
+import 'ui/app_dialogs.dart';
 import 'workstation_session.dart';
+
+enum _ExitPhase { idle, shuttingDown, showingNotice }
 
 /// 一个托盘管理整个客户端；上传/监听/打印期间不能直接退出。
 class DesktopLifecycle with WindowListener, TrayListener {
-  DesktopLifecycle(this.session);
+  DesktopLifecycle(this.session, this.navigatorKey);
   final WorkstationSession session;
+  final GlobalKey<NavigatorState> navigatorKey;
+  _ExitPhase _exitPhase = _ExitPhase.idle;
 
   Future<void> initialize() async {
     await windowManager.ensureInitialized();
@@ -19,10 +24,7 @@ class DesktopLifecycle with WindowListener, TrayListener {
         title: workstationTitle,
         center: true,
       ),
-      () async {
-        await windowManager.show();
-        await windowManager.focus();
-      },
+      _showWindow,
     );
     windowManager.addListener(this);
     trayManager.addListener(this);
@@ -51,10 +53,7 @@ class DesktopLifecycle with WindowListener, TrayListener {
   }
 
   @override
-  void onTrayIconMouseDown() {
-    windowManager.show();
-    windowManager.focus();
-  }
+  Future<void> onTrayIconMouseDown() => _showWindow();
 
   @override
   void onTrayIconRightMouseDown() {
@@ -62,24 +61,56 @@ class DesktopLifecycle with WindowListener, TrayListener {
   }
 
   @override
-  void onTrayMenuItemClick(MenuItem menuItem) async {
+  Future<void> onTrayMenuItemClick(MenuItem menuItem) async {
     if (menuItem.key == 'show') {
-      onTrayIconMouseDown();
+      await _showWindow();
       return;
     }
-    if (menuItem.key == 'exit') {
+    if (menuItem.key != 'exit') return;
+    if (_exitPhase == _ExitPhase.showingNotice) {
+      await _showWindow();
+      return;
+    }
+    if (_exitPhase == _ExitPhase.shuttingDown) return;
+
+    try {
       if (!session.canExit()) {
-        onTrayIconMouseDown();
+        await _showExitNotice(
+          title: '当前无法退出',
+          message: '照片监听、上传或打印仍在进行。请停止监听，等当前任务完成后再退出。',
+        );
         return;
       }
+      _exitPhase = _ExitPhase.shuttingDown;
       try {
         await session.printBridge.shutdown();
         await trayManager.destroy();
         await windowManager.destroy();
       } catch (error) {
-        session.report('退出失败，请核对当前任务后重试：$error');
-        onTrayIconMouseDown();
+        await _showExitNotice(
+          title: '退出失败',
+          message: '请核对当前任务后重试。\n${appErrorMessage(error)}',
+        );
       }
+    } finally {
+      _exitPhase = _ExitPhase.idle;
+    }
+  }
+
+  Future<void> _showWindow() async {
+    await windowManager.show();
+    await windowManager.focus();
+  }
+
+  Future<void> _showExitNotice({
+    required String title,
+    required String message,
+  }) async {
+    _exitPhase = _ExitPhase.showingNotice;
+    await _showWindow();
+    final context = navigatorKey.currentContext;
+    if (context != null && context.mounted) {
+      await showAppMessage(context, title: title, message: message);
     }
   }
 }

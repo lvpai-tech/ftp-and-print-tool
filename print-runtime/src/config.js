@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { appRoot } = require('./paths');
+const { usesMacPrintScript } = require('./mac-printer');
 
 const ROOT = appRoot();
 const DEFAULT_CONFIG_PATH = path.join(ROOT, 'config.json');
@@ -78,13 +79,17 @@ function normalizePrinters(printers) {
   return out;
 }
 
-/** Windows 默认用 printer-status.ps1 读驱动状态；其它平台未接入，须显式配置或保持 null。 */
 const WINDOWS_STATUS_COMMAND = [
   'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
   '-File', '{scriptDir}/printer-status.ps1', '-Printer', '{printer}',
 ];
+const MAC_STATUS_COMMAND = ['{node}', '{scriptDir}/../src/mac-printer.js', '{printer}', '{jobId}'];
 
-function normalizeStatusCommand(value, platform) {
+function normalizeStatusCommand(value, platform, command) {
+  // 旧 macOS 档案由安装包写入 null，升级时为随包送打脚本启用状态检查。
+  if (value == null && platform === 'darwin' && usesMacPrintScript(command)) {
+    return MAC_STATUS_COMMAND.slice();
+  }
   if (value === undefined) return platform === 'win32' ? WINDOWS_STATUS_COMMAND.slice() : null;
   if (value === null) return null;
   if (!Array.isArray(value) || value.length === 0 || value.some((part) => typeof part !== 'string')) {
@@ -165,7 +170,7 @@ function normalizeConfig(raw, options = {}) {
     printers,
     command,
     /** 打印机状态命令；null 表示本机不检查缺纸等异常，打印命令受理即报已打印。 */
-    statusCommand: normalizeStatusCommand(raw.statusCommand, options.platform || process.platform),
+    statusCommand: normalizeStatusCommand(raw.statusCommand, options.platform || process.platform, command),
     /** 送打后本单作业结束且打印机连续无异常多久才报已打印（整单兜底）。 */
     printerSettleMs: asPositiveInt(raw.printerSettleMs, 30000, 'printerSettleMs'),
     /**
@@ -237,7 +242,7 @@ function resolveConfigPath(explicitPath, env = process.env, proc = process) {
 }
 
 /**
- * 加载配置：JSON 文件 + 环境变量覆盖。缺省读 print-desktop/config.json。
+ * 加载配置文件及环境变量覆盖。Flutter 通过 PRINT_AGENT_CONFIG 指定用户配置文件。
  */
 function loadConfig(options = {}) {
   const env = options.env || process.env;
@@ -270,6 +275,7 @@ function loadConfig(options = {}) {
   const merged = applyEnvOverrides(raw, env);
   return normalizeConfig(merged, {
     configPath,
+    platform: proc.platform,
     scriptDir: options.scriptDir || path.join(ROOT, 'scripts'),
     lockDir: options.lockDir || (support ? path.join(support, '.runtime') : undefined),
   });

@@ -9,6 +9,7 @@ import 'print_bridge.dart';
 import 'ui/date_time_range_field.dart';
 import 'ui/design.dart';
 import 'ui/job_thumbnails.dart';
+import 'ui/photo_batch_page.dart';
 import 'ui/preview_dialog.dart';
 import 'ui/settings_panel.dart';
 
@@ -38,10 +39,14 @@ class _WorkstationState extends State<Workstation> {
   String filter = 'UNPRINTED';
   final selected = <String>{};
   DateTimeRange? dates;
+  bool _showPrintIssues = false;
   @override
   void initState() {
     super.initState();
-    filter = bridge.state['jobQuery']?['printStatus'] as String? ?? filter;
+    final previous = bridge.state['jobQuery']?['printStatus'];
+    if (previous == _generatingFilter || previous == 'PRINTED') {
+      filter = previous as String;
+    }
     bridge.addListener(changed);
   }
 
@@ -89,13 +94,14 @@ class _WorkstationState extends State<Workstation> {
   Future<bool> confirm(String title, String message, String action) =>
       showAppConfirm(context, title: title, message: message, action: action);
 
-  Future<void> query({int number = 1}) async {
+  Future<void> query({int number = 1, int issuePage = 1}) async {
     selected.clear();
     await perform('queryJobs', [
       {
         'printStatus': filter,
         'pageNum': number,
         'pageSize': 20,
+        'issuePage': issuePage,
         'createdFrom': dates == null ? '' : shanghaiDateTime(dates!.start),
         'createdTo': dates == null ? '' : shanghaiDateTime(dates!.end),
       },
@@ -579,23 +585,12 @@ class _WorkstationState extends State<Workstation> {
             final table =
                 bounds.maxWidth >= 740 &&
                 MediaQuery.textScalerOf(context).scale(14) <= 17;
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                ConstrainedBox(
-                  constraints: const BoxConstraints(minHeight: 60),
-                  child: selected.isEmpty
-                      ? _queueToolbar(number)
-                      : _batchToolbar(
-                          jobs
-                              .where((job) => selected.contains('${job['id']}'))
-                              .toList(),
-                          selectAll: table ? null : _selectAll(ids),
-                        ),
-                ),
-                const Divider(height: 1, color: WorkstationStyle.line),
-                if (table && jobs.isNotEmpty)
-                  ColoredBox(
+            final hasPrintIssues =
+                filter == 'UNPRINTED' &&
+                (state['printIssuesError']?.toString().isNotEmpty == true ||
+                    (state['printIssues']?['total'] as num? ?? 0) > 0);
+            final header = table && jobs.isNotEmpty
+                ? ColoredBox(
                     color: WorkstationStyle.bg,
                     child: DefaultTextStyle.merge(
                       style: const TextStyle(
@@ -615,9 +610,65 @@ class _WorkstationState extends State<Workstation> {
                         action: generating ? null : const Text('操作'),
                       ),
                     ),
-                  ),
+                  )
+                : null;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 60),
+                  child: selected.isEmpty
+                      ? _queueToolbar(number)
+                      : _batchToolbar(
+                          jobs
+                              .where((job) => selected.contains('${job['id']}'))
+                              .toList(),
+                          selectAll: table ? null : _selectAll(ids),
+                        ),
+                ),
+                const Divider(height: 1, color: WorkstationStyle.line),
+                if (!hasPrintIssues && header != null) header,
                 Expanded(
-                  child: jobs.isEmpty
+                  child: hasPrintIssues
+                      ? CustomScrollView(
+                          key: PageStorageKey((
+                            filter,
+                            dates,
+                            number,
+                            bridge.config['activeScenicProfileId'],
+                          )),
+                          slivers: [
+                            SliverToBoxAdapter(
+                              child: _printIssues(state, number),
+                            ),
+                            if (header != null)
+                              SliverToBoxAdapter(child: header),
+                            if (jobs.isEmpty)
+                              SliverFillRemaining(
+                                hasScrollBody: false,
+                                child: Center(
+                                  child: Text(
+                                    _emptyQueueMessage(
+                                      false,
+                                      loading,
+                                      listError,
+                                    ),
+                                  ),
+                                ),
+                              )
+                            else
+                              SliverList.separated(
+                                itemCount: jobs.length,
+                                itemBuilder: (_, index) =>
+                                    _jobRow(jobs[index], table: table),
+                                separatorBuilder: (_, _) => const Divider(
+                                  height: 1,
+                                  color: WorkstationStyle.line,
+                                ),
+                              ),
+                          ],
+                        )
+                      : jobs.isEmpty
                       ? Center(
                           child: Text(
                             _emptyQueueMessage(generating, loading, listError),
@@ -702,9 +753,7 @@ class _WorkstationState extends State<Workstation> {
             for (final entry in const {
               'UNPRINTED': '待打印',
               _generatingFilter: '生成中',
-              'FAILED': '需处理',
               'PRINTED': '已打印',
-              'ALL': '全部任务',
             }.entries)
               Semantics(
                 selected: filter == entry.key,
@@ -752,11 +801,130 @@ class _WorkstationState extends State<Workstation> {
                 icon: const Icon(Icons.history, size: 18),
                 label: const Text('打印记录'),
               ),
+            FilledButton.icon(
+              onPressed: bridge.busy ? null : _openPhotoBatches,
+              icon: const Icon(Icons.view_timeline_outlined, size: 18),
+              label: const Text('照片批次矫正'),
+            ),
           ],
         ),
       ],
     ),
   );
+
+  Future<void> _openPhotoBatches() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) =>
+            PhotoBatchPage(call: bridge.call, scenicName: scenicLabel),
+      ),
+    );
+    if (mounted && bridge.configured && !bridge.busy) await query();
+  }
+
+  Widget _printIssues(Json state, int queuePage) {
+    final page = state['printIssues'] as Map?;
+    final error = state['printIssuesError'] as String? ?? '';
+    final total = (page?['total'] as num?)?.toInt() ?? 0;
+    final number = (page?['pageNum'] as num?)?.toInt() ?? 1;
+    final size = (page?['pageSize'] as num?)?.toInt() ?? 10;
+    final jobs = (page?['list'] as List? ?? []).map(
+      (row) => Map<String, dynamic>.from(row as Map),
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextButton(
+            style: _queueButtonStyle(
+              foreground: WorkstationStyle.warn,
+              background: WorkstationStyle.warnSoft,
+            ),
+            onPressed: error.isNotEmpty
+                ? (bridge.busy ? null : () => query(number: queuePage))
+                : () => setState(() => _showPrintIssues = !_showPrintIssues),
+            child: Row(
+              children: [
+                const Icon(Icons.warning_amber_outlined, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    error.isNotEmpty ? '打印异常列表加载失败，点击重试' : '$total 单打印异常',
+                  ),
+                ),
+                if (error.isEmpty) Text(_showPrintIssues ? '收起' : '查看'),
+              ],
+            ),
+          ),
+          if (error.isEmpty && _showPrintIssues) ...[
+            for (final job in jobs)
+              ListTile(
+                title: Text('${job['cardTail'] ?? '取片卡'} · #${job['id']}'),
+                subtitle: Text(
+                  [
+                    if (job['status'] == 'UNKNOWN') '打印结果待核对',
+                    if (job['errorReason'] case final String reason
+                        when reason.isNotEmpty)
+                      reason,
+                    if ((job['completedSheets'] as num? ?? 0) > 0)
+                      '已出纸 ${job['completedSheets']} / ${job['totalSheets'] ?? '待核对'} 张',
+                  ].join(' · '),
+                ),
+                trailing: _issueAction(job),
+              ),
+            if (total > size)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  IconButton(
+                    tooltip: '上一页打印异常',
+                    onPressed: number > 1 && !bridge.busy
+                        ? () => query(number: queuePage, issuePage: number - 1)
+                        : null,
+                    icon: const Icon(Icons.chevron_left),
+                  ),
+                  Text('第 $number 页'),
+                  IconButton(
+                    tooltip: '下一页打印异常',
+                    onPressed: number * size < total && !bridge.busy
+                        ? () => query(number: queuePage, issuePage: number + 1)
+                        : null,
+                    icon: const Icon(Icons.chevron_right),
+                  ),
+                ],
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _issueAction(Json job) {
+    final id = '${job['id']}';
+    final resume = _JobAction.resume.supports(job);
+    if (!resume && job['status'] != 'UNKNOWN') return _rowAction(job, id);
+    final action = resume ? _JobAction.resume : _JobAction.confirm;
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        TextButton(
+          onPressed: bridge.busy ? null : () => _applyJobAction(action, [id]),
+          child: Text(resume ? '继续打印' : action.label),
+        ),
+        if (resume)
+          PopupMenuButton<_JobAction>(
+            enabled: !bridge.busy,
+            tooltip: '更多异常操作',
+            onSelected: (action) => _applyJobAction(action, [id]),
+            itemBuilder: (_) => [
+              for (final action in [_JobAction.confirm, _JobAction.reset])
+                PopupMenuItem(value: action, child: Text(action.label)),
+            ],
+          ),
+      ],
+    );
+  }
 
   void _openLogs() => showDialog<void>(
     context: context,
@@ -1004,8 +1172,12 @@ class _WorkstationState extends State<Workstation> {
     final isSelected = selected.contains(id);
     void openPreview() => showDialog<void>(
       context: context,
-      builder: (_) =>
-          PreviewDialog(bridge: bridge, jobId: id, perform: perform),
+      builder: (_) => PreviewDialog(
+        bridge: bridge,
+        jobId: id,
+        cardTail: tail,
+        perform: perform,
+      ),
     );
 
     final checkbox = Tooltip(

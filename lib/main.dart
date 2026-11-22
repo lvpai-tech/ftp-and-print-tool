@@ -15,9 +15,10 @@ Future<void> main() async {
   }
   final bridge = PrintBridge();
   final session = WorkstationSession(bridge);
-  runApp(PhotoFtpApp(session: session));
+  final navigatorKey = GlobalKey<NavigatorState>();
+  runApp(PhotoFtpApp(session: session, navigatorKey: navigatorKey));
   try {
-    await DesktopLifecycle(session).initialize();
+    await DesktopLifecycle(session, navigatorKey).initialize();
   } catch (error) {
     session.report('桌面托盘或窗口初始化失败：$error');
   }

@@ -293,10 +293,16 @@ void main() {
     expect(find.text('继续剩余'), findsNothing);
     await tester.tap(find.text('取消选择'));
     await tester.pumpAndSettle();
-    expect(find.text('全部任务'), findsOneWidget);
+    expect(find.text('待打印'), findsWidgets);
+    expect(find.text('生成中'), findsOneWidget);
+    expect(find.text('已打印'), findsOneWidget);
+    expect(find.text('全部任务'), findsNothing);
+    expect(find.text('需处理'), findsNothing);
     await tester.tap(find.byTooltip('查看照片'));
     await tester.pumpAndSettle();
-    expect(find.text('工单 #9007199254740993 · 打印预览'), findsOneWidget);
+    expect(find.textContaining('取片码'), findsOneWidget);
+    expect(find.textContaining('4987'), findsWidgets);
+    expect(find.textContaining('打印预览'), findsOneWidget);
     expect(bridge.arguments['previewJob'], ['9007199254740993']);
     expect(bridge.calls, isNot(contains('printJobs')));
   });

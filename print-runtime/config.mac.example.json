@@ -30,5 +30,5 @@
     "-Kind",
     "{kind}"
   ],
-  "statusCommand": null
+  "statusCommand": ["{node}", "{scriptDir}/../src/mac-printer.js", "{printer}", "{jobId}"]
 }

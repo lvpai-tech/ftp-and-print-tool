@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
-const root = path.resolve(__dirname, '../..');
+const root = path.resolve(__dirname, '..');
 const directory = path.join(root, '.local/print-flutter/native-smoke');
 fs.mkdirSync(directory, { recursive: true });
 const requests = [];
@@ -28,14 +28,16 @@ const server = http.createServer((req, res) => {
 });
 server.listen(0, '127.0.0.1', () => {
   const configPath = path.join(directory, 'config.json');
-  const config = JSON.parse(fs.readFileSync(path.join(root, 'print-desktop/config.example.json'), 'utf8'));
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'print-runtime/config.example.json'), 'utf8'));
   Object.assign(config, { base: `http://127.0.0.1:${server.address().port}`, token: 'isolated-native-smoke',
     autoPrint: false, scenicName: '隔离自动化测试 · 非业务数据', scenicIds: ['1'], printers: {} });
   fs.writeFileSync(configPath, JSON.stringify(config));
-  const exe = path.join(root, 'ftp-client/build/windows/x64/runner/Release/lvpai_ftp_client.exe');
+  const exe = path.join(root, 'build/windows/x64/runner/Release/lvpai_ftp_client.exe');
+  const runtime = path.join(path.dirname(exe), 'print-runtime');
   const log = fs.openSync(path.join(directory, 'desktop.log'), 'w');
   const child = spawn(exe, [], { env: { ...process.env, PRINT_AGENT_CONFIG: configPath,
-    PRINT_AGENT_BASE: config.base }, stdio: ['ignore', log, log], windowsHide: true });
+    PRINT_AGENT_BASE: config.base, LVPAI_PRINT_RUNTIME: runtime,
+    LVPAI_PRINT_NODE: path.join(runtime, 'node.exe') }, stdio: ['ignore', log, log], windowsHide: true });
   fs.closeSync(log);
   fs.writeFileSync(path.join(directory, 'process.json'), JSON.stringify({ pid: child.pid, exe }));
   console.log(`只读验收窗口 PID ${child.pid}`);

@@ -31,7 +31,7 @@ iOS 清单用 `storeUrl` 替代文件地址、大小及校验值，不通过本�
 
 ## Windows 本地打包
 
-需要 Python 3.11+、Flutter 和 Windows C++ 工具链，在 `ftp-client` 目录执行：
+需要 Python 3.11+、Flutter、Windows C++ 工具链和 x64 Node 20 或更高版本（CI 使用 Node 22），在 Flutter 仓库根目录执行：
 
 ```powershell
 $env:PUB_HOSTED_URL='https://pub.flutter-io.cn'
@@ -39,11 +39,12 @@ $env:FLUTTER_STORAGE_BASE_URL='https://storage.flutter-io.cn'
 flutter pub get --enforce-lockfile
 flutter analyze
 flutter test
-python tool/package_release.py --platform windows-x64 --channel test --flutter ../.local/flutter-sdk/bin/flutter.bat
+python tool/package_release.py --platform windows-x64 --channel test
 ```
 
-独立开发时把 `--flutter` 改为本机 Flutter 可执行文件路径或省略以使用 PATH。
-脚本重新构建指定通道，将 EXE、DLL、data 一起压缩，排除 PDB，输出到 `build/releases/test/windows-x64/`。
+也可通过 `--flutter`、`--node` 指定本机工具。Node 发行包若将 `LICENSE` 放在其它目录，使用 `--node-license` 指定该版本的许可证。
+脚本重新构建指定通道，打包 EXE、DLL、data 和从本仓生成的 `print-runtime`，排除 PDB，输出到 `build/releases/test/windows-x64/`。
+若 MSBuild 报路径过长，从较短的源码路径构建。使用 `subst` 时，将项目放在映射盘的子目录。
 `release-info.json` 仅用于核对管理表单，不是已经发布的线上清单。同版本输出已存在时脚本明确失败，
 应提升版本号，或先明确归档自己的旧产物，避免误覆盖。
 
@@ -65,7 +66,7 @@ workflow 文件进入默认分支后，在 GitHub Actions 里选择对应的构�
 | --- | --- | --- |
 | `Build Android APK` | `lvpai-ftp-android-debug.apk` | Android 调试签名包，可安装测试手动上传 |
 | `Build iOS` | `lvpai-ftp-ios-unsigned.zip` | iPhone/iPad 设备 Release 构建，内含未签名 `Runner.app`，真机安装需另行签名 |
-| `Build Windows` | `lvpai-ftp-<版本>-<构建号>-windows-x64.zip` | 未签名的完整 x64 Release，SHA-256 见随包的 `release-info.json` |
+| `Build Windows` | `lvpai-ftp-<版本>-<构建号>-windows-x64.zip` | 未签名的完整 x64 Release，含 Node 打印内核；SHA-256 见随包的 `release-info.json` |
 | `Build macOS` | `lvpai-ftp-macos-personal.zip` | 个人跨机包：临时签名 `.app` + 随包打印内核 +「打开旅派客户端.command」；其他 Mac 首次需右键打开。不是公证正式包 |
 
 正式 iOS 分发沿用下文的 Xcode、App Store Connect 和 TestFlight 流程。
@@ -74,9 +75,18 @@ workflow 文件进入默认分支后，在 GitHub Actions 里选择对应的构�
 
 先按 [APPLE_TESTING.md](APPLE_TESTING.md) 配置 Xcode、依赖及应用标识，完成目录授权与 FTP 实测。
 在对应架构 Mac 上执行 `flutter build macos --release --dart-define=LVPAI_UPDATE_ENV=test`。
+在最终构建完成后，把与应用同架构的 Node 和打印内核加入 `.app`，再签名。
+
+```sh
+python3 tool/bundle_print_runtime.py \
+  --destination 'build/macos/Build/Products/Release/lvpai_ftp_client.app/Contents/Resources/print-runtime' \
+  --node '/absolute/path/to/node/bin/node' \
+  --node-license '/absolute/path/to/node/LICENSE'
+```
+
 用 Xcode 配置所属 Team、唯一 Bundle ID、Developer ID Application、Hardened Runtime 和必要 entitlements，
-对 Release `.app` 及嵌套 Framework/插件完成签名；保留网络客户端、用户选择目录只读及书签权限。
-如 Xcode 重新构建，须同时保留相同 Flutter 通道配置。签名后执行：
+签署 `print-runtime/node`、嵌套 Framework 和插件，再签署外层 `.app`。保留网络客户端、用户选择目录只读及书签权限。
+如 Xcode 重新构建，须保留相同 Flutter 通道配置并重新加入打印内核。签名后执行：
 
 ```sh
 python3 tool/package_release.py --platform macos-arm64 --channel test \
@@ -86,7 +96,7 @@ python3 tool/package_release.py --platform macos-arm64 --channel test \
 ```
 
 Intel 包用 `--platform macos-x64`，不把同一架构包冒充另一架构。
-`--app` 必须是当前版本、当前通道的已签名 Release；脚本检查版本、签名、runtime 和目标 CPU，
+`--app` 必须是当前版本、当前通道的已签名 Release；脚本检查版本、签名、Hardened Runtime、打印内核文件和目标 CPU，
 但无法从二进制独立核验 Dart 编译通道，因此构建者必须核对构建记录。
 脚本创建含 Applications 快捷方式的 DMG，签署 DMG，提交 Apple 公证、staple 并运行 Gatekeeper 检查，
 任一步失败均不生成最终发布文件。公证凭据只存系统钥匙串，不提交到仓库。

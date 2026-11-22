@@ -1,0 +1,327 @@
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const http = require('node:http');
+const os = require('node:os');
+const path = require('node:path');
+const { normalizeConfig } = require('../src/config');
+const { runOnce } = require('../src/agent');
+const { resolvePrinter } = require('../src/print');
+
+function startServer(handler) {
+  return new Promise((resolve) => {
+    const server = http.createServer(handler);
+    server.listen(0, '127.0.0.1', () =>
+      resolve({ server, origin: `http://127.0.0.1:${server.address().port}` }),
+    );
+  });
+}
+
+function json(response, data) {
+  response.setHeader('Content-Type', 'application/json');
+  response.end(JSON.stringify({ code: 200, message: 'success', data }));
+}
+
+async function body(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
+}
+
+function makeConfig(origin, directory, script, extra = {}) {
+  return normalizeConfig(
+    {
+      base: `${origin}/api/operation`,
+      token: 'isolated-print-desktop-token',
+      scenicIds: ['1'],
+      resultRetries: 2,
+      allowDefaultPrinter: false,
+      defaultPrinter: '',
+      // 显式关，避免本机 PRINT_DESKTOP_SKIP_PRINT 污染「真走命令」断言
+      skipPrint: false,
+      printers: {
+        SIZE_6: '打印机-6寸',
+        ORIGINAL: '打印机-原片',
+        CREATIVE: '打印机-创意',
+      },
+      command: [process.execPath, script, directory, '{kind}', '{copies}', '{printer}', '{file}'],
+      // 默认不读本机打印机状态；缺纸检查由下方专门用例的假状态脚本覆盖
+      statusCommand: null,
+      ...extra,
+    },
+    { configPath: path.join(directory, 'config.json'), scriptDir: directory },
+  );
+}
+
+test('领取→下载→多 kind 路由到不同打印机→PRINTED', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'print-desktop-'));
+  const script = path.join(directory, 'fake-print.cjs');
+  fs.writeFileSync(
+    script,
+    `const fs=require('node:fs');const [dir,kind,copies,printer,file]=process.argv.slice(2);
+fs.appendFileSync(dir+'/printed.log',[kind,copies,printer,fs.statSync(file).size].join(',')+'\\n');`,
+  );
+  const results = [];
+  const { server, origin } = await startServer(async (request, response) => {
+    assert.equal(request.headers['x-print-agent-token'], 'isolated-print-desktop-token');
+    if (request.url === '/api/operation/print-agents/jobs/claim') {
+      assert.deepEqual(await body(request), { scenicIds: ['1'] });
+      return json(response, {
+        id: '101',
+        items: [
+          { kind: 'SIZE_6', copies: 2, label: '6寸', fileUrl: '/print-agents/jobs/101/files/PHOTO/1' },
+          { kind: 'ORIGINAL', copies: 1, label: '原片', fileUrl: '/print-agents/jobs/101/files/PHOTO/2' },
+          { kind: 'CREATIVE', copies: 1, label: '创意', fileUrl: '/print-agents/jobs/101/files/PHOTO/3' },
+        ],
+      });
+    }
+    if (request.url.includes('/files/')) {
+      response.setHeader('Content-Type', 'image/jpeg');
+      return response.end(Buffer.from('fake-jpeg-bytes'));
+    }
+    const match = request.url.match(/\/jobs\/(\d+)\/result$/);
+    results.push({ id: match[1], ...(await body(request)) });
+    return json(response, { id: match[1] });
+  });
+  try {
+    const config = makeConfig(origin, directory, script);
+    const result = await runOnce(config);
+    assert.equal(result.state, 'PRINTED');
+    assert.equal(result.jobId, '101');
+    assert.match(result.printer, /SIZE_6=打印机-6寸/);
+    assert.match(result.printer, /ORIGINAL=打印机-原片/);
+    assert.match(result.printer, /CREATIVE=打印机-创意/);
+    assert.equal(results.length, 1);
+    assert.equal(results[0].status, 'PRINTED');
+    assert.equal(
+      fs.readFileSync(path.join(directory, 'printed.log'), 'utf8'),
+      'SIZE_6,1,打印机-6寸,15\nSIZE_6,1,打印机-6寸,15\nORIGINAL,1,打印机-原片,15\nCREATIVE,1,打印机-创意,15\n',
+    );
+    assert.equal(results[0].completedSheets, 4);
+  } finally {
+    server.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('某 kind 命令失败→整单 FAILED', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'print-desktop-'));
+  const script = path.join(directory, 'fail-print.cjs');
+  // argv: node script dir kind copies printer file → kind is argv[3]
+  fs.writeFileSync(
+    script,
+    `const kind=process.argv[3];
+if (kind === 'SIZE_6') { console.error('缺纸'); process.exit(3); }
+process.exit(0);`,
+  );
+  const results = [];
+  const { server, origin } = await startServer(async (request, response) => {
+    if (request.url.endsWith('/claim')) {
+      return json(response, {
+        id: '102',
+        items: [
+          { kind: 'SIZE_6', copies: 1, label: '6寸', fileUrl: '/print-agents/jobs/102/files/PHOTO/1' },
+          { kind: 'ORIGINAL', copies: 1, label: '原片', fileUrl: '/print-agents/jobs/102/files/PHOTO/2' },
+        ],
+      });
+    }
+    if (request.url.includes('/files/')) return response.end(Buffer.from('x'));
+    results.push(await body(request));
+    return json(response, { id: '102' });
+  });
+  try {
+    const failed = await runOnce(makeConfig(origin, directory, script));
+    assert.equal(failed.state, 'FAILED');
+    assert.match(failed.reason, /退出码3：缺纸/);
+    assert.equal(results[0].status, 'FAILED');
+    assert.match(results[0].reason, /缺纸/);
+  } finally {
+    server.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('回写持续失败不自重打（claim 仅 1 次）', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'print-desktop-'));
+  const script = path.join(directory, 'ok.cjs');
+  fs.writeFileSync(script, 'process.exit(0);');
+  let claims = 0;
+  const { server, origin } = await startServer(async (request, response) => {
+    if (request.url.endsWith('/claim')) {
+      claims += 1;
+      return json(response, {
+        id: '201',
+        items: [
+          {
+            kind: 'ORIGINAL',
+            copies: 1,
+            label: '原片',
+            fileUrl: '/print-agents/jobs/201/files/PHOTO/1',
+          },
+        ],
+      });
+    }
+    if (request.url.includes('/files/')) return response.end(Buffer.from('x'));
+    response.statusCode = 503;
+    return response.end('{}');
+  });
+  try {
+    await assert.rejects(runOnce(makeConfig(origin, directory, script)), /result 失败|失败/);
+    assert.equal(claims, 1);
+  } finally {
+    server.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('缺映射且无兜底→FAILED', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'print-desktop-'));
+  const script = path.join(directory, 'ok.cjs');
+  fs.writeFileSync(script, 'process.exit(0);');
+  const results = [];
+  const { server, origin } = await startServer(async (request, response) => {
+    if (request.url.endsWith('/claim')) {
+      return json(response, {
+        id: '301',
+        items: [
+          { kind: 'CREATIVE', copies: 1, label: '创意', fileUrl: '/print-agents/jobs/301/files/PHOTO/1' },
+        ],
+      });
+    }
+    if (request.url.includes('/files/')) return response.end(Buffer.from('x'));
+    results.push(await body(request));
+    return json(response, { id: '301' });
+  });
+  try {
+    const config = makeConfig(origin, directory, script, {
+      printers: { SIZE_6: '仅6寸' },
+      allowDefaultPrinter: false,
+    });
+    assert.throws(() => resolvePrinter(config, 'CREATIVE'), /缺少打印机映射：CREATIVE/);
+    assert.equal(resolvePrinter(config, 'COVER'), '仅6寸');
+    const failed = await runOnce(config);
+    assert.equal(failed.state, 'FAILED');
+    assert.match(failed.reason, /缺少打印机映射：CREATIVE/);
+    assert.equal(results[0].status, 'FAILED');
+  } finally {
+    server.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('双实例并发 claim：服务端只发一单，客户端不本地复制任务', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'print-desktop-'));
+  const script = path.join(directory, 'ok.cjs');
+  fs.writeFileSync(script, 'process.exit(0);');
+  let claims = 0;
+  let issued = false;
+  const results = [];
+  const { server, origin } = await startServer(async (request, response) => {
+    if (request.url.endsWith('/claim')) {
+      claims += 1;
+      await body(request);
+      if (issued) return json(response, null);
+      issued = true;
+      return json(response, {
+        id: '401',
+        items: [
+          {
+            kind: 'SIZE_6',
+            copies: 1,
+            label: '6寸',
+            fileUrl: '/print-agents/jobs/401/files/PHOTO/1',
+          },
+        ],
+      });
+    }
+    if (request.url.includes('/files/')) return response.end(Buffer.from('img'));
+    results.push(await body(request));
+    return json(response, { id: '401' });
+  });
+  try {
+    const config = makeConfig(origin, directory, script);
+    const [a, b] = await Promise.all([runOnce(config), runOnce(config)]);
+    const states = [a.state, b.state].sort();
+    assert.deepEqual(states, ['IDLE', 'PRINTED']);
+    assert.equal(claims, 2);
+    assert.equal(results.length, 1);
+    assert.equal(results[0].status, 'PRINTED');
+  } finally {
+    server.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('非 PHOTOS target → FAILED 且不调用打印命令', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'print-desktop-'));
+  const script = path.join(directory, 'ok.cjs');
+  fs.writeFileSync(
+    script,
+    `require('node:fs').appendFileSync(require('node:path').join(process.argv[2],'printed.log'),'should-not\\n');`,
+  );
+  const results = [];
+  const { server, origin } = await startServer(async (request, response) => {
+    if (request.url.endsWith('/claim')) {
+      return json(response, {
+        id: '501',
+        target: 'RECEIPT',
+        items: [
+          { kind: 'SIZE_6', copies: 1, label: '小票', fileUrl: '/print-agents/jobs/501/files/PHOTO/1' },
+        ],
+      });
+    }
+    if (request.url.includes('/files/')) return response.end(Buffer.from('x'));
+    results.push(await body(request));
+    return json(response, { id: '501' });
+  });
+  try {
+    const failed = await runOnce(makeConfig(origin, directory, script));
+    assert.equal(failed.state, 'FAILED');
+    assert.match(failed.reason, /拒绝非PHOTOS任务：RECEIPT/);
+    assert.equal(results[0].status, 'FAILED');
+    assert.equal(fs.existsSync(path.join(directory, 'printed.log')), false);
+  } finally {
+    server.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('处理后临时目录已删除', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'print-desktop-'));
+  const script = path.join(directory, 'ok.cjs');
+  fs.writeFileSync(script, 'process.exit(0);');
+  const prefix = `print-job-601-`;
+  const before = new Set(
+    fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith('print-job-')),
+  );
+  const { server, origin } = await startServer(async (request, response) => {
+    if (request.url.endsWith('/claim')) {
+      return json(response, {
+        id: '601',
+        items: [
+          {
+            kind: 'SIZE_6',
+            copies: 1,
+            label: '6寸',
+            fileUrl: '/print-agents/jobs/601/files/PHOTO/1',
+          },
+        ],
+      });
+    }
+    if (request.url.includes('/files/')) return response.end(Buffer.from('img'));
+    return json(response, { id: '601' });
+  });
+  try {
+    const result = await runOnce(makeConfig(origin, directory, script));
+    assert.equal(result.state, 'PRINTED');
+    const leftover = fs
+      .readdirSync(os.tmpdir())
+      .filter((name) => name.startsWith(prefix) && !before.has(name));
+    assert.deepEqual(leftover, []);
+  } finally {
+    server.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
