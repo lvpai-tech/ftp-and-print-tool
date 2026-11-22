@@ -39,7 +39,7 @@ jobs:
         run: flutter test
 
       - name: Build macOS release
-        run: flutter build macos --release --dart-define=LVPAI_UPDATE_ENV=test
+        run: python3 tool/build_macos_ci.py
 
       - name: Package personal click-to-run zip
         run: |
