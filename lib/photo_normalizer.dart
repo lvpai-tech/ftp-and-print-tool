@@ -56,7 +56,7 @@ Future<bool> normalizePhotoSnapshot(File snapshot, {String? sourcePath}) async {
     return Isolate.run(() {
       final file = File(path);
       final source = file.readAsBytesSync();
-      final jpeg = normalizeJpegPrimary(source);
+      final jpeg = normalizeJpegPrimary(source, sourcePath: originalPath);
       if (identical(source, jpeg)) return false;
       file.writeAsBytesSync(jpeg, flush: true);
       return true;
@@ -83,7 +83,7 @@ Future<Uint8List> normalizedCameraPhoto(Uint8List bytes, String path) async {
   }
   if (!_heifExtensions.contains(extension)) {
     final changed = await Isolate.run(() {
-      final photo = normalizeJpegPrimary(bytes);
+      final photo = normalizeJpegPrimary(bytes, sourcePath: path);
       return identical(photo, bytes) ? null : photo;
     });
     return changed ?? bytes;
@@ -123,15 +123,21 @@ Future<String?> readJpegCaptureTime(File file) {
 /// 非JPEG由现有解码校验决定；JPEG标记损坏或主图截断时明确失败。
 Uint8List normalizeJpegPrimary(
   Uint8List bytes, {
+  String? sourcePath,
   bool legacyFirstImage = false,
 }) {
   if (bytes.length < 2 || bytes[0] != 0xff || bytes[1] != 0xd8) return bytes;
-  return _jpegFrame(bytes, inspectIndex: !legacyFirstImage).bytes;
+  return _jpegFrame(
+    bytes,
+    inspectIndex: !legacyFirstImage,
+    allowStalePrimarySize: sourcePath != null && isJpegCameraPhoto(sourcePath),
+  ).bytes;
 }
 
 ({Uint8List bytes, int end}) _jpegFrame(
   Uint8List bytes, {
   required bool inspectIndex,
+  bool allowStalePrimarySize = false,
 }) {
   if (bytes.length < 4 || bytes[0] != 0xff || bytes[1] != 0xd8) {
     throw StateError('MPO 索引指向的画面不是 JPEG');
@@ -171,6 +177,7 @@ Uint8List normalizeJpegPrimary(
           indexStart,
           indexEnd!,
           offset,
+          allowStalePrimarySize: allowStalePrimarySize,
         );
         if (selected.start != 0) {
           final frame = _jpegFrame(
@@ -221,8 +228,9 @@ Uint8List normalizeJpegPrimary(
   Uint8List bytes,
   int start,
   int end,
-  int firstEnd,
-) {
+  int firstEnd, {
+  required bool allowStalePrimarySize,
+}) {
   const badIndex = 'MPO 图像索引损坏，请检查相机文件';
   final tiff = ByteData.sublistView(bytes, start, end);
   if (tiff.lengthInBytes < 8) throw StateError(badIndex);
@@ -275,17 +283,21 @@ Uint8List normalizeJpegPrimary(
     final offset = tiff.getUint32(entry + 8, order);
     final imageStart = index == 0 ? 0 : start + offset;
     final imageEnd = imageStart + size;
+    final type = flags & 0x00ffffff;
+    final jpeg = (flags & 0x07000000) == 0;
+    // Saved JPEGs may keep an older main-image size after metadata changes.
+    // The JPEG marker walk supplies the actual end of the baseline image.
+    final stalePrimarySize =
+        allowStalePrimarySize && jpeg && type == 0x030000 && size < firstEnd;
     if (size < 4 ||
         imageEnd > bytes.length ||
         (index == 0
-            ? (offset != 0 || imageEnd != firstEnd)
+            ? (offset != 0 || (imageEnd != firstEnd && !stalePrimarySize))
             : imageStart < firstEnd)) {
       throw StateError(badIndex);
     }
-    final type = flags & 0x00ffffff;
-    final jpeg = (flags & 0x07000000) == 0;
     final thumbnail = (type & 0xff0000) == 0x010000;
-    final frame = (start: imageStart, end: imageEnd);
+    final frame = (start: imageStart, end: index == 0 ? firstEnd : imageEnd);
     if ((flags & 0x20000000) != 0) {
       if (!jpeg || thumbnail || representative != null) {
         throw StateError(badIndex);

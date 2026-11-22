@@ -75,7 +75,11 @@ class AutoJob {
           if (sha256.convert(jpeg).toString() == expected) return jpeg;
           break;
         }
-        final verified = await compute(_verifiedPhoto, (bytes, expected));
+        final verified = await compute(_verifiedPhoto, (
+          bytes,
+          expected,
+          source,
+        ));
         if (verified != null) return verified;
       } on FileSystemException {
         // The uploaded snapshot can be cleaned up while this row is open.
@@ -106,11 +110,11 @@ class AutoJob {
   }
 }
 
-Uint8List? _verifiedPhoto((Uint8List, String) request) {
-  final (bytes, expected) = request;
+Uint8List? _verifiedPhoto((Uint8List, String, String) request) {
+  final (bytes, expected, source) = request;
   if (sha256.convert(bytes).toString() == expected) return bytes;
   try {
-    final normalized = normalizeJpegPrimary(bytes);
+    final normalized = normalizeJpegPrimary(bytes, sourcePath: source);
     if (sha256.convert(normalized).toString() == expected) return normalized;
   } on StateError {
     // Older queue entries used the first frame without reading the MP Index.
