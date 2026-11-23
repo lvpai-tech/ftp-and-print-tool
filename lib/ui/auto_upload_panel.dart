@@ -555,7 +555,11 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
               onReview: (job) => showCardTailDialog(
                 context,
                 readPhoto: job.readPhotoForReview,
-                guidance: '请根据候选尾号核对卡面。归集由服务端识别结束照。',
+                guidance: [
+                  if (job.captureMetadata != null)
+                    job.captureMetadata!.description,
+                  '请根据候选尾号核对卡面。归集由服务端识别结束照。',
+                ].join('\n'),
               ),
             ),
             const SliverToBoxAdapter(

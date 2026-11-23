@@ -50,7 +50,12 @@ void main() {
 
   test('TIFF 收图按 JPEG 上传，归集后可从未改动的原件重建预览', () async {
     final fixture = await _QueueFixture.open();
-    final original = img.encodeTiff(img.Image(width: 160, height: 120));
+    final image = img.Image(width: 160, height: 120);
+    image.exif.imageIfd
+      ..make = 'Camera brand'
+      ..model = 'Camera model'
+      ..[0x013b] = img.IfdValueAscii('PH-023');
+    final original = img.encodeTiff(image);
     final source = await File(p.join(fixture.inbox.path, 'camera.TIFF'))
         .writeAsBytes(original);
     final uploader = fixture.uploader();
@@ -69,6 +74,22 @@ void main() {
       final job = uploader.jobs.single;
       expect(job.relative, 'camera.jpg');
       expect(job.normalized, isTrue);
+      final metadata = {
+        'artist': 'PH-023',
+        'cameraMake': 'Camera brand',
+        'cameraModel': 'Camera model',
+        'readStatus': 'READ',
+      };
+      expect(fixture.preparedExif[job.id], metadata);
+      expect(
+        AutoJob.fromJson(job.toJson()).captureMetadata?.toJson(),
+        metadata,
+      );
+      expect(
+        AutoJob.fromJson(job.toJson()..remove('captureMetadata'))
+            .captureMetadata,
+        isNull,
+      );
       expect(fixture.uploadedContentTypes[job.id], 'image/jpeg');
       fixture.ingested.add(job.id);
       await _until(
@@ -479,6 +500,7 @@ class _QueueFixture {
   final Directory scratch, inbox;
   final transport = HttpClient();
   final prepared = <String>[];
+  final preparedExif = <String, Object?>{};
   final uploaded = <String>{};
   final uploadedContentTypes = <String, String?>{};
   final ingested = <String>{};
@@ -495,7 +517,8 @@ class _QueueFixture {
   static Future<_QueueFixture> open() async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final scratch = await Directory.systemTemp.createTemp('workstation-queue-');
-    final createdInbox = await Directory(p.join(scratch.path, 'inbox')).create();
+    final createdInbox = await Directory(p.join(scratch.path, 'inbox'))
+        .create();
     final inbox = Directory(await createdInbox.resolveSymbolicLinks());
     final fixture = _QueueFixture(server, scratch, inbox);
     server.listen(fixture._handle);
@@ -550,6 +573,7 @@ class _QueueFixture {
           jsonDecode(await utf8.decoder.bind(request).join()) as Map;
       final id = payload['requestId'] as String;
       prepared.add(id);
+      preparedExif[id] = payload['captureMetadata'];
       data = {
         'status': 'AWAITING_UPLOAD',
         'uploadUrl': 'https://private.cos.ap-guangzhou.myqcloud.com/$id',

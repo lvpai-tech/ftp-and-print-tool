@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../camera_metadata.dart';
+
 const workstationUploadApiBase = String.fromEnvironment(
   'LVPAI_WORKSTATION_API_BASE',
   defaultValue: 'https://hilvpai.com',
@@ -86,6 +88,7 @@ class CosUpload {
     String sha256,
     void Function(double) onProgress, {
     bool recover = false,
+    CameraMetadata? captureMetadata,
   }) async {
     final size = await file.length();
     if (size < 1 || size > 60 * 1024 * 1024) {
@@ -99,6 +102,7 @@ class CosUpload {
       'byteLength': size,
       'sha256': sha256,
       'contentType': contentType,
+      if (captureMetadata != null) 'captureMetadata': captureMetadata.toJson(),
     });
     final preparedStatus = _status(prepared, allowFailed: true);
     if (preparedStatus == 'FAILED' &&

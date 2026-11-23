@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
 
+import 'camera_exif_tags.dart';
+
 typedef _Box = ({String type, int data, int end});
 typedef AvifCrop = ({
   double width,
@@ -14,6 +16,7 @@ typedef AvifCaptureMetadata = ({
   int rotation,
   int? mirror,
   AvifCrop? crop,
+  ByteData? originalExif,
 });
 const _invalid = 'HEIF / AVIF 拍摄信息损坏或使用了不支持的布局';
 
@@ -25,7 +28,25 @@ img.ExifData? readHeifCaptureMetadata(Uint8List bytes) =>
 AvifCaptureMetadata readAvifCaptureMetadata(Uint8List bytes) =>
     _readCaptureMetadata(bytes, avif: true);
 
-AvifCaptureMetadata _readCaptureMetadata(Uint8List bytes, {bool avif = false}) {
+({String? artist, String? make, String? model}) readBmffCameraTags(
+  Uint8List bytes,
+  String kind,
+) {
+  final tiff = _readCaptureMetadata(
+    bytes,
+    avif: kind == 'avif',
+    cameraTagsOnly: true,
+  ).originalExif;
+  return tiff == null
+      ? (artist: null, make: null, model: null)
+      : cameraTagsFromTiff(tiff);
+}
+
+AvifCaptureMetadata _readCaptureMetadata(
+  Uint8List bytes, {
+  bool avif = false,
+  bool cameraTagsOnly = false,
+}) {
   final format = avif ? 'AVIF' : 'HEIF';
   final data = ByteData.sublistView(bytes);
   final boxes = _boxes(data, 0, data.lengthInBytes).iterator;
@@ -55,7 +76,7 @@ AvifCaptureMetadata _readCaptureMetadata(Uint8List bytes, {bool avif = false}) {
     final children = {
       for (final box in _boxes(data, meta.data + 4, meta.end)) box.type: box,
     };
-    final (rotation, mirror, crop) = avif
+    final (rotation, mirror, crop) = avif && !cameraTagsOnly
         ? _avifTransform(data, children)
         : (0, null, null);
     final info = children['iinf'];
@@ -79,16 +100,23 @@ AvifCaptureMetadata _readCaptureMetadata(Uint8List bytes, {bool avif = false}) {
       exifId = id;
     }
     if (exifId == null) {
-      return (exif: null, rotation: rotation, mirror: mirror, crop: crop);
+      return (
+        exif: null,
+        rotation: rotation,
+        mirror: mirror,
+        crop: crop,
+        originalExif: null,
+      );
     }
     final locations = children['iloc'];
     if (locations == null) throw StateError(_invalid);
     final tiff = _exifTiff(data, locations, children['idat'], exifId);
     return (
-      exif: _captureTags(tiff),
+      exif: cameraTagsOnly ? null : _captureTags(tiff),
       rotation: rotation,
       mirror: mirror,
       crop: crop,
+      originalExif: cameraTagsOnly ? tiff : null,
     );
   }
   throw StateError(_invalid);

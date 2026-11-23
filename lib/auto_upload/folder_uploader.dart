@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../transfer.dart';
+import '../camera_metadata.dart';
 import '../photo_normalizer.dart';
 import 'cos_upload.dart';
 import 'journal.dart';
@@ -16,6 +17,7 @@ class AutoJob {
   final String id, source, relative, signature, digest, snapshot;
   final bool normalized;
   final String? captureTime;
+  final CameraMetadata? captureMetadata;
   String state;
   String error;
   int attempts;
@@ -30,6 +32,7 @@ class AutoJob {
     required this.snapshot,
     this.normalized = false,
     this.captureTime,
+    this.captureMetadata,
     this.state = 'pending',
     this.error = '',
     this.attempts = 0,
@@ -45,6 +48,7 @@ class AutoJob {
     'snapshot': snapshot,
     if (normalized) 'normalized': true,
     if (captureTime != null) 'captureTime': captureTime,
+    if (captureMetadata != null) 'captureMetadata': captureMetadata!.toJson(),
     'state': state,
     'error': error,
     'attempts': attempts,
@@ -59,6 +63,9 @@ class AutoJob {
     snapshot: v['snapshot'] as String,
     normalized: v['normalized'] == true,
     captureTime: v['captureTime'] as String?,
+    captureMetadata: v['captureMetadata'] is Map<String, dynamic>
+        ? CameraMetadata.fromJson(v['captureMetadata'] as Map<String, dynamic>)
+        : null,
     state: v['state'] as String,
     error: v['error'] as String,
     attempts: v['attempts'] as int,
@@ -662,10 +669,23 @@ class FolderUploader extends ChangeNotifier {
         _observations.remove(file.path);
         return false;
       }
+      final raw = isRawCameraPhoto(file.path);
+      final transcodes = needsPhotoTranscode(file.path);
+      var captureMetadata = _cos != null && transcodes
+          ? await readCameraMetadata(snapshot, file.path, raw: raw)
+          : null;
       final normalized = await normalizePhotoSnapshot(
         snapshot,
         sourcePath: file.path,
       );
+      // JPEG/MPO normalization selects a frame without rewriting its EXIF.
+      if (_cos != null && !transcodes) {
+        captureMetadata = await readCameraMetadata(
+          snapshot,
+          file.path,
+          raw: false,
+        );
+      }
       try {
         if (!await validateImage(snapshot)) throw StateError('照片无法解码');
       } catch (_) {
@@ -676,7 +696,6 @@ class FolderUploader extends ChangeNotifier {
       final relative = p.posix.joinAll(
         p.split(p.setExtension(name, photoUploadExtension(file.path))),
       );
-      final raw = isRawCameraPhoto(file.path);
       final captureTime = _cos != null && (raw || isJpegCameraPhoto(file.path))
           ? await readJpegCaptureTime(snapshot)
           : null;
@@ -725,6 +744,7 @@ class FolderUploader extends ChangeNotifier {
         snapshot: snapshot.path,
         normalized: normalized,
         captureTime: captureTime,
+        captureMetadata: captureMetadata,
       );
       // 复制文件的失败与日志写入失败分开处理，持久化失败必须中止。
       await _append(job.toJson());
@@ -804,6 +824,7 @@ class FolderUploader extends ChangeNotifier {
             job.digest,
             onProgress,
             recover: job.attempts > 1,
+            captureMetadata: job.captureMetadata,
           );
           job.state = switch (status) {
             'GROUPED' => 'grouped',
