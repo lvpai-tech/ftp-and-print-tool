@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../auto_upload/cos_upload.dart';
 import '../auto_upload/station_upload.dart';
+import '../auto_upload/upload_folders.dart';
 import '../auto_upload/upload_slots.dart';
 import '../branding.dart';
 import '../printing/print_bridge.dart';
@@ -52,18 +53,21 @@ class _TransferPageState extends State<TransferPage>
   final _store = const ProfileStore();
   final _api = CosUploadProfile.tryParseApiBase(workstationUploadApiBase);
   final _stations = <String, StationUpload>{};
+  final _removing = <StationUpload>{};
   final _transferSlots = UploadSlots(3);
   final _preparationSlots = UploadSlots(2);
   Directory? _support, _inbox;
+  UploadFolders? _folders;
   StationUpload? _selected;
   bool _loading = true;
+  bool _refreshing = false;
   bool _configuring = false;
   bool _foreground = true;
   bool _pausedForUpdate = false;
   bool? _configuredReported;
   bool _activeReported = false, _uploadingReported = false;
   String? _error;
-  Future<void> _reloadTail = Future.value();
+  Future<void> _stationChanges = Future.value();
 
   @override
   void initState() {
@@ -96,72 +100,80 @@ class _TransferPageState extends State<TransferPage>
     }
   }
 
-  Future<void> _pauseForUpdate(bool paused) {
-    final next = _reloadTail.then((_) async {
-      _pausedForUpdate = paused;
-      await Future.wait(
-        _stations.values.map(
-          (station) => paused ? station.suspendForUpdate() : station.resume(),
-        ),
-      );
-    });
-    _reloadTail = next.catchError((Object _) {});
+  Future<void> _changeStations(Future<void> Function() change) {
+    final next = _stationChanges.then((_) => change());
+    _stationChanges = next.catchError((Object _) {});
     return next;
   }
 
-  Future<void> _reloadStations() {
-    final next = _reloadTail.then((_) async {
-      if (!mounted) return;
-      final profiles = await _store.loadStations(_api!);
-      if (profiles.isNotEmpty) {
-        final support = _support ??=
-            await (widget.supportDirectory ?? getApplicationSupportDirectory)();
-        _inbox ??= Directory(
-          p.join(
-            Platform.isIOS
-                ? (await getApplicationDocumentsDirectory()).path
-                : support.path,
-            Platform.isIOS ? 'CameraInbox' : 'inbox',
-          ),
-        );
-      }
-      if (!mounted) return;
-      final starts = <Future<void>>[];
-      for (final profile in profiles) {
-        final previous = _stations[profile.stationId];
-        if (previous != null) {
-          if (!mapEquals(previous.profile.toJson(), profile.toJson())) {
-            starts.add(
-              previous.replaceProfile(
-                profile,
-                start: _foreground && !_pausedForUpdate,
-              ),
-            );
-          }
-          continue;
+  Future<void> _pauseForUpdate(bool paused) => _changeStations(() async {
+    _pausedForUpdate = paused;
+    await Future.wait(
+      _stations.values.map(
+        (station) => paused ? station.suspendForUpdate() : station.resume(),
+      ),
+    );
+  });
+
+  Future<void> _reloadStations() => _changeStations(() async {
+    if (!mounted) return;
+    final profiles = await _store.loadStations(_api!);
+    if (profiles.isNotEmpty) {
+      final support = _support ??=
+          await (widget.supportDirectory ?? getApplicationSupportDirectory)();
+      _inbox ??= Directory(
+        p.join(
+          Platform.isIOS
+              ? (await getApplicationDocumentsDirectory()).path
+              : support.path,
+          Platform.isIOS ? 'CameraInbox' : 'inbox',
+        ),
+      );
+      _folders ??= UploadFolders(
+        _store,
+        _inbox!,
+        Directory(p.join(support.path, 'auto-upload')),
+      );
+    }
+    if (!mounted) return;
+    final savedIds = profiles.map((profile) => profile.stationId).toSet();
+    for (final id in _stations.keys.toList()) {
+      if (!savedIds.contains(id)) _forgetStation(id);
+    }
+    final starts = <Future<void>>[];
+    for (final profile in profiles) {
+      final previous = _stations[profile.stationId];
+      if (previous != null) {
+        if (!mapEquals(previous.profile.toJson(), profile.toJson())) {
+          starts.add(
+            previous.replaceProfile(
+              profile,
+              start: _foreground && !_pausedForUpdate,
+            ),
+          );
         }
-        final settings = await _store.loadWatch(profile);
-        if (!mounted) return;
-        final station = StationUpload(
-          profile: profile,
-          store: _store,
-          support: _support!,
-          inboxRoot: _inbox!,
-          settings: settings,
-          transferSlots: _transferSlots,
-          preparationSlots: _preparationSlots,
-        )..addListener(_refresh);
-        _stations[profile.stationId] = station;
-        if (_foreground && !_pausedForUpdate) starts.add(station.restore());
+        continue;
       }
-      _error = null;
-      _loading = false;
-      _refresh();
-      await Future.wait(starts);
-    });
-    _reloadTail = next.catchError((Object _) {});
-    return next;
-  }
+      final settings = await _store.loadWatch(profile);
+      if (!mounted) return;
+      final station = StationUpload(
+        profile: profile,
+        store: _store,
+        support: _support!,
+        inboxRoot: _inbox!,
+        settings: settings,
+        folders: _folders,
+        transferSlots: _transferSlots,
+        preparationSlots: _preparationSlots,
+      )..addListener(_refresh);
+      _stations[profile.stationId] = station;
+      if (_foreground && !_pausedForUpdate) starts.add(station.restore());
+    }
+    _error = null;
+    _loading = false;
+    _refresh();
+    await Future.wait(starts);
+  });
 
   void _refresh() {
     if (!mounted) return;
@@ -190,6 +202,7 @@ class _TransferPageState extends State<TransferPage>
     if (_foreground == foreground) return;
     _foreground = foreground;
     for (final station in _stations.values) {
+      if (_removing.contains(station)) continue;
       unawaited(foreground ? station.resume() : station.suspend());
     }
   }
@@ -230,6 +243,76 @@ class _TransferPageState extends State<TransferPage>
     }
   }
 
+  String _stationLabel(StationUpload station) =>
+      station.name.isEmpty ? '机位 ${station.profile.stationId}' : station.name;
+
+  void _forgetStation(String id) {
+    final station = _stations.remove(id);
+    if (station == null) return;
+    if (_selected == station) _selected = null;
+    station.removeListener(_refresh);
+    station.dispose();
+  }
+
+  Future<void> _refreshStations() async {
+    setState(() => _refreshing = true);
+    try {
+      await _reloadStations();
+    } catch (_) {
+      if (mounted) setState(() => _error = '无法刷新机位列表，请重试');
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  Future<void> _removeStation(StationUpload station) async {
+    final confirmed = await showAppConfirm(
+      context,
+      title: '从本机移除机位？',
+      message:
+          '移除「${_stationLabel(station)}」会停止这台电脑上的监听。'
+          '收图目录、照片和待传队列会保留，后台机位仍可使用。',
+      action: '确认移除',
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _removing.add(station));
+    try {
+      await _changeStations(() async {
+        final id = station.profile.stationId;
+        if (!mounted || _stations[id] != station) return;
+        final restartOnFailure = station.running;
+        if (station.active) {
+          await station.suspend();
+          if (station.active || station.message != null) {
+            throw StateError(station.message ?? '机位尚未停止，请重试');
+          }
+        }
+        try {
+          await _store.removeCos(station.profile);
+        } catch (_) {
+          if (restartOnFailure && mounted && _foreground) {
+            await station.resume();
+          }
+          rethrow;
+        }
+        if (!mounted) return;
+        _forgetStation(id);
+        _refresh();
+      });
+    } catch (error) {
+      if (mounted) {
+        await showAppMessage(
+          context,
+          message: error is StateError
+              ? error.message
+              : '无法移除机位，请检查系统安全存储权限后重试。',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _removing.remove(station));
+    }
+  }
+
   Widget _list() {
     final stations = _stations.values.toList()
       ..sort(
@@ -238,23 +321,29 @@ class _TransferPageState extends State<TransferPage>
         ),
       );
     final api = _api;
-    final active = stations
-        .where(
-          (station) =>
-              station.uploader.running && !station.uploader.authorizationPaused,
-        )
-        .length;
+    final active = stations.where((station) => station.running).length;
     final uploading = stations.where((station) => station.uploading).length;
     return ListView(
       padding: const EdgeInsets.only(bottom: 8),
       children: [
-        const Text(
-          '上传机位',
-          style: TextStyle(
-            color: WorkstationStyle.ink,
-            fontSize: 24,
-            fontWeight: FontWeight.w800,
-          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              '上传机位',
+              style: TextStyle(
+                color: WorkstationStyle.ink,
+                fontSize: 24,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            if (api != null)
+              TextButton.icon(
+                onPressed: _refreshing ? null : _refreshStations,
+                icon: const Icon(Icons.refresh),
+                label: Text(_refreshing ? '正在刷新…' : '刷新机位'),
+              ),
+          ],
         ),
         const SizedBox(height: 8),
         if (_error case final String error) ...[
@@ -267,7 +356,7 @@ class _TransferPageState extends State<TransferPage>
         ] else
           Text(
             stations.isEmpty
-                ? '这台电脑还没有绑定机位。申请通过后，工作台会为机位创建收图文件夹。'
+                ? '这台电脑还没有绑定机位。申请或绑定后可选择收图文件夹。'
                 : '已绑定 ${stations.length} 个机位 · $active 个监听中 · $uploading 个上传中',
           ),
         const SizedBox(height: 16),
@@ -294,22 +383,53 @@ class _TransferPageState extends State<TransferPage>
                   horizontal: 16,
                   vertical: 6,
                 ),
-                title: Text(
-                  station.name.isEmpty
-                      ? '机位 ${station.profile.stationId}'
-                      : station.name,
+                title: Text(_stationLabel(station)),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 4),
+                    StatusTag(
+                      label: station.running ? '运行中' : '未运行',
+                      color: station.running
+                          ? WorkstationStyle.ok
+                          : WorkstationStyle.muted,
+                      soft: station.running
+                          ? WorkstationStyle.okSoft
+                          : WorkstationStyle.bg,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      [
+                        if (station.profile.scenicName case final String name)
+                          name,
+                        if (_removing.contains(station))
+                          '正在移除…'
+                        else if (!const {'监听中', '已暂停'}.contains(station.status))
+                          station.status,
+                        '待传 ${station.pending} · 异常 ${station.failures}',
+                        if (station.latestIngested case final DateTime time)
+                          '最近入库 ${MaterialLocalizations.of(context).formatShortDate(time)} ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(time), alwaysUse24HourFormat: true)}',
+                      ].join('  ·  '),
+                    ),
+                  ],
                 ),
-                subtitle: Text(
-                  [
-                    if (station.profile.scenicName case final String name) name,
-                    station.status,
-                    '待传 ${station.pending} · 异常 ${station.failures}',
-                    if (station.latestIngested case final DateTime time)
-                      '最近入库 ${MaterialLocalizations.of(context).formatShortDate(time)} ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(time), alwaysUse24HourFormat: true)}',
-                  ].join('  ·  '),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    PopupMenuButton<String>(
+                      tooltip: '机位操作',
+                      enabled: !_removing.contains(station),
+                      onSelected: (_) => unawaited(_removeStation(station)),
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'remove', child: Text('从本机移除')),
+                      ],
+                    ),
+                    const Icon(Icons.chevron_right),
+                  ],
                 ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => setState(() => _selected = station),
+                onTap: _removing.contains(station)
+                    ? null
+                    : () => setState(() => _selected = station),
               ),
             ),
           ),

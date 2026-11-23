@@ -7,9 +7,8 @@ import '../profile_store.dart';
 import 'cos_upload.dart';
 
 class EnrollmentError implements Exception {
-  const EnrollmentError(this.message, {this.retryable = false});
+  const EnrollmentError(this.message);
   final String message;
-  final bool retryable;
 }
 
 class EnrollmentStatus {
@@ -21,7 +20,14 @@ class EnrollmentStatus {
   final Map<String, dynamic>? binding;
 
   bool get terminal =>
-      const {'REJECTED', 'CANCELLED', 'EXPIRED'}.contains(status);
+      const {'BOUND', 'REJECTED', 'CANCELLED', 'EXPIRED'}.contains(status);
+}
+
+class EnrollmentScenic {
+  const EnrollmentScenic(this.id, this.name);
+
+  final String id;
+  final String name;
 }
 
 /// Owns the persisted request and claim so retries use the original credentials.
@@ -32,7 +38,36 @@ class WorkstationEnrollment {
   final ProfileStore store;
   final http.Client client;
 
-  Future<String> begin(String scenicName, String location, String? code) async {
+  Future<List<EnrollmentScenic>> loadScenics() async {
+    final uri = api.replace(path: '/api/miniprogram/scenics');
+    final request = http.Request('GET', uri)..followRedirects = false;
+    final response = await client
+        .send(request)
+        .then(http.Response.fromStream)
+        .timeout(const Duration(seconds: 12));
+    if (response.statusCode != 200) {
+      throw const EnrollmentError('无法获取景区列表');
+    }
+    final payload = jsonDecode(utf8.decode(response.bodyBytes));
+    if (payload case {'code': 200, 'data': final List<dynamic> rows}) {
+      final scenics = <EnrollmentScenic>[];
+      final ids = <String>{};
+      for (final row in rows) {
+        if (row case {'id': final String id, 'name': final String name}
+            when id.trim().isNotEmpty &&
+                name.trim().isNotEmpty &&
+                ids.add(id)) {
+          scenics.add(EnrollmentScenic(id, name));
+        } else {
+          throw const EnrollmentError('景区列表包含无效景区');
+        }
+      }
+      return scenics;
+    }
+    throw const EnrollmentError('景区列表响应无效');
+  }
+
+  Future<String> begin(String scenicName, String location) async {
     final random = Random.secure();
     final idBytes = List.generate(16, (_) => random.nextInt(256));
     idBytes[6] = (idBytes[6] & 0x0f) | 0x40;
@@ -43,16 +78,35 @@ class WorkstationEnrollment {
         '${id.substring(12, 16)}-${id.substring(16, 20)}-${id.substring(20)}';
     await store.saveEnrollment(api, requestId, {
       'api': api.origin,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
       'secret': _hex(List.generate(32, (_) => random.nextInt(256))),
       'draft': {
         'requestId': requestId,
         'scenicName': scenicName,
         'location': location,
-        'stationCode': ?code,
       },
     });
     return requestId;
   }
+
+  EnrollmentStatus? savedResult(Map<String, dynamic> local, String id) {
+    final result = local['result'];
+    return result is Map<String, dynamic> ? _status(result, id) : null;
+  }
+
+  Future<void> _saveResult(
+    Map<String, dynamic> local,
+    EnrollmentStatus result,
+  ) => store.saveEnrollment(api, result.id, {
+    'draft': local['draft'],
+    'createdAt': ?local['createdAt'],
+    'result': {
+      'id': result.id,
+      'status': result.status,
+      'reason': ?result.reason,
+      'binding': ?result.binding,
+    },
+  });
 
   Future<EnrollmentStatus?> refresh(
     String id, {
@@ -60,6 +114,8 @@ class WorkstationEnrollment {
   }) async {
     final local = await store.loadEnrollment(api, id);
     if (local == null) return null;
+    final previous = savedResult(local, id);
+    if (previous != null) return previous;
     final draft = local['draft'] as Map<String, dynamic>;
     final secret = local['secret'] as String;
     final path = '/applications/$id';
@@ -67,6 +123,10 @@ class WorkstationEnrollment {
         ? await _request('GET', path, secret)
         : await _request('POST', '/applications', secret, body: draft);
     final status = _status(snapshot, id);
+    if (status.terminal && status.status != 'BOUND') {
+      await _saveResult(local, status);
+      return status;
+    }
     if (local['submitted'] != true) {
       local['submitted'] = true;
       await store.saveEnrollment(api, id, local);
@@ -120,7 +180,7 @@ class WorkstationEnrollment {
       throw const EnrollmentError('服务端未确认机位激活');
     }
     await store.saveCos(profile);
-    await store.saveEnrollment(api, id, null);
+    await _saveResult(local, activated);
     return activated;
   }
 
@@ -170,10 +230,7 @@ class WorkstationEnrollment {
         .then(http.Response.fromStream)
         .timeout(const Duration(seconds: 12));
     if (response.statusCode != 200) {
-      throw EnrollmentError(
-        '机位申请请求失败（HTTP ${response.statusCode}）',
-        retryable: response.statusCode == 429 || response.statusCode >= 500,
-      );
+      throw EnrollmentError('机位申请请求失败（HTTP ${response.statusCode}）');
     }
     final payload = jsonDecode(utf8.decode(response.bodyBytes));
     if (payload is! Map<String, dynamic>) {
@@ -181,10 +238,8 @@ class WorkstationEnrollment {
     }
     if (payload['code'] != 200) {
       final message = payload['message'];
-      final code = payload['code'];
       throw EnrollmentError(
         message is String && message.isNotEmpty ? message : '机位申请请求失败',
-        retryable: code == 42901 || code == 50002,
       );
     }
     final data = payload['data'];

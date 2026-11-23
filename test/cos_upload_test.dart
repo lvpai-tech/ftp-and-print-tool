@@ -10,6 +10,7 @@ import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
 import 'package:lvpai_ftp_client/auto_upload/folder_access.dart';
 import 'package:lvpai_ftp_client/auto_upload/folder_uploader.dart';
 import 'package:lvpai_ftp_client/auto_upload/station_upload.dart';
+import 'package:lvpai_ftp_client/auto_upload/upload_folders.dart';
 import 'package:lvpai_ftp_client/auto_upload/upload_slots.dart';
 import 'package:lvpai_ftp_client/photo_normalizer.dart';
 import 'package:lvpai_ftp_client/profile_store.dart';
@@ -18,6 +19,8 @@ import 'package:path/path.dart' as p;
 import 'manual_batch_test.dart' as samples;
 
 void main() {
+  setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+
   test('识别结束照后先上报，队首仍在等待入库时结束照继续排队', () async {
     final fixture = await _QueueFixture.open();
     final uploader = fixture.uploader();
@@ -59,11 +62,21 @@ void main() {
     final transferSlots = UploadSlots(1);
     final preparationSlots = UploadSlots(2);
     final support = Directory(p.join(fixture.scratch.path, 'workstation'));
+    const store = ProfileStore();
+    final inbox = Directory(p.join(support.path, 'inbox'));
+    final folders = UploadFolders(
+      store,
+      inbox,
+      Directory(p.join(support.path, 'auto-upload')),
+    );
     StationUpload create(_QueueFixture target) => StationUpload(
       profile: target.profile,
-      store: const ProfileStore(),
+      store: store,
       support: support,
-      inboxRoot: Directory(p.join(support.path, 'inbox')),
+      inboxRoot: inbox,
+      folders: folders,
+      folderAccess: FolderAccess(apple: false),
+      settings: {'enabled': false, 'folderRequired': true},
       transferSlots: transferSlots,
       preparationSlots: preparationSlots,
     );
@@ -73,7 +86,17 @@ void main() {
     addTearDown(second.dispose);
     await fixture.run(() async {
       // A20 在 A19 等入库期间仍能使用唯一传输名额。
-      await Future.wait([first.restore(), second.restore()]);
+      final firstFolder = await Directory(
+        p.join(fixture.scratch.path, 'camera-a'),
+      ).create();
+      final secondFolder = await Directory(
+        p.join(fixture.scratch.path, 'camera-b'),
+      ).create();
+      await Future.wait([
+        first.changeFolder((path: firstFolder.path, bookmark: null)),
+        second.changeFolder((path: secondFolder.path, bookmark: null)),
+      ]);
+      await Future.wait([first.setEnabled(true), second.setEnabled(true)]);
       expect(first.folder, isNot(second.folder));
       expect(first.uploader.running && second.uploader.running, isTrue);
       final bytes = await _png();
@@ -127,10 +150,14 @@ void main() {
     });
   });
 
-  test('旧机位保留原队列、存量识别基线和失败上报，传完才切换托管目录', () async {
+  test('旧机位保留原队列、存量识别基线和失败上报，传完才换目录', () async {
     final fixture = await _QueueFixture.open();
     final support = Directory(p.join(fixture.scratch.path, 'workstation'));
     final inboxRoot = Directory(p.join(support.path, 'inbox'));
+    final newFolder = await Directory(
+      p.join(fixture.scratch.path, 'camera-out'),
+    ).create();
+    final selection = (path: newFolder.path, bookmark: null);
     const store = ProfileStore();
     FlutterSecureStorage.setMockInitialValues({
       'cos.auto.profile.v1': jsonEncode(fixture.profile.toJson()),
@@ -189,7 +216,7 @@ void main() {
             .snapshot,
         original.snapshot,
       );
-      await station.finishMigration();
+      await station.changeFolder(selection);
       expect(station.legacy, isTrue);
       await _until(() => fixture.notices.length == 1, '失败的结束照上报恢复');
       expect(fixture.notices.values.single, 'ABCD12345678');
@@ -199,13 +226,18 @@ void main() {
       expect(fixture.prepared.last, fixture.notices.keys.single);
       fixture.ingested.add(fixture.prepared.last);
       await _until(() => station.uploader.canFinishMigration, '旧队列全部入库');
-      await station.finishMigration();
+      await station.changeFolder(selection);
       expect(station.legacy, isFalse);
-      expect(station.uploader.running, isTrue);
+      expect(station.folder, newFolder.path);
+      expect(station.uploader.running, isFalse);
       expect(await store.loadWatch(profile), {
-        'enabled': true,
+        'enabled': false,
+        'folder': newFolder.path,
+        'folderIdentity': await newFolder.resolveSymbolicLinks(),
         'recursive': true,
       });
+      await station.setEnabled(true);
+      expect(station.uploader.running, isTrue);
       expect(await File(original.source).exists(), isTrue);
       expect(fixture.prepared.length, 2);
     });

@@ -28,7 +28,7 @@ class WorkstationEnrollmentPanel extends StatefulWidget {
 }
 
 class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
-    with WidgetsBindingObserver, AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
 
@@ -41,12 +41,11 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
   final _applications = <String, _Application>{};
   String? _error;
   bool _applying = false;
-  bool _foreground = true;
+  bool _showApplications = false;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     unawaited(_load());
   }
 
@@ -58,23 +57,34 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
         _error = null;
         for (final local in applications) {
           final draft = local['draft'] as Map<String, dynamic>;
+          final id = draft['requestId'] as String;
           _applications.putIfAbsent(
-            draft['requestId'] as String,
-            () => _Application(
-              draft['scenicName'] as String,
-              draft['location'] as String,
-            ),
+            id,
+            () =>
+                _Application(
+                    draft['scenicName'] as String,
+                    draft['location'] as String,
+                    createdAt: DateTime.tryParse(
+                      local['createdAt'] as String? ?? '',
+                    ),
+                  )
+                  ..result =
+                      _enrollment.savedResult(local, id) ??
+                      (local['submitted'] == true
+                          ? EnrollmentStatus(
+                              id,
+                              local['pending'] == null ? 'PENDING' : 'APPROVED',
+                            )
+                          : null),
           );
         }
       });
-      _refreshAll();
     } catch (_) {
       if (mounted) setState(() => _error = '无法读取本机的申请记录');
     }
   }
 
   void _refreshAll() {
-    if (!_foreground) return;
     for (final entry in _applications.entries) {
       if (entry.value.result?.terminal != true) {
         unawaited(_refresh(entry.key, entry.value));
@@ -82,23 +92,9 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
     }
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    _foreground = state == AppLifecycleState.resumed;
-    if (_foreground) {
-      _refreshAll();
-    } else {
-      for (final app in _applications.values) {
-        app.timer?.cancel();
-      }
-    }
-  }
-
   Future<void> _refresh(String id, _Application app) async {
     if (app.busy || !mounted) return;
-    app.timer?.cancel();
     setState(() => app.busy = true);
-    Duration? retry;
     try {
       final status = await _enrollment.refresh(
         id,
@@ -108,46 +104,39 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
       );
       if (!mounted) return;
       app.error = null;
-      app.result = status;
-      if (status?.status == 'BOUND' || status == null) {
+      if (status == null) {
+        _applications.remove(id);
+      } else if (status.status == 'BOUND') {
         await widget.onBound();
-        if (mounted) _applications.remove(id);
-      } else if (!status.terminal) {
-        retry = const Duration(seconds: 15);
       }
+      app.result = status;
     } catch (error) {
       if (!mounted) return;
       app.error = error is EnrollmentError ? error.message : '连接或保存机位申请失败，请重试';
-      if (error is! EnrollmentError || error.retryable) {
-        retry = const Duration(seconds: 45);
-      }
     } finally {
-      if (mounted) {
-        setState(() => app.busy = false);
-        if (_foreground && retry != null) {
-          app.timer = Timer(retry, () => _refresh(id, app));
-        }
-      }
+      if (mounted) setState(() => app.busy = false);
     }
   }
 
   Future<void> _apply() async {
-    final draft =
-        await showDialog<({String scenic, String location, String? code})>(
-          context: context,
-          builder: (_) => const _EnrollmentDialog(),
-        );
+    final draft = await showDialog<({String scenic, String location})>(
+      context: context,
+      builder: (_) => _EnrollmentDialog(loadScenics: _enrollment.loadScenics),
+    );
     if (draft == null || !mounted || _applying) return;
     setState(() => _applying = true);
     try {
-      final id = await _enrollment.begin(
+      final id = await _enrollment.begin(draft.scenic, draft.location);
+      if (!mounted) return;
+      final app = _Application(
         draft.scenic,
         draft.location,
-        draft.code,
+        createdAt: DateTime.now(),
       );
-      if (!mounted) return;
-      final app = _Application(draft.scenic, draft.location);
-      setState(() => _applications[id] = app);
+      setState(() {
+        _applications[id] = app;
+        _showApplications = true;
+      });
       unawaited(_refresh(id, app));
     } catch (_) {
       if (mounted) setState(() => _error = '无法保存新申请，请检查系统安全存储权限');
@@ -173,10 +162,6 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    for (final app in _applications.values) {
-      app.timer?.cancel();
-    }
     _client.close();
     super.dispose();
   }
@@ -207,6 +192,8 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
               Text(label),
+              if (status?.binding?['stationCode'] case final String code)
+                Text('机位编码 $code'),
               if (status?.reason case final String reason) Text(reason),
               if (app.error case final String error)
                 Text(
@@ -227,7 +214,7 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
                     },
                     child: const Text('复制申请编号'),
                   ),
-                  if (status?.terminal == true && status?.status != 'BOUND')
+                  if (status?.terminal == true)
                     TextButton(
                       onPressed: app.busy ? null : () => _dismiss(id, app),
                       child: const Text('移除记录'),
@@ -249,6 +236,8 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final applications = _applications.entries.toList()
+      ..sort((a, b) => b.value.sortTime.compareTo(a.value.sortTime));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -262,6 +251,14 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
               label: Text(_applying ? '正在提交…' : '申请机位'),
             ),
             TextButton(onPressed: widget.onManual, child: const Text('手动绑定机位')),
+            TextButton.icon(
+              onPressed: () =>
+                  setState(() => _showApplications = !_showApplications),
+              icon: Icon(
+                _showApplications ? Icons.expand_less : Icons.expand_more,
+              ),
+              label: Text('申请记录（${applications.length}）'),
+            ),
           ],
         ),
         if (_error case final String error)
@@ -272,58 +269,247 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
               TextButton(onPressed: _load, child: const Text('重试')),
             ],
           ),
-        for (final entry in _applications.entries) _row(entry.key, entry.value),
+        if (_showApplications) ...[
+          if (applications.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Text('暂无机位申请记录'),
+            )
+          else ...[
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed:
+                    applications.any(
+                      (entry) =>
+                          !entry.value.busy &&
+                          entry.value.result?.terminal != true,
+                    )
+                    ? _refreshAll
+                    : null,
+                icon: const Icon(Icons.refresh),
+                label: const Text('刷新全部申请'),
+              ),
+            ),
+            for (final entry in applications) _row(entry.key, entry.value),
+          ],
+        ],
       ],
     );
   }
 }
 
 class _Application {
-  _Application(this.scenic, this.location);
+  _Application(this.scenic, this.location, {this.createdAt});
 
   final String scenic, location;
+  final DateTime? createdAt;
+  int get sortTime => createdAt?.millisecondsSinceEpoch ?? 0;
   EnrollmentStatus? result;
-  Timer? timer;
   String? error;
   bool busy = false;
 }
 
 class _EnrollmentDialog extends StatefulWidget {
-  const _EnrollmentDialog();
+  const _EnrollmentDialog({required this.loadScenics});
+
+  final Future<List<EnrollmentScenic>> Function() loadScenics;
 
   @override
   State<_EnrollmentDialog> createState() => _EnrollmentDialogState();
 }
 
 class _EnrollmentDialogState extends State<_EnrollmentDialog> {
-  final _scenic = TextEditingController();
   final _location = TextEditingController();
-  final _station = TextEditingController();
-  String? _error;
+  final _scenicFocus = FocusNode();
+  late Future<List<EnrollmentScenic>> _scenics;
+  EnrollmentScenic? _scenic;
+  bool _scenicOpen = false;
+  bool _missingLocation = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scenics = widget.loadScenics();
+  }
 
   @override
   void dispose() {
-    _scenic.dispose();
     _location.dispose();
-    _station.dispose();
+    _scenicFocus.dispose();
     super.dispose();
   }
 
   void _submit() {
-    final scenic = _scenic.text.trim();
+    final scenic = _scenic;
+    if (scenic == null) return;
     final location = _location.text.trim();
-    final code = _station.text.trim().toUpperCase();
-    if (scenic.isEmpty || location.isEmpty) {
-      setState(() => _error = '请填写景区和具体点位');
-    } else if (code.isNotEmpty && !RegExp(r'^A(?!00)\d{2}$').hasMatch(code)) {
-      setState(() => _error = '请输入有效的机位编码，例如 A01');
+    if (location.isEmpty) {
+      setState(() => _missingLocation = true);
     } else {
-      Navigator.of(context).pop((
-        scenic: scenic,
-        location: location,
-        code: code.isEmpty ? null : code,
-      ));
+      Navigator.of(context).pop((scenic: scenic.name, location: location));
     }
+  }
+
+  Widget _scenicField() => FutureBuilder<List<EnrollmentScenic>>(
+    future: _scenics,
+    builder: (context, snapshot) {
+      if (snapshot.connectionState != ConnectionState.done) {
+        return const Text('正在加载景区…');
+      }
+      final scenics = snapshot.data;
+      if (scenics == null || scenics.isEmpty) {
+        return Wrap(
+          spacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text(scenics == null ? '景区列表加载失败' : '暂无可申请的景区'),
+            TextButton(
+              onPressed: () {
+                final retry = widget.loadScenics();
+                setState(() {
+                  _scenics = retry;
+                });
+              },
+              child: const Text('重试'),
+            ),
+          ],
+        );
+      }
+      return _scenicPicker(context, scenics);
+    },
+  );
+
+  Widget _scenicPicker(BuildContext context, List<EnrollmentScenic> scenics) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final radius = BorderRadius.circular(8);
+    final listHeight = (MediaQuery.sizeOf(context).height * 0.32).clamp(
+      96.0,
+      248.0,
+    );
+    return CallbackShortcuts(
+      bindings: {
+        if (_scenicOpen)
+          const SingleActivator(LogicalKeyboardKey.escape): () {
+            setState(() => _scenicOpen = false);
+            _scenicFocus.requestFocus();
+          },
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('景区', style: theme.textTheme.labelLarge),
+          const SizedBox(height: 4),
+          Semantics(
+            label: '景区',
+            expanded: _scenicOpen,
+            child: OutlinedButton(
+              focusNode: _scenicFocus,
+              onPressed: () {
+                _scenicFocus.requestFocus();
+                setState(() => _scenicOpen = !_scenicOpen);
+              },
+              style:
+                  OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 48),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    backgroundColor: colors.surface,
+                    foregroundColor: colors.onSurface,
+                    shape: RoundedRectangleBorder(borderRadius: radius),
+                  ).copyWith(
+                    side: WidgetStateProperty.resolveWith(
+                      (states) =>
+                          _scenicOpen || states.contains(WidgetState.focused)
+                          ? BorderSide(color: colors.primary)
+                          : BorderSide(color: colors.outlineVariant),
+                    ),
+                  ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _scenic?.name ?? '请选择景区',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: _scenic == null
+                            ? colors.onSurfaceVariant
+                            : colors.onSurface,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(
+                    _scenicOpen
+                        ? Icons.keyboard_arrow_up_rounded
+                        : Icons.keyboard_arrow_down_rounded,
+                    size: 20,
+                    color: _scenicOpen
+                        ? colors.primary
+                        : colors.onSurfaceVariant,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_scenicOpen) ...[
+            const SizedBox(height: 6),
+            Material(
+              color: colors.surface,
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                borderRadius: radius,
+                side: BorderSide(color: colors.outlineVariant),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: listHeight),
+                child: ListView.builder(
+                  primary: false,
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  itemCount: scenics.length,
+                  itemBuilder: (context, index) {
+                    final scenic = scenics[index];
+                    final selected = _scenic?.id == scenic.id;
+                    return ListTile(
+                      title: Text(
+                        scenic.name,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: selected ? colors.primary : colors.onSurface,
+                          fontWeight: selected ? FontWeight.w600 : null,
+                        ),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                      ),
+                      minTileHeight: 48,
+                      selected: selected,
+                      selectedColor: colors.primary,
+                      selectedTileColor: colors.primary.withValues(alpha: 0.08),
+                      trailing: selected
+                          ? const Icon(Icons.check_rounded, size: 18)
+                          : null,
+                      onTap: () {
+                        setState(() {
+                          _scenic = scenic;
+                          _scenicOpen = false;
+                        });
+                        _scenicFocus.requestFocus();
+                      },
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   @override
@@ -334,23 +520,26 @@ class _EnrollmentDialogState extends State<_EnrollmentDialog> {
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextField(
-              controller: _scenic,
-              maxLength: 100,
-              decoration: const InputDecoration(labelText: '景区名称'),
-            ),
+            _scenicField(),
+            const SizedBox(height: 12),
             TextField(
               controller: _location,
               maxLength: 100,
-              decoration: const InputDecoration(labelText: '具体点位'),
+              onTap: () {
+                if (_scenicOpen) setState(() => _scenicOpen = false);
+              },
+              decoration: InputDecoration(
+                labelText: '具体点位',
+                errorText: _missingLocation ? '请填写具体点位' : null,
+              ),
+              onChanged: (value) {
+                if (_missingLocation && value.trim().isNotEmpty) {
+                  setState(() => _missingLocation = false);
+                }
+              },
             ),
-            TextField(
-              controller: _station,
-              maxLength: 3,
-              decoration: const InputDecoration(labelText: '已有机位编码（选填）'),
-            ),
-            if (_error case final String error) Text(error),
           ],
         ),
       ),
@@ -360,7 +549,10 @@ class _EnrollmentDialogState extends State<_EnrollmentDialog> {
         onPressed: () => Navigator.of(context).pop(),
         child: const Text('取消'),
       ),
-      FilledButton(onPressed: _submit, child: const Text('提交申请')),
+      FilledButton(
+        onPressed: _scenic == null ? null : _submit,
+        child: const Text('提交申请'),
+      ),
     ],
   );
 }

@@ -3,9 +3,11 @@ import 'dart:io';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
 import 'package:lvpai_ftp_client/profile_store.dart';
 import 'package:lvpai_ftp_client/ui/transfer_page.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   const apiBase = String.fromEnvironment(
@@ -42,6 +44,22 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  Future<void> waitForStationUi(
+    WidgetTester tester,
+    Finder finder, {
+    bool present = true,
+  }) async {
+    for (var attempt = 0; attempt < 80; attempt++) {
+      await tester.pump();
+      if (finder.evaluate().isNotEmpty == present) break;
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 25)),
+      );
+    }
+    await tester.pumpAndSettle();
+    expect(finder, present ? findsOneWidget : findsNothing);
+  }
+
   for (final size in [
     const Size(375, 812),
     const Size(812, 375),
@@ -70,7 +88,13 @@ void main() {
       final saved = (await const ProfileStore().loadStations(gateway)).single;
       expect(saved.stationId, '317');
       expect(find.text('机位 317'), findsOneWidget);
+      expect(find.textContaining('待选择目录'), findsOneWidget);
+      expect(find.text('运行中'), findsNothing);
       expect(find.text('申请机位'), findsOneWidget);
+      await tester.ensureVisible(find.text('机位 317'));
+      await tester.tap(find.text('机位 317'));
+      await tester.pumpAndSettle();
+      expect(find.text('选择收图文件夹'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.runAsync(() async {
@@ -94,7 +118,7 @@ void main() {
     await tester.tap(find.text('A17'));
     await tester.pumpAndSettle();
     expect(find.text('test-inbox'), findsOneWidget);
-    expect(find.text('切换到托管目录'), findsOneWidget);
+    expect(find.text('更换收图文件夹'), findsOneWidget);
     expect(find.text('恢复旧目录监听'), findsOneWidget);
     await tester.tap(find.text('更新机位密钥'));
     await tester.pumpAndSettle();
@@ -111,6 +135,72 @@ void main() {
     await tester.runAsync(() async {
       await Future<void>.delayed(const Duration(milliseconds: 75));
     });
+  });
+
+  testWidgets('刷新显示各机位状态，移除单个机位保留目录和旧配置隔离', (tester) async {
+    const store = ProfileStore();
+    final legacy = CosUploadProfile(
+      gateway.origin,
+      '317',
+      'a' * 64,
+      stationCode: 'A17',
+    );
+    FlutterSecureStorage.setMockInitialValues({
+      'cos.auto.profile.v1': jsonEncode(legacy.toJson()),
+      'ftp.watch.v1': jsonEncode({'folder': 'test-inbox', 'recursive': true}),
+    });
+    await showUpload(tester);
+    expect(find.text('未运行'), findsOneWidget);
+    expect(find.textContaining('待恢复旧目录'), findsOneWidget);
+
+    final added = CosUploadProfile(gateway.origin, '318', 'b' * 64);
+    await store.saveCos(added, keepManagedDefault: true);
+    await tester.tap(find.text('刷新机位'));
+    await waitForStationUi(tester, find.text('运行中'));
+    expect(find.text('未运行'), findsOneWidget);
+    final addedFolder = Directory(
+      p.join(support.path, 'inbox', ProfileStore.uploadScope(gateway), '318'),
+    );
+    final marker = File(p.join(addedFolder.path, 'keep.txt'));
+    await tester.runAsync(() => marker.writeAsString('保留本机文件'));
+    final queueLog = await tester.runAsync(
+      () async =>
+          Directory(p.join(support.path, 'auto-upload'))
+              .listSync(recursive: true)
+              .whereType<File>()
+              .singleWhere((file) => p.basename(file.path) == 'queue.jsonl'),
+    );
+
+    Future<void> openRemoval(String id) async {
+      final row = find.byKey(ValueKey(id));
+      await tester.tap(
+        find.descendant(of: row, matching: find.byTooltip('机位操作')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('从本机移除'));
+      await tester.pumpAndSettle();
+    }
+
+    await openRemoval('318');
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(find.text('机位 318'), findsOneWidget);
+    await openRemoval('318');
+    await tester.tap(find.text('确认移除'));
+    await waitForStationUi(tester, find.text('机位 318'), present: false);
+    expect((await store.loadStations(gateway)).single.stationId, '317');
+    expect(await tester.runAsync(marker.readAsString), '保留本机文件');
+    expect(queueLog?.existsSync(), isTrue);
+
+    await openRemoval('317');
+    await tester.tap(find.text('确认移除'));
+    await waitForStationUi(tester, find.text('A17'), present: false);
+    await store.migrateUploads(gateway);
+    expect(await store.loadStations(gateway), isEmpty);
+    expect((await store.loadWatch(legacy))?['legacyFolder'], 'test-inbox');
+    expect(find.text('A17'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets('另一个服务的机位凭据和目录不会进入当前列表', (tester) async {

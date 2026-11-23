@@ -53,4 +53,34 @@ void main() {
     expect(await access.acquire(r'D:\相机收图'), r'D:\相机收图');
     await access.release();
   });
+
+  test('苹果选择取得独立书签，释放选择作用域不会释放已有机位', () async {
+    final calls = <MethodCall>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return switch (call.method) {
+        'chooseScoped' => {'path': '/相机', 'bookmark': 'c2NvcGU='},
+        'acquireScoped' => '/相机',
+        _ => null,
+      };
+    });
+    final access = FolderAccess(channel: channel, apple: true);
+    final picked = (await access.chooseUploadFolder())!;
+    await access.acquire(
+      picked.path,
+      scope: '20.selection',
+      bookmark: picked.bookmark,
+    );
+    await access.release(scope: '20.selection');
+    expect(calls.map((call) => call.method), [
+      'chooseScoped',
+      'acquireScoped',
+      'releaseScoped',
+    ]);
+    expect(calls[1].arguments, {
+      'scope': '20.selection',
+      'bookmark': 'c2NvcGU=',
+    });
+    expect(calls[2].arguments, {'scope': '20.selection'});
+  });
 }

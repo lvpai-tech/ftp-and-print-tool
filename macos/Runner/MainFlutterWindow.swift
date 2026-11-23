@@ -79,6 +79,7 @@ private final class PhotoFolderAccess {
   private let channel: FlutterMethodChannel
   private let bookmarkKey = "ftp.watch.bookmark.v1"
   private var activeURL: URL?
+  private var scopes: [String: URL] = [:]
 
   init(messenger: FlutterBinaryMessenger) {
     channel = FlutterMethodChannel(name: "ai.lvpai.ftp/folder-access", binaryMessenger: messenger)
@@ -86,16 +87,50 @@ private final class PhotoFolderAccess {
       guard let self = self else { return }
       do {
         switch call.method {
-        case "choose":
+        case "choose", "chooseScoped":
           let panel = NSOpenPanel()
           panel.title = "选择相机照片接收文件夹"
           panel.canChooseDirectories = true
           panel.canChooseFiles = false
           panel.allowsMultipleSelection = false
           guard panel.runModal() == .OK, let url = panel.url else { result(nil); return }
-          try self.activate(url)
-          try self.save(url)
+          if call.method == "chooseScoped" {
+            let granted = url.startAccessingSecurityScopedResource()
+            defer { if granted { url.stopAccessingSecurityScopedResource() } }
+            let data = try url.bookmarkData(options: [.withSecurityScope],
+                                            includingResourceValuesForKeys: nil, relativeTo: nil)
+            result(["path": url.path, "bookmark": data.base64EncodedString()])
+          } else {
+            try self.activate(url)
+            try self.save(url)
+            result(url.path)
+          }
+        case "acquireScoped":
+          guard let args = call.arguments as? [String: String],
+                let scope = args["scope"] else {
+            result(FlutterMethodNotImplemented); return
+          }
+          let data: Data?
+          if let bookmark = args["bookmark"] {
+            data = Data(base64Encoded: bookmark)
+          } else {
+            data = UserDefaults.standard.data(forKey: self.bookmarkKey)
+          }
+          guard let data = data else { result(nil); return }
+          var stale = false
+          let url = try URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI],
+                            relativeTo: nil, bookmarkDataIsStale: &stale)
+          self.release(scope)
+          guard url.startAccessingSecurityScopedResource() else {
+            throw NSError(domain: "PhotoFolderAccess", code: 1)
+          }
+          self.scopes[scope] = url
           result(url.path)
+        case "releaseScoped":
+          if let args = call.arguments as? [String: String], let scope = args["scope"] {
+            self.release(scope)
+          }
+          result(nil)
         case "restore":
           guard let data = UserDefaults.standard.data(forKey: self.bookmarkKey) else { result(nil); return }
           var stale = false
@@ -111,7 +146,7 @@ private final class PhotoFolderAccess {
           result(FlutterMethodNotImplemented)
         }
       } catch {
-        self.release()
+        if call.method == "choose" || call.method == "restore" { self.release() }
         result(FlutterError(code: "FOLDER_ACCESS", message: "目录授权失败，请重新选择本机文件夹", details: nil))
       }
     }
@@ -137,5 +172,12 @@ private final class PhotoFolderAccess {
     activeURL = nil
   }
 
-  deinit { release() }
+  private func release(_ scope: String) {
+    scopes.removeValue(forKey: scope)?.stopAccessingSecurityScopedResource()
+  }
+
+  deinit {
+    release()
+    for url in scopes.values { url.stopAccessingSecurityScopedResource() }
+  }
 }

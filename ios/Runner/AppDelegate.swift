@@ -26,6 +26,8 @@ private final class PhotoFolderAccess: NSObject, UIDocumentPickerDelegate {
   private var activeURL: URL?
   private var scoped = false
   private var pending: FlutterResult?
+  private var choosingScoped = false
+  private var scopes: [String: URL] = [:]
 
   init(messenger: FlutterBinaryMessenger) {
     channel = FlutterMethodChannel(name: "ai.lvpai.ftp/folder-access", binaryMessenger: messenger)
@@ -34,7 +36,7 @@ private final class PhotoFolderAccess: NSObject, UIDocumentPickerDelegate {
       guard let self = self else { return }
       do {
         switch call.method {
-        case "choose":
+        case "choose", "chooseScoped":
           guard self.pending == nil else {
             result(FlutterError(code: "PICKER_BUSY", message: "文件夹选择器已打开", details: nil)); return
           }
@@ -49,7 +51,34 @@ private final class PhotoFolderAccess: NSObject, UIDocumentPickerDelegate {
           picker.delegate = self
           picker.allowsMultipleSelection = false
           self.pending = result
+          self.choosingScoped = call.method == "chooseScoped"
           controller.present(picker, animated: true)
+        case "acquireScoped":
+          guard let args = call.arguments as? [String: String],
+                let scope = args["scope"] else {
+            result(FlutterMethodNotImplemented); return
+          }
+          let url: URL
+          if let bookmark = args["bookmark"] {
+            guard let data = Data(base64Encoded: bookmark) else { result(nil); return }
+            url = try self.resolve(data)
+          } else if UserDefaults.standard.bool(forKey: self.inboxKey) {
+            url = try self.inbox()
+          } else if let data = UserDefaults.standard.data(forKey: self.bookmarkKey) {
+            url = try self.resolve(data)
+          } else { result(nil); return }
+          self.release(scope)
+          if url.startAccessingSecurityScopedResource() {
+            self.scopes[scope] = url
+          } else if !url.standardizedFileURL.path.hasPrefix(NSHomeDirectory() + "/") {
+            throw NSError(domain: "PhotoFolderAccess", code: 1)
+          }
+          result(url.path)
+        case "releaseScoped":
+          if let args = call.arguments as? [String: String], let scope = args["scope"] {
+            self.release(scope)
+          }
+          result(nil)
         case "inbox":
           let url = try self.inbox()
           try self.activate(url)
@@ -75,7 +104,7 @@ private final class PhotoFolderAccess: NSObject, UIDocumentPickerDelegate {
           result(FlutterMethodNotImplemented)
         }
       } catch {
-        self.release()
+        if call.method == "inbox" || call.method == "restore" { self.release() }
         result(self.accessError())
       }
     }
@@ -107,16 +136,30 @@ private final class PhotoFolderAccess: NSObject, UIDocumentPickerDelegate {
     UserDefaults.standard.set(false, forKey: inboxKey)
   }
 
+  private func resolve(_ data: Data) throws -> URL {
+    var stale = false
+    return try URL(resolvingBookmarkData: data, options: [.withoutUI],
+                   relativeTo: nil, bookmarkDataIsStale: &stale)
+  }
+
   func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
     guard let result = pending else { return }
     pending = nil
     guard let url = urls.first else { result(nil); return }
     do {
-      try activate(url)
-      try save(url)
-      result(url.path)
+      if choosingScoped {
+        let granted = url.startAccessingSecurityScopedResource()
+        defer { if granted { url.stopAccessingSecurityScopedResource() } }
+        let data = try url.bookmarkData(options: [.minimalBookmark],
+                                        includingResourceValuesForKeys: nil, relativeTo: nil)
+        result(["path": url.path, "bookmark": data.base64EncodedString()])
+      } else {
+        try activate(url)
+        try save(url)
+        result(url.path)
+      }
     } catch {
-      release()
+      if !choosingScoped { release() }
       result(accessError())
     }
   }
@@ -136,5 +179,12 @@ private final class PhotoFolderAccess: NSObject, UIDocumentPickerDelegate {
     scoped = false
   }
 
-  deinit { release() }
+  private func release(_ scope: String) {
+    scopes.removeValue(forKey: scope)?.stopAccessingSecurityScopedResource()
+  }
+
+  deinit {
+    release()
+    for url in scopes.values { url.stopAccessingSecurityScopedResource() }
+  }
 }

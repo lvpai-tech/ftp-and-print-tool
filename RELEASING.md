@@ -76,6 +76,17 @@ workflow 文件进入默认分支后，在 GitHub Actions 里选择对应的构�
 
 正式 iOS 分发沿用下文的 Xcode、App Store Connect 和 TestFlight 流程。
 
+## macOS 内测 DMG 的 COS 存档
+
+`Build macOS` 可将已有的 Apple 芯片个人内测 DMG 传到 `ftp-client/test/macos-arm64/ci/<批次>/<文件名>`，供 CDN 手动下载。客户端更新按[桌面自动更新测试通道](#桌面自动更新测试通道)发布。
+
+1. 运行 `Build macOS` 生成个人内测 DMG。下载该运行的 `lvpai-ftp-macos-personal-dmg` 产物，解压后用随包的 `.dmg.sha256` 核对 DMG。记下来源运行 ID。
+2. 在持有授权 COS 凭据的可信机器上，用 Python SDK 创建 `CosS3Client`，调用 [上传脚本](tool/upload_macos_cos_smoke.py) 的 `prepare_plan(client, bucket, key, dmg)`。`bucket` 传入桶全名，`key` 使用本节的存档前缀和新批次，`dmg` 是指向原 DMG 的 `Path`。返回的计划有效 30 分钟，包含该对象的 `upload_id`、源文件 SHA-256、各分块和合并的预签名地址。将计划序列化为 JSON，存入 GitHub `cos-test` 环境的 `COS_SMOKE_PUT_URL`。长期 COS 密钥留在可信机器上。 [GitHub 环境 Secrets](https://docs.github.com/en/rest/actions/secrets#create-or-update-an-environment-secret)
+3. 手动运行 `Build macOS`，分支选 `dev/huangml`，将来源运行 ID 填入 `cos_smoke_run_id`，保持 `publish_update` 关闭。`cos-smoke` job 用内置 `github.token` 下载原产物，核验 SHA-256 并并行上传 2 MiB 分块，每块校验 MD5。暂时性网络错误允许该块重试。所有分块送达后，COS 根据 ETag 顺序合并成一个 DMG。
+4. 工作流成功后从 COS 读回整个文件，核对长度和 SHA-256，再核对 CDN 下载链接。测试结束后删除临时 Secret。若工作流失败，先确认运行已结束且对象尚未合并，再由可信机器按对应对象键和 `upload_id` 中止未完成的分块上传。重跑时为新批次和原产物重新签发计划。 [COS 中止分块上传](https://cloud.tencent.com/document/product/436/7740)
+
+2026-11-23，97,070,064 字节的 Apple 芯片 DMG 已由 GitHub 托管运行器在约 5 分 21 秒内上传并合并。COS 读回 SHA-256 与原产物一致，CDN 返回 HTTP `200`。 [成功运行](https://github.com/lvpai-tech/ftp-and-print-tool/actions/runs/45164980362) · [下载内测 DMG](https://cdn.hilvpai.com/ftp-client/test/macos-arm64/ci/multipart-ae4c74d98b13/lvpai-ftp-0.4.3-7-macos-arm64-personal.dmg)
+
 ## Mac 构建与打包
 
 先按 [APPLE_TESTING.md](APPLE_TESTING.md) 配置 Xcode、依赖及应用标识，完成目录授权与 FTP 实测。
@@ -147,7 +158,7 @@ FTP二进制的contentType为`application/octet-stream`。接口返回沿用项�
 | Windows x64 | `ftp-client/test/windows-x64/setup/latest.json` | Authenticode 签名的 `*-windows-x64-setup.exe` |
 | macOS Apple 芯片 | `ftp-client/test/macos-arm64/appcast.xml` | Developer ID 签名、公证、Sparkle EdDSA 签名的 `*-macos-arm64.dmg` |
 
-在 GitHub 的 `cos-test` 环境设置以下发布配置，环境允许 `dev/huangml`。COS 账号需要限定 Windows `setup/` 和 macOS 对应 DMG、`appcast.xml` 对象的 PUT、GET 和 HEAD 权限。原有 `COS_SMOKE_PUT_URL` 供上传测试继续使用。
+在 GitHub 的 `cos-test` 环境设置以下签名发布配置，环境允许 `dev/huangml`。COS 账号需要限定 Windows `setup/` 和 macOS 对应 DMG、`appcast.xml` 对象的 PUT、GET 和 HEAD 权限。macOS 个人内测包的临时上传计划见 [COS 存档](#macos-内测-dmg-的-cos-存档)。签名包发布和两端真机覆盖更新的验收仍待完成。
 
 | 范围 | Secrets | Variables |
 | --- | --- | --- |

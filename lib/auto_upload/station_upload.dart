@@ -9,6 +9,7 @@ import '../profile_store.dart';
 import 'cos_upload.dart';
 import 'folder_access.dart';
 import 'folder_uploader.dart';
+import 'upload_folders.dart';
 import 'upload_slots.dart';
 
 /// 一个机位的目录和队列由上传工作台持有，可跨页面持续运行。
@@ -21,6 +22,7 @@ class StationUpload extends ChangeNotifier {
     required UploadSlots transferSlots,
     required UploadSlots preparationSlots,
     FolderAccess? folderAccess,
+    UploadFolders? folders,
     Map<String, dynamic>? settings,
   }) : _managed = Directory(
          p.join(
@@ -30,9 +32,22 @@ class StationUpload extends ChangeNotifier {
          ),
        ),
        _access = folderAccess ?? FolderAccess(),
+       _folders =
+           folders ??
+           UploadFolders(
+             store,
+             inboxRoot,
+             Directory(p.join(support.path, 'auto-upload')),
+           ),
+       _customFolder = settings?['folder'] as String?,
+       _folderIdentity = settings?['folderIdentity'] as String?,
+       _bookmark = settings?['folderBookmark'] as String?,
+       _folderRequired = settings?['folderRequired'] == true,
        _legacyFolder = settings?['legacyFolder'] as String?,
        _legacyRecursive = settings?['recursive'] as bool? ?? true,
-       _scanLegacyExisting = settings?['scanLegacyExisting'] == true,
+       _scanExisting =
+           (settings?['scanExisting'] ?? settings?['scanLegacyExisting']) ==
+           true,
        enabled =
            settings?['enabled'] as bool? ?? settings?['legacyFolder'] == null,
        uploader = FolderUploader(
@@ -47,20 +62,29 @@ class StationUpload extends ChangeNotifier {
   final ProfileStore store;
   final FolderUploader uploader;
   final Directory _managed;
+  final UploadFolders _folders;
   final bool _legacyRecursive;
-  bool _scanLegacyExisting;
+  bool _scanExisting;
   final FolderAccess _access;
+  String? _customFolder, _folderIdentity, _bookmark;
+  bool _folderRequired;
   String? _legacyFolder;
-  bool _legacyAcquired = false;
+  bool _folderAcquired = false;
   bool enabled;
   bool _closed = false;
   Future<void>? _work;
   String? message;
 
   bool get legacy => _legacyFolder != null;
-  String get folder => _legacyFolder ?? _managed.path;
+  bool get hasFolder => folder.isNotEmpty;
+  bool get custom => _customFolder != null;
+  bool get scanExisting => _scanExisting;
+  bool get canImport => hasFolder && !legacy && (!custom || running);
+  String get folder =>
+      _customFolder ?? _legacyFolder ?? (_folderRequired ? '' : _managed.path);
   bool get busy => _work != null;
   bool get active => busy || uploader.requiresStop;
+  bool get running => uploader.running && !uploader.authorizationPaused;
   bool get uploading => uploader.jobs.any((job) => job.state == 'uploading');
   int get pending =>
       uploader.settling +
@@ -88,33 +112,40 @@ class StationUpload extends ChangeNotifier {
     if (uploading) return '上传中';
     if (uploader.running) return '监听中';
     if (legacy && !enabled) return '待恢复旧目录';
+    if (!hasFolder) return '待选择目录';
     return '已暂停';
   }
 
-  Future<void> _save({required bool enabled, required String? legacyFolder}) =>
-      store.saveWatch(profile, {
-        'enabled': enabled,
-        'legacyFolder': ?legacyFolder,
-        'recursive': _legacyRecursive,
-        if (legacyFolder != null && _scanLegacyExisting)
-          'scanLegacyExisting': true,
-      });
+  Map<String, dynamic> _settings({required bool enabled}) => {
+    'enabled': enabled,
+    if (_folderRequired) 'folderRequired': true,
+    'folder': ?_customFolder,
+    'folderIdentity': ?_folderIdentity,
+    'folderBookmark': ?_bookmark,
+    'legacyFolder': ?_legacyFolder,
+    'recursive': !legacy || _legacyRecursive,
+    if (_scanExisting) (legacy ? 'scanLegacyExisting' : 'scanExisting'): true,
+  };
 
   Future<void> restore() => _run(() async {
     if (enabled) await _start();
   });
 
-  Future<void> setEnabled(bool value, {bool scanLegacyExisting = false}) =>
-      _run(() async {
-        if (value && legacy) _scanLegacyExisting = scanLegacyExisting;
-        await _save(enabled: value, legacyFolder: _legacyFolder);
-        enabled = value;
-        if (value) {
-          await _start();
-        } else {
-          await _stop();
-        }
-      });
+  Future<void> setEnabled(bool value, {bool? scanExisting}) => _run(() async {
+    if (value && !hasFolder) throw StateError('请先选择收图文件夹');
+    final settings = _settings(enabled: value);
+    if (value && (legacy || custom) && scanExisting != null) {
+      settings[legacy ? 'scanLegacyExisting' : 'scanExisting'] = scanExisting;
+    }
+    await store.saveWatch(profile, settings);
+    if (value && scanExisting != null) _scanExisting = scanExisting;
+    enabled = value;
+    if (value) {
+      await _start();
+    } else {
+      await _stop();
+    }
+  });
 
   Future<void> suspend() => _run(_stop);
 
@@ -132,77 +163,146 @@ class StationUpload extends ChangeNotifier {
         if (enabled && start) await _start();
       });
 
-  Future<void> finishMigration() => _run(() async {
-    if (!legacy || !uploader.running || uploader.authorizationPaused) {
-      throw StateError('请先恢复旧目录监听并处理队列');
-    }
-    await uploader.scanNow();
-    if (!uploader.canFinishMigration) {
-      throw StateError('请停止向旧目录投递，并先处理旧目录中的待传、待确认或失败照片');
-    }
-    await _stop();
-    await _save(enabled: true, legacyFolder: null);
-    _legacyFolder = null;
-    enabled = true;
-    await _start();
-  });
+  Future<PickedUploadFolder?> chooseFolder() => _access.chooseUploadFolder();
+
+  Future<void> changeFolder(PickedUploadFolder picked) => _run(
+    () => _folders.change(() async {
+      if (!p.isAbsolute(picked.path)) throw StateError('请选择有效的收图文件夹');
+      final scope = '${ProfileStore.uploadKey(profile)}.selection';
+      final selected = await _access.acquire(
+        picked.path,
+        scope: scope,
+        bookmark: picked.bookmark,
+      );
+      try {
+        final resolved = await Directory(selected).resolveSymbolicLinks();
+        // Open the directory before storing a location that may be unreadable.
+        await Directory(selected)
+            .list(followLinks: false)
+            .take(1)
+            .drain<void>();
+        final previous = hasFolder
+            ? _folderIdentity ?? await UploadFolders.identity(folder)
+            : null;
+        final same = previous != null && UploadFolders.same(previous, resolved);
+        await _folders.validate(
+          profile,
+          selected,
+          resolved,
+          managed: same && !legacy && !custom,
+        );
+        if (same && !legacy && !custom) return;
+        final restart = uploader.running;
+        if (!same && previous != null) {
+          if (uploader.running) {
+            await uploader.scanNow();
+            if (uploader.authorizationPaused || !uploader.canFinishMigration) {
+              throw StateError('请停止向原目录投递，并处理完待传、待确认及失败照片后再更换目录');
+            }
+          } else if (await uploader.hasCosQueue(previous, profile)) {
+            throw StateError('请先恢复原目录监听，确认原队列处理完毕后再更换目录');
+          }
+        }
+        final settings = same
+            ? (_settings(enabled: enabled)
+                ..['folderIdentity'] = resolved
+                ..['folderBookmark'] = picked.bookmark)
+            : {
+                'enabled': false,
+                'folder': picked.path,
+                'folderIdentity': resolved,
+                'folderBookmark': ?picked.bookmark,
+                'recursive': true,
+              };
+        await _stop();
+        if (!same && restart && !uploader.queueDrained) {
+          await _start();
+          throw StateError('原目录还有未处理的照片，请稍后重试');
+        }
+        try {
+          await store.saveWatch(profile, settings);
+        } catch (_) {
+          if (restart) await _start();
+          rethrow;
+        }
+        _folderIdentity = resolved;
+        _bookmark = picked.bookmark;
+        if (!same) {
+          _customFolder = picked.path;
+          _legacyFolder = null;
+          _folderRequired = false;
+          _scanExisting = false;
+          enabled = false;
+          uploader.clearView();
+        } else if (restart) {
+          await _start();
+        }
+      } finally {
+        await _access.release(scope: scope);
+      }
+    }),
+  );
 
   Future<void> _start() async {
     if (uploader.running) return;
     if (uploader.fatalError != null) await _stop();
-    await _ensureManaged();
+    if (!hasFolder) return;
+    final managed = !legacy && !custom;
+    if (managed) await _ensureManaged();
     try {
-      if (legacy && _access.apple && !_legacyAcquired) {
-        final authorized = await _access.acquire(folder);
-        _legacyAcquired = true;
-        if (!p.equals(
+      if (!managed && _access.apple && !_folderAcquired) {
+        final authorized = await _access.acquire(
+          folder,
+          scope: ProfileStore.uploadKey(profile),
+          bookmark: _bookmark,
+        );
+        _folderAcquired = true;
+        if (!UploadFolders.same(
           await Directory(folder).resolveSymbolicLinks(),
           await Directory(authorized).resolveSymbolicLinks(),
         )) {
-          throw StateError('旧目录授权与原队列不一致，请恢复原目录授权');
+          throw StateError('目录授权与原队列不一致，请重新选择原目录');
         }
       }
-      if (legacy) {
-        final previous = await Directory(folder).resolveSymbolicLinks();
-        final root = await _managed.parent.resolveSymbolicLinks();
-        if (p.equals(previous, root) ||
-            p.isWithin(previous, root) ||
-            p.isWithin(root, previous)) {
-          throw StateError('旧收图路径与托管路径重叠，请联系管理员保留旧队列并迁移');
-        }
+      final resolved = await Directory(folder).resolveSymbolicLinks();
+      if (_folderIdentity != null &&
+          !UploadFolders.same(_folderIdentity!, resolved)) {
+        throw StateError('收图目录指向已变化，请恢复原目录后再监听');
       }
+      await _folders.validate(profile, folder, resolved, managed: managed);
       await uploader.start(
         Directory(folder),
         null,
         cosProfile: profile,
         recursive: !legacy || _legacyRecursive,
-        includeExisting: !legacy || _scanLegacyExisting,
+        includeExisting: managed || _scanExisting,
       );
     } catch (_) {
-      await _releaseLegacy();
+      await _releaseFolder();
       rethrow;
     }
   }
 
-  Future<void> _releaseLegacy() async {
-    if (!_legacyAcquired) return;
-    await _access.release();
-    _legacyAcquired = false;
+  Future<void> _releaseFolder() async {
+    if (!_folderAcquired) return;
+    await _access.release(scope: ProfileStore.uploadKey(profile));
+    _folderAcquired = false;
   }
 
   Future<void> _stop() async {
     try {
       if (uploader.requiresStop) await uploader.stop();
     } finally {
-      await _releaseLegacy();
+      await _releaseFolder();
     }
   }
 
   Future<void> importPhotos(List<File> photos) => _run(() async {
-    if (legacy) throw StateError('请先完成旧目录切换');
+    if (!canImport) throw StateError('请先选择收图文件夹并开始监听');
     if (photos.isEmpty) return;
-    await _ensureManaged();
-    final local = await _managed.resolveSymbolicLinks();
+    if (!custom) await _ensureManaged();
+    final directory = Directory(folder);
+    final local = await directory.resolveSymbolicLinks();
     for (final photo in photos) {
       final extension = p.extension(photo.path).toLowerCase();
       if (extension.isEmpty ||
@@ -213,7 +313,9 @@ class StationUpload extends ChangeNotifier {
         throw StateError('所选照片已经在当前机位的收图目录中');
       }
     }
-    final staging = await _managed.parent.createTemp('import-');
+    final staging = custom
+        ? await directory.createTemp(FolderUploader.importStagingPrefix)
+        : await _managed.parent.createTemp('import-');
     try {
       final names = <String>{};
       for (final photo in photos) {
@@ -223,7 +325,13 @@ class StationUpload extends ChangeNotifier {
         }
         await photo.copy(p.join(staging.path, name));
       }
-      await staging.rename(p.join(_managed.path, p.basename(staging.path)));
+      final name = p.basename(staging.path);
+      await staging.rename(
+        p.join(
+          directory.path,
+          custom ? name.substring('.lvpai-'.length) : name,
+        ),
+      );
     } finally {
       if (await staging.exists()) await staging.delete(recursive: true);
     }

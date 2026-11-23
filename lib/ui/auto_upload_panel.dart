@@ -37,10 +37,10 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
   String get _folder => station.folder;
   bool _picking = false;
   bool _dragging = false;
-  bool _scanLegacyExisting = false;
+  bool? _scanExisting;
   bool get _canDrop =>
       widget.allowDrop &&
-      !station.legacy &&
+      station.canImport &&
       (Platform.isWindows || Platform.isMacOS || Platform.isLinux) &&
       !_picking &&
       !station.busy &&
@@ -136,14 +136,25 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
     }
   }
 
-  Future<void> _finishMigration() async {
-    final confirmed = await showAppConfirm(
-      context,
-      title: '切换到托管收图目录',
-      message: '请在两个拍摄批次之间操作。先停止向旧目录投递照片，待旧队列处理完毕后切换。',
-      action: '确认切换',
-    );
-    if (confirmed && mounted) await station.finishMigration();
+  Future<void> _pickFolder() async {
+    setState(() => _picking = true);
+    try {
+      final picked = await station.chooseFolder();
+      if (picked == null || !mounted) return;
+      await station.changeFolder(picked);
+      if (!mounted) return;
+      if (station.message case final String message) {
+        await showAppMessage(context, message: message);
+      } else {
+        setState(() => _scanExisting = null);
+      }
+    } catch (error) {
+      if (mounted) {
+        await showAppMessage(context, message: appErrorMessage(error));
+      }
+    } finally {
+      if (mounted) setState(() => _picking = false);
+    }
   }
 
   Future<void> _pickCardPhoto() async {
@@ -228,29 +239,31 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                 ),
                 const SizedBox(height: 6),
                 if (stationLabel.isNotEmpty) Text(stationLabel),
-                const Text(
-                  '把相机软件的导出目标设为这个机位的收图文件夹。',
-                  style: TextStyle(
+                Text(
+                  station.hasFolder
+                      ? '把相机软件的导出目标设为这个机位的收图文件夹。'
+                      : '请先选择相机照片的收图文件夹。',
+                  style: const TextStyle(
                     color: WorkstationStyle.muted,
                     fontSize: 13,
                     height: 1.4,
                   ),
                 ),
                 const SizedBox(height: 14),
-                SelectableText(
-                  _folder,
-                  style: TextStyle(
-                    color: _folder.isEmpty
-                        ? WorkstationStyle.muted
-                        : WorkstationStyle.ink,
-                    fontSize: 12,
+                if (station.hasFolder) ...[
+                  SelectableText(
+                    _folder,
+                    style: const TextStyle(
+                      color: WorkstationStyle.ink,
+                      fontSize: 12,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
+                  const SizedBox(height: 12),
+                ],
                 if ((Platform.isWindows ||
                         Platform.isMacOS ||
                         Platform.isLinux) &&
-                    !station.legacy) ...[
+                    station.canImport) ...[
                   DropTarget(
                     enable: _canDrop,
                     onDragEntered: (_) => setState(() => _dragging = true),
@@ -284,8 +297,16 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                   runSpacing: 8,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
+                    OutlinedButton.icon(
+                      onPressed: working || !supported ? null : _pickFolder,
+                      icon: const Icon(
+                        Icons.create_new_folder_outlined,
+                        size: 18,
+                      ),
+                      label: Text(station.hasFolder ? '更换收图文件夹' : '选择收图文件夹'),
+                    ),
                     FilledButton.icon(
-                      onPressed: working || !supported || station.legacy
+                      onPressed: working || !supported || !station.canImport
                           ? null
                           : _importPhotos,
                       icon: const Icon(
@@ -296,33 +317,27 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                     ),
                     if (!Platform.isIOS)
                       OutlinedButton.icon(
-                        onPressed: working || !supported ? null : _openFolder,
+                        onPressed: working || !supported || !station.hasFolder
+                            ? null
+                            : _openFolder,
                         icon: const Icon(Icons.folder_open, size: 18),
                         label: const Text('打开收图文件夹'),
                       ),
                     TextButton(
-                      onPressed: _copyFolder,
+                      onPressed: station.hasFolder ? _copyFolder : null,
                       child: const Text('复制路径'),
                     ),
                     TextButton(
                       onPressed: working ? null : widget.onConfigureCos,
                       child: const Text('更新机位密钥'),
                     ),
-                    if (station.legacy)
-                      TextButton(
-                        onPressed: working || !supported
-                            ? null
-                            : _finishMigration,
-                        child: const Text('切换到托管目录'),
-                      ),
-                    if (station.legacy && !uploader.running)
+                    if ((station.legacy || station.custom) && !uploader.running)
                       FilterChip(
-                        label: const Text('补扫旧目录已有照片'),
-                        selected: _scanLegacyExisting,
+                        label: const Text('补扫目录已有照片'),
+                        selected: _scanExisting ?? station.scanExisting,
                         onSelected: working
                             ? null
-                            : (value) =>
-                                  setState(() => _scanLegacyExisting = value),
+                            : (value) => setState(() => _scanExisting = value),
                       ),
                   ],
                 ),
@@ -399,11 +414,12 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                         runSpacing: 8,
                         children: [
                           FilledButton.icon(
-                            onPressed: working || !supported
+                            onPressed:
+                                working || !supported || !station.hasFolder
                                 ? null
                                 : () => station.setEnabled(
                                     !uploader.running,
-                                    scanLegacyExisting: _scanLegacyExisting,
+                                    scanExisting: _scanExisting,
                                   ),
                             icon: Icon(
                               active
@@ -418,7 +434,9 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                                   ? '暂停监听'
                                   : station.legacy
                                   ? '恢复旧目录监听'
-                                  : '继续监听',
+                                  : station.enabled
+                                  ? '继续监听'
+                                  : '开始监听',
                             ),
                             style: FilledButton.styleFrom(
                               backgroundColor: active

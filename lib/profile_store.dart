@@ -13,6 +13,7 @@ class ProfileStore {
   static const _enrollmentKey = 'cos.enrollment.v1';
   static const _stationPrefix = 'cos.station.v2.';
   static const _watchPrefix = 'cos.watch.v2.';
+  static const _oldWatchKey = 'ftp.watch.v1';
   static const _applicationPrefix = 'cos.application.v2.';
   final FlutterSecureStorage _storage;
 
@@ -20,7 +21,7 @@ class ProfileStore {
 
   static String uploadScope(Uri api) =>
       sha256.convert(utf8.encode(api.origin)).toString();
-  String _stationKey(CosUploadProfile profile) =>
+  static String uploadKey(CosUploadProfile profile) =>
       '${uploadScope(profile.api)}.${profile.stationId}';
 
   Future<ServerProfile?> load() async {
@@ -33,15 +34,15 @@ class ProfileStore {
     final legacy = await _read(_cosKey);
     if (legacy?['api'] == api.origin) {
       final profile = CosUploadProfile.fromJson(legacy!);
-      if (await _read('$_stationPrefix${_stationKey(profile)}') == null) {
-        final watch = await _read('ftp.watch.v1');
-        if (watch != null) {
+      if (await _read('$_stationPrefix${uploadKey(profile)}') == null) {
+        final watch = await _read(_oldWatchKey);
+        if (watch != null && await loadWatch(profile) == null) {
           await saveWatch(profile, {
             'legacyFolder': watch['folder'] as String,
             'recursive': watch['recursive'] as bool,
           });
         }
-        await saveCos(profile);
+        await saveCos(profile, keepManagedDefault: true);
       }
     }
     final enrollment = await _read(_enrollmentKey);
@@ -63,21 +64,83 @@ class ProfileStore {
         ),
   ];
 
-  Future<void> saveCos(CosUploadProfile profile) => _storage.write(
-    key: '$_stationPrefix${_stationKey(profile)}',
-    value: jsonEncode(profile.toJson()),
-  );
+  Future<void> saveCos(
+    CosUploadProfile profile, {
+    bool keepManagedDefault = false,
+  }) async {
+    final key = '$_stationPrefix${uploadKey(profile)}';
+    if (!keepManagedDefault &&
+        await _storage.containsKey(key: key) == false &&
+        await loadWatch(profile) == null) {
+      await saveWatch(profile, {'folderRequired': true, 'enabled': false});
+    }
+    await _storage.write(key: key, value: jsonEncode(profile.toJson()));
+  }
+
+  Future<void> removeCos(CosUploadProfile profile) async {
+    final key = '$_stationPrefix${uploadKey(profile)}';
+    final saved = await _read(key);
+    if (saved != null && saved['token'] != profile.token) {
+      throw StateError('机位密钥已更新，请刷新后再移除');
+    }
+    final legacy = await _read(_cosKey);
+    if (legacy?['api'] == profile.api.origin &&
+        legacy?['stationId'] == profile.stationId) {
+      await _storage.delete(key: _cosKey);
+    }
+    await _storage.delete(key: key);
+  }
 
   Future<Map<String, dynamic>?> loadWatch(CosUploadProfile profile) =>
-      _read('$_watchPrefix${_stationKey(profile)}');
+      _read('$_watchPrefix${uploadKey(profile)}');
 
   Future<void> saveWatch(
     CosUploadProfile profile,
     Map<String, dynamic> value,
   ) => _storage.write(
-    key: '$_watchPrefix${_stationKey(profile)}',
+    key: '$_watchPrefix${uploadKey(profile)}',
     value: jsonEncode(value),
   );
+
+  Future<List<({String? key, String path, String? identity})>>
+  loadWatchFolders() async {
+    final entries = await _storage.readAll();
+    final folders = <({String? key, String path, String? identity})>[];
+    for (final entry in entries.entries) {
+      if (!entry.key.startsWith(_watchPrefix)) continue;
+      final watch = jsonDecode(entry.value) as Map<String, dynamic>;
+      final path = (watch['folder'] ?? watch['legacyFolder']) as String?;
+      if (path != null && path.isNotEmpty) {
+        folders.add((
+          key: entry.key.substring(_watchPrefix.length),
+          path: path,
+          identity: watch['folderIdentity'] as String?,
+        ));
+      }
+    }
+
+    final oldWatch = entries[_oldWatchKey];
+    final oldCos = entries[_cosKey];
+    if (oldWatch != null) {
+      final watch = jsonDecode(oldWatch) as Map<String, dynamic>;
+      final path = watch['folder'] as String?;
+      final owner = oldCos == null
+          ? null
+          : uploadKey(
+              CosUploadProfile.fromJson(
+                jsonDecode(oldCos) as Map<String, dynamic>,
+              ),
+            );
+      if (path != null &&
+          path.isNotEmpty &&
+          (owner == null
+              ? !folders.any((item) => item.path == path)
+              : !entries.containsKey('$_watchPrefix$owner'))) {
+        folders.add((key: owner, path: path, identity: null));
+      }
+    }
+    return folders;
+  }
 
   Future<List<Map<String, dynamic>>> loadEnrollments(Uri api) async => [
     for (final entry in (await _storage.readAll()).entries)

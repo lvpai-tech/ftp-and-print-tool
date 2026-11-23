@@ -152,6 +152,7 @@ class _Observation {
 
 /// 事件触发和定时补扫并用；扫描、落盘及上传各自串行，上传不阻塞新图发现。
 class FolderUploader extends ChangeNotifier {
+  static const importStagingPrefix = '.lvpai-import-';
   final Directory storage;
   final Duration scanInterval, stableFor, retryDelay;
   final Future<bool> Function(File) validateImage;
@@ -188,9 +189,8 @@ class FolderUploader extends ChangeNotifier {
   bool get authorizationPaused => _authorizationPaused;
   bool get requiresStop => running || stopping || _journal != null;
   bool _directoryReadable = false;
-  bool get canFinishMigration =>
-      running &&
-      _directoryReadable &&
+  bool get canFinishMigration => running && _directoryReadable && queueDrained;
+  bool get queueDrained =>
       _waiting.isEmpty &&
       _noticePending.isEmpty &&
       issues.isEmpty &&
@@ -315,9 +315,15 @@ class FolderUploader extends ChangeNotifier {
 
   String _signature(FileStat s) =>
       '${s.size}:${s.modified.microsecondsSinceEpoch}';
-  String _hash(String value) => sha256.convert(utf8.encode(value)).toString();
+  static String _hash(String value) =>
+      sha256.convert(utf8.encode(value)).toString();
 
-  static bool _isPhoto(String path) {
+  bool _isPhoto(String path) {
+    if (p
+        .split(p.relative(path, from: _root!.path))
+        .any((part) => part.startsWith(importStagingPrefix))) {
+      return false;
+    }
     final extension = p.extension(path).toLowerCase();
     return cameraPhotoExtensions.any((type) => extension == '.$type');
   }
@@ -436,6 +442,26 @@ class FolderUploader extends ChangeNotifier {
     _cos = cosProfile == null ? null : CosUpload(cosProfile);
     _recursive = recursive;
     _includeExisting = includeExisting;
+    _resetQueue();
+    final key = cosProfile != null
+        ? _cosQueueKey(absolute.path, cosProfile)
+        : _hash(
+            '${absolute.path}\u0000${profile!.host.toLowerCase()}\u0000'
+            '${profile.port}\u0000${profile.user}\u0000${profile.directory}',
+          );
+    final journal = QueueJournal(_queueFile(key));
+    await _startQueue(absolute, journal, recursive);
+  }
+
+  void clearView() {
+    if (requiresStop) throw StateError('请先停止当前监听');
+    _resetQueue();
+    message = '确认相机导出目录后，点击开始监听';
+    watcherNotice = '';
+    _notify();
+  }
+
+  void _resetQueue() {
     _jobs.clear();
     _seen.clear();
     _ignored.clear();
@@ -452,15 +478,13 @@ class FolderUploader extends ChangeNotifier {
     issues.clear();
     fatalError = null;
     _initialized = false;
-    final key = _hash(
-      cosProfile != null
-          ? '${absolute.path}\u0000cos\u0000${cosProfile.queueTarget}'
-          : '${absolute.path}\u0000${profile!.host.toLowerCase()}\u0000'
-                '${profile.port}\u0000${profile.user}\u0000${profile.directory}',
-    );
-    final journal = QueueJournal(
-      File(p.join(storage.path, key, 'queue.jsonl')),
-    );
+  }
+
+  Future<void> _startQueue(
+    Directory absolute,
+    QueueJournal journal,
+    bool recursive,
+  ) async {
     try {
       for (final event in await journal.open()) {
         switch (event['type']) {
@@ -566,6 +590,14 @@ class FolderUploader extends ChangeNotifier {
       rethrow;
     }
   }
+
+  File _queueFile(String key) => File(p.join(storage.path, key, 'queue.jsonl'));
+
+  static String _cosQueueKey(String folder, CosUploadProfile profile) =>
+      _hash('$folder\u0000cos\u0000${profile.queueTarget}');
+
+  Future<bool> hasCosQueue(String resolvedFolder, CosUploadProfile profile) =>
+      _queueFile(_cosQueueKey(resolvedFolder, profile)).exists();
 
   void _tick() {
     if (!running || _closed) return;
