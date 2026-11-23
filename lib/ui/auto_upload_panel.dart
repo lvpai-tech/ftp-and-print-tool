@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -16,18 +15,21 @@ import '../branding.dart';
 import '../photo_normalizer.dart';
 import 'card_tail_dialog.dart';
 import 'design.dart';
+import 'upload_task_list.dart';
 
 class AutoUploadPanel extends StatefulWidget {
   final void Function(bool) onActiveChanged;
   final ValueChanged<bool>? onUploadingChanged;
   final CosUploadProfile cosProfile;
   final VoidCallback onConfigureCos;
+  final VoidCallback? onOpenBatches;
   const AutoUploadPanel({
     super.key,
     required this.onActiveChanged,
     this.onUploadingChanged,
     required this.cosProfile,
     required this.onConfigureCos,
+    this.onOpenBatches,
   });
   @override
   State<AutoUploadPanel> createState() => _AutoUploadPanelState();
@@ -217,17 +219,6 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
     super.dispose();
   }
 
-  String _status(AutoJob job) => switch (job.state) {
-    'done' => '上传成功',
-    'accepted' => '已上传 · 等待入库',
-    'ingested' => '已入库 · 等待归卡',
-    'grouped' => '已归卡',
-    'uploading' => '上传中 ${(job.progress * 100).round()}%',
-    'failed' => '失败 · ${job.error}',
-    _ =>
-      job.attempts == 0 ? '等待上传' : '等待自动重试（${job.attempts}/3） · ${job.error}',
-  };
-
   Future<void> _pickCardPhoto() async {
     try {
       final photo = await FilePicker.pickFiles(
@@ -247,13 +238,6 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
     }
   }
 
-  (Color, Color) _statusColors(AutoJob job) => switch (job.state) {
-    'done' || 'grouped' => (WorkstationStyle.ok, WorkstationStyle.okSoft),
-    'uploading' => (WorkstationStyle.accent, WorkstationStyle.accentSoft),
-    'failed' => (WorkstationStyle.bad, WorkstationStyle.badSoft),
-    _ => (WorkstationStyle.warn, WorkstationStyle.warnSoft),
-  };
-
   @override
   Widget build(BuildContext context) {
     final supported =
@@ -261,9 +245,9 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
         Platform.isMacOS ||
         Platform.isLinux ||
         Platform.isIOS;
-    final jobs = _uploader?.jobs ?? <AutoJob>[];
-    final orderWait = _uploader?.orderWaitMessage;
-    final unordered = _uploader?.sourcesNeedingOrder ?? const <String>[];
+    final uploader = _uploader;
+    final jobs = uploader?.jobs ?? const <AutoJob>[];
+    final orderWait = uploader?.orderWaitMessage;
     final locked = _active || _working || _loading;
     final pending = jobs.where((j) => j.state == 'pending').length;
     final uploading = jobs.where((j) => j.state == 'uploading').length;
@@ -526,32 +510,12 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                         fontSize: 12,
                       ),
                     ),
-                  if (unordered.isNotEmpty)
-                    OutlinedButton(
-                      onPressed: () async {
-                        final source = await showDialog<String>(
-                          context: context,
-                          builder: (context) => SimpleDialog(
-                            title: const Text('选择下一张上传的照片'),
-                            children: [
-                              for (final source in unordered)
-                                SimpleDialogOption(
-                                  onPressed: () =>
-                                      Navigator.pop(context, source),
-                                  child: Text(
-                                    p.relative(source, from: _folder),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        );
-                        if (mounted && source != null) {
-                          _uploader?.confirmNextSource(source);
-                        }
-                      },
-                      child: const Text('多张照片同时被发现，确认上传顺序'),
-                    ),
                   ...?_uploader?.issues.entries
+                      .where(
+                        (entry) =>
+                            '${p.relative(entry.key, from: _folder)}：${entry.value}' !=
+                            orderWait,
+                      )
                       .take(8)
                       .map(
                         (entry) => Padding(
@@ -566,58 +530,28 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                         ),
                       ),
                   const SizedBox(height: 12),
-                  const Row(
-                    children: [
-                      Text(
-                        '任务列表',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: WorkstationStyle.ink,
-                        ),
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        '本地预览 · 按入队顺序',
-                        style: TextStyle(
-                          color: WorkstationStyle.muted,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
+                  UploadTaskList(
+                    folder: _folder,
+                    waiting: uploader?.waitingSources ?? const {},
+                    needingOrder: uploader?.sourcesNeedingOrder ?? const [],
+                    jobs: jobs,
+                    onDiscard: uploader != null && uploader.running
+                        ? uploader.discardWaitingSource
+                        : null,
+                    onOpenBatches: widget.onOpenBatches,
+                    onConfirmNext: uploader != null && uploader.running
+                        ? (source) {
+                            if (identical(_uploader, uploader)) {
+                              uploader.confirmNextSource(source);
+                            }
+                          }
+                        : null,
+                    onReview: (job) => showCardTailDialog(
+                      context,
+                      readPhoto: job.readPhotoForReview,
+                      guidance: '请根据候选尾号核对卡面。归集由服务端识别结束照。',
+                    ),
                   ),
-                  const SizedBox(height: 10),
-                  if (jobs.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 28),
-                      child: Center(
-                        child: Text(
-                          '新照片到达后，会自动显示在这里',
-                          style: TextStyle(color: WorkstationStyle.muted),
-                        ),
-                      ),
-                    )
-                  else ...[
-                    for (var index = 0; index < jobs.length; index++) ...[
-                      if (index > 0) const SizedBox(height: 10),
-                      Builder(
-                        builder: (context) {
-                          final job = jobs[index];
-                          final colors = _statusColors(job);
-                          return _JobThumbRow(
-                            job: job,
-                            status: _status(job),
-                            color: colors.$1,
-                            soft: colors.$2,
-                            onReview: () => showCardTailDialog(
-                              context,
-                              readPhoto: job.readPhotoForReview,
-                              guidance: '请根据候选尾号核对卡面。归集由服务端识别结束照。',
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ],
                   const SizedBox(height: 12),
                   const Text(
                     '支持 JPEG、PNG、MPO、HEIF、RAW / DNG、TIFF、WebP 和 AVIF。按发现顺序排队，前一张入库后继续。',
@@ -667,171 +601,6 @@ class _Stat extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _JobThumbRow extends StatelessWidget {
-  const _JobThumbRow({
-    required this.job,
-    required this.status,
-    required this.color,
-    required this.soft,
-    required this.onReview,
-  });
-
-  final AutoJob job;
-  final String status;
-  final Color color;
-  final Color soft;
-  final VoidCallback onReview;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: WorkstationStyle.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: WorkstationStyle.line),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Row(
-          children: [
-            _LocalThumb(job: job),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    job.relative,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: WorkstationStyle.ink,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 14,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  if (job.state == 'uploading')
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(99),
-                      child: LinearProgressIndicator(
-                        value: job.progress,
-                        minHeight: 6,
-                        backgroundColor: WorkstationStyle.accentSoft,
-                        color: WorkstationStyle.accent,
-                      ),
-                    )
-                  else
-                    StatusTag(label: status, color: color, soft: soft),
-                ],
-              ),
-            ),
-            if (job.state == 'uploading') ...[
-              const SizedBox(width: 10),
-              StatusTag(label: status, color: color, soft: soft),
-            ],
-            IconButton(
-              tooltip: '识别取片卡尾号',
-              onPressed: onReview,
-              icon: const Icon(Icons.document_scanner_outlined),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _LocalThumb extends StatefulWidget {
-  const _LocalThumb({required this.job});
-  final AutoJob job;
-
-  @override
-  State<_LocalThumb> createState() => _LocalThumbState();
-}
-
-class _LocalThumbState extends State<_LocalThumb> {
-  AutoJob get job => widget.job;
-  Future<Uint8List?>? _normalizedPreview;
-
-  @override
-  void didUpdateWidget(covariant _LocalThumb oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.job.id != job.id) _normalizedPreview = null;
-  }
-
-  Widget _fallbackPreview() {
-    if (job.normalized) {
-      return FutureBuilder<Uint8List?>(
-        future: _normalizedPreview ??= job.readNormalizedThumbnail(),
-        builder: (context, snapshot) => snapshot.hasData
-            ? Image.memory(
-                snapshot.data!,
-                fit: BoxFit.cover,
-                cacheWidth: 144,
-                errorBuilder: (context, error, stackTrace) => _placeholder(),
-              )
-            : _placeholder(),
-      );
-    }
-    return Image.file(
-      File(job.source),
-      width: 72,
-      height: 72,
-      fit: BoxFit.cover,
-      cacheWidth: 144,
-      errorBuilder: (context, error, stackTrace) => _placeholder(),
-    );
-  }
-
-  Widget _placeholder() {
-    final done = const {'done', 'ingested', 'grouped'}.contains(job.state);
-    return ColoredBox(
-      color: const Color(0xfff1f5f9),
-      child: Icon(
-        done ? Icons.check_circle_outline : Icons.photo_outlined,
-        color: done ? WorkstationStyle.ok : WorkstationStyle.muted,
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(9),
-      child: SizedBox(
-        width: 72,
-        height: 72,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            Image.file(
-              File(job.snapshot),
-              width: 72,
-              height: 72,
-              fit: BoxFit.cover,
-              cacheWidth: 144,
-              errorBuilder: (context, error, stackTrace) => _fallbackPreview(),
-            ),
-            if (const {'done', 'ingested', 'grouped'}.contains(job.state))
-              const Align(
-                alignment: Alignment.bottomRight,
-                child: Padding(
-                  padding: EdgeInsets.all(5),
-                  child: Icon(
-                    Icons.check_circle,
-                    color: Colors.white,
-                    size: 18,
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
     );
   }
 }

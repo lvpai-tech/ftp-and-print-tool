@@ -15,22 +15,20 @@ void main() {
   test('已保存的三张 JPG 按原发现顺序进入 COS 队列', () async {
     final fixture = await _QueueFixture.open();
     final uploader = fixture.uploader();
-    final names = [
-      '微信图片_20261122142037_144_41_1.jpg',
-      '微信图片_20261122142046_146_41_2.jpg',
-      '微信图片_20261122142040_145_41_3.jpg',
-    ];
     final dimensions = [(2336, 5184), (1844, 4096), (2336, 5184)];
     await fixture.run(() async {
       await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
-      for (var index = 0; index < names.length; index++) {
-        final name = names[index];
-        final original = await File(p.join(savedJpegSamples!, name)).readAsBytes();
-        final source = await File(p.join(fixture.inbox.path, name)).writeAsBytes(original);
+      for (var index = 0; index < dimensions.length; index++) {
+        final name = 'saved-${index + 1}.jpg';
+        final original = await File(p.join(savedJpegSamples!, name))
+            .readAsBytes();
+        final source = await File(p.join(fixture.inbox.path, name))
+            .writeAsBytes(original);
         await _until(
-          () => uploader.jobs.firstOrNull?.relative == name &&
+          () =>
+              uploader.jobs.firstOrNull?.relative == name &&
               uploader.jobs.first.state == 'accepted',
-          '等待 $name 上传',
+          '$name 上传',
           describe: () => '${uploader.issues} ${uploader.orderWaitMessage}',
         );
         final job = uploader.jobs.first;
@@ -38,7 +36,7 @@ void main() {
         fixture.ingested.add(job.id);
         await _until(
           () => job.state == 'ingested' && !File(job.snapshot).existsSync(),
-          '等待 $name 入库',
+          '$name 入库',
         );
         final preview = await job.readPhotoForReview();
         final info = img.JpegDecoder().startDecode(preview)!;
@@ -382,6 +380,7 @@ void main() {
       final uploader = fixture.uploader();
       final original = File(p.join(fixture.inbox.path, 'z-original.png'));
       final ending = File(p.join(fixture.inbox.path, 'a-ending.png'));
+      final later = File(p.join(fixture.inbox.path, 'later.png'));
       await original.create();
       await ending.writeAsBytes(await _png());
       await uploader.start(
@@ -394,6 +393,16 @@ void main() {
         original.path,
         ending.path,
       });
+      expect(uploader.waitingSources.keys, uploader.sourcesNeedingOrder);
+      await later.writeAsBytes(await _png());
+      await _until(
+        () => uploader.waitingSources.containsKey(later.path),
+        '发现后续照片',
+      );
+      expect(uploader.waitingSources.keys, [
+        ...uploader.sourcesNeedingOrder,
+        later.path,
+      ]);
       expect(fixture.prepared, isEmpty);
       uploader.confirmNextSource(original.path);
       await _until(
@@ -408,7 +417,29 @@ void main() {
         includeExisting: true,
       );
       expect(uploader.sourcesNeedingOrder, isEmpty);
+      expect(uploader.waitingSources.keys, [
+        original.path,
+        ending.path,
+        later.path,
+      ]);
       expect(uploader.orderWaitMessage, contains('z-original.png'));
+      expect(fixture.prepared, isEmpty);
+      final oldSignature = uploader.waitingSources[later.path];
+      await expectLater(
+        uploader.discardWaitingSource(later.path, 'stale'),
+        throwsStateError,
+      );
+      expect(uploader.running, isTrue);
+      await uploader.discardWaitingSource(later.path, oldSignature);
+      expect(await later.exists(), isTrue);
+      await uploader.stop();
+      await uploader.start(
+        fixture.inbox,
+        null,
+        cosProfile: fixture.profile,
+        includeExisting: true,
+      );
+      expect(uploader.waitingSources.keys, [original.path, ending.path]);
       expect(fixture.prepared, isEmpty);
     });
   });

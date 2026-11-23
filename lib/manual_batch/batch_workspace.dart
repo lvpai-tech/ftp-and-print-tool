@@ -264,7 +264,7 @@ class BatchWorkspace extends ChangeNotifier {
     }
     String? secret;
     try {
-      await normalizePhotoSnapshot(snapshot);
+      await normalizePhotoSnapshot(snapshot, sourcePath: file.path);
       secret = await recognize(snapshot);
     } catch (_) {
       await snapshot.delete();

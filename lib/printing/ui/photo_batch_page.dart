@@ -13,10 +13,12 @@ class PhotoBatchPage extends StatefulWidget {
     super.key,
     required this.call,
     required this.scenicName,
+    this.initialStationId,
   });
 
   final Future<dynamic> Function(String, List<dynamic>) call;
   final String scenicName;
+  final String? initialStationId;
 
   @override
   State<PhotoBatchPage> createState() => _PhotoBatchPageState();
@@ -39,6 +41,7 @@ class _PhotoBatchPageState extends State<PhotoBatchPage> {
   @override
   void initState() {
     super.initState();
+    _station = widget.initialStationId;
     _load();
   }
 
@@ -57,6 +60,9 @@ class _PhotoBatchPageState extends State<PhotoBatchPage> {
         _stations = stations;
         _station = station;
       });
+      if (station != null && !stations.any((row) => row['id'] == station)) {
+        throw StateError('当前打印景区没有此上传机位，请核对机位和景区设置。');
+      }
       final result = station == null
           ? null
           : await widget.call('listPhotoBatches', [
@@ -245,10 +251,12 @@ class _PhotoBatchPageState extends State<PhotoBatchPage> {
                     runSpacing: 10,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      if (selectedStation != null)
+                      if (stations.isNotEmpty)
                         _BatchFilterMenu(
                           tooltip: '选择机位',
-                          label: _stationName(selectedStation),
+                          label: selectedStation == null
+                              ? '选择机位'
+                              : _stationName(selectedStation),
                           icon: Icons.videocam_outlined,
                           width: 236,
                           enabled: enabled,

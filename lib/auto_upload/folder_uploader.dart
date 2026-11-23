@@ -146,6 +146,7 @@ class FolderUploader extends ChangeNotifier {
   final List<List<String>> _waiting = [];
   final Set<String> _fileEvents = {};
   String? _confirmedSource;
+  String? _discardingSource;
   final Map<String, String> issues = {};
   QueueJournal? _journal;
   StreamSubscription<FileSystemEvent>? _events;
@@ -163,6 +164,15 @@ class FolderUploader extends ChangeNotifier {
   int get settling => _cos == null
       ? _observations.length
       : _waiting.fold(0, (count, group) => count + group.length);
+  Map<String, String?> get waitingSources {
+    final sources = _cos == null
+        ? _observations.keys
+        : _waiting.expand((group) => group);
+    return Map.unmodifiable({
+      for (final source in sources) source: _observations[source]?.signature,
+    });
+  }
+
   List<String> get sourcesNeedingOrder =>
       _waiting.isNotEmpty && _waiting.first.length > 1
       ? List.unmodifiable(_waiting.first)
@@ -268,9 +278,65 @@ class FolderUploader extends ChangeNotifier {
     if (_waiting.first.isEmpty) _waiting.removeAt(0);
   }
 
+  void _discardSource(String source, String? signature) {
+    final index = _waiting.indexWhere((group) => group.contains(source));
+    if (index >= 0) {
+      final group = _waiting[index];
+      group.remove(source);
+      if (group.isEmpty) _waiting.removeAt(index);
+    }
+    if (signature != null) _seen[source] = signature;
+    _observations.remove(source);
+    issues.remove(source);
+  }
+
+  Future<void> discardWaitingSource(String source, String? signature) async {
+    // Reserve the scan slot before validating or writing the discard event.
+    while (_scanTask != null) {
+      await _scanTask;
+    }
+    if (!running ||
+        _cos == null ||
+        source == _confirmedSource ||
+        !_waiting.any((group) => group.contains(source))) {
+      throw StateError('照片已离开待准备队列，请刷新后核对。');
+    }
+    _discardingSource = source;
+    final discard = _persistDiscard(source, signature);
+    final scanSlot = discard
+        .then<void>((_) {}, onError: (Object _) {})
+        .whenComplete(() {
+          _scanTask = null;
+          _discardingSource = null;
+        });
+    _scanTask = scanSlot;
+    try {
+      await discard;
+    } finally {
+      await scanSlot;
+    }
+    _notify();
+    _tick();
+  }
+
+  Future<void> _persistDiscard(String source, String? signature) async {
+    final stat = await File(source).stat();
+    final current = stat.type == FileSystemEntityType.file
+        ? _signature(stat)
+        : null;
+    if (current != signature) throw StateError('文件有变化，请核对最新缩略图后再移除。');
+    await _append({
+      'type': 'discardSource',
+      'source': source,
+      'signature': signature,
+    });
+    _discardSource(source, signature);
+  }
+
   void confirmNextSource(String source) {
     if (running &&
         _confirmedSource == null &&
+        source != _discardingSource &&
         sourcesNeedingOrder.contains(source)) {
       _confirmedSource = source;
       _tick();
@@ -356,6 +422,11 @@ class FolderUploader extends ChangeNotifier {
             final source = event['source'] as String;
             _seen[source] = event['signature'] as String;
             _resolveSource(source);
+          case 'discardSource':
+            _discardSource(
+              event['source'] as String,
+              event['signature'] as String?,
+            );
           case 'job':
             final job = AutoJob.fromJson(event);
             if (job.state == 'uploading') job.state = 'pending';

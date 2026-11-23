@@ -2,6 +2,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../auto_upload/cos_upload.dart';
 import '../branding.dart';
+import '../printing/print_bridge.dart';
+import '../printing/ui/photo_batch_page.dart';
 import '../profile_store.dart';
 import 'app_dialogs.dart';
 import 'auto_upload_panel.dart';
@@ -15,6 +17,7 @@ class TransferPage extends StatefulWidget {
     this.onActiveChanged,
     this.onUploadingChanged,
     this.onConfiguredChanged,
+    this.printBridge,
   });
 
   /// 嵌在工作台壳内时由壳提供导航。
@@ -22,6 +25,7 @@ class TransferPage extends StatefulWidget {
   final ValueChanged<bool>? onActiveChanged;
   final ValueChanged<bool>? onUploadingChanged;
   final ValueChanged<bool>? onConfiguredChanged;
+  final PrintBridge? printBridge;
 
   @override
   State<TransferPage> createState() => _TransferPageState();
@@ -106,6 +110,27 @@ class _TransferPageState extends State<TransferPage> {
       onConfigureCos: _configure,
       onActiveChanged: (active) => widget.onActiveChanged?.call(active),
       onUploadingChanged: widget.onUploadingChanged,
+      onOpenBatches: widget.printBridge == null
+          ? null
+          : () => _openPhotoBatches(profile.stationId),
+    );
+  }
+
+  Future<void> _openPhotoBatches(String stationId) async {
+    final bridge = widget.printBridge!;
+    if (!bridge.connected || !bridge.configured) {
+      await showAppMessage(context, message: '请先在打印工作台连接景区，再设置取片批次。');
+      return;
+    }
+    final scenicName = (bridge.config['scenicName'] as String?)?.trim();
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => PhotoBatchPage(
+          call: bridge.call,
+          scenicName: scenicName?.isNotEmpty == true ? scenicName! : '（未返回名称）',
+          initialStationId: stationId,
+        ),
+      ),
     );
   }
 

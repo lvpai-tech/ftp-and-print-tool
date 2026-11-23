@@ -1,9 +1,12 @@
 import 'dart:io';
+
 import 'package:crypto/crypto.dart';
 import 'package:ftpconnect/ftpconnect.dart';
 import 'package:lvpai_ftp_client/auto_upload/folder_uploader.dart';
 import 'package:lvpai_ftp_client/transfer.dart';
+
 import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:lvpai_ftp_client/photo_normalizer.dart';

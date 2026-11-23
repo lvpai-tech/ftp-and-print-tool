@@ -55,11 +55,16 @@ void main() {
       MaterialApp(
         home: PhotoBatchPage(
           scenicName: '测试景区',
+          initialStationId: '17',
           call: (method, args) async => switch (method) {
             'listBatchStations' => <Map<String, dynamic>>[
+              {'id': '18', 'code': 'A18', 'name': '其他机位'},
               {'id': '17', 'code': 'A17', 'name': '测试机位'},
             ],
-            'listPhotoBatches' => <String, dynamic>{'batches': batches},
+            'listPhotoBatches' => () {
+              expect((args.single as Map)['stationId'], '17');
+              return <String, dynamic>{'batches': batches};
+            }(),
             'correctPhotoBatch' => () {
               expect(args.first, '17');
               final request = args.last as Map<String, dynamic>;
