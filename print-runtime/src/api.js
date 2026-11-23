@@ -49,9 +49,18 @@ function correctPhotoBatch(config, stationId, correction) {
     AbortSignal.timeout(120000));
 }
 
-function removeBatchPhoto(config, stationId, photoId, request) {
+function batchPhotoRoute(stationId, photoId) {
   if (typeof photoId !== 'string' || !/^[1-9]\d*$/.test(photoId)) throw new Error('照片编号无效');
-  return callJson(config, 'POST', `${batchStationRoute(stationId)}/photos/${photoId}/removals`,
+  return `${batchStationRoute(stationId)}/photos/${photoId}`;
+}
+
+function getBatchPhotoCapture(config, stationId, photoId) {
+  return callJson(config, 'GET', `${batchPhotoRoute(stationId, photoId)}/capture`,
+    undefined, AbortSignal.timeout(30000));
+}
+
+function removeBatchPhoto(config, stationId, photoId, request) {
+  return callJson(config, 'POST', `${batchPhotoRoute(stationId, photoId)}/removals`,
     request, AbortSignal.timeout(30000));
 }
 
@@ -198,6 +207,7 @@ module.exports = {
   listPhotoBatches,
   correctPhotoBatch,
   removeBatchPhoto,
+  getBatchPhotoCapture,
   generatingThumbnailPath,
   beginJob,
   continueJob,

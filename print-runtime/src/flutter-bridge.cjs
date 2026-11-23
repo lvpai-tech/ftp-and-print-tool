@@ -8,7 +8,8 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { createRuntime } = require('./runtime');
 const { normalizeConfig, saveConfig, DEFAULT_OPERATION_BASE } = require('./config');
-const { fetchMe, listBatchStations, listPhotoBatches, correctPhotoBatch, removeBatchPhoto } = require('./api');
+const { fetchMe, listBatchStations, listPhotoBatches, correctPhotoBatch, removeBatchPhoto,
+  getBatchPhotoCapture } = require('./api');
 const { CUPS_SOCKET } = require('./mac-printer');
 
 const execute = promisify(execFile);
@@ -144,6 +145,7 @@ async function serve({ input = process.stdin, send, configPath, root }) {
     if (method === 'listPhotoBatches') return listPhotoBatches(batchConfig(args[1]), args[0]);
     if (method === 'correctPhotoBatch') return correctPhotoBatch(batchConfig(args[2]), args[0], args[1]);
     if (method === 'removeBatchPhoto') return removeBatchPhoto(batchConfig(args[3]), args[0], args[1], args[2]);
+    if (method === 'getBatchPhotoCapture') return getBatchPhotoCapture(batchConfig(args[2]), args[0], args[1]);
     if (method === 'saveConfig') {
       await bridge.applyConfigPatch(args[0]);
       return snapshot();

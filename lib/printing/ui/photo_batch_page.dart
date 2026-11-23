@@ -11,6 +11,18 @@ import '../../ui/design.dart';
 import '../job_query_time.dart';
 import '../print_bridge.dart';
 
+enum _PhotoAction {
+  recognize('识别取片码', Icons.document_scanner_outlined),
+  remove('删除照片', Icons.delete_outline),
+  capture('查询拍摄信息', Icons.info_outline),
+  preview('查看图片', Icons.image_outlined);
+
+  const _PhotoAction(this.label, this.icon);
+
+  final String label;
+  final IconData icon;
+}
+
 class PhotoBatchPage extends StatelessWidget {
   const PhotoBatchPage({
     super.key,
@@ -279,7 +291,20 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   });
 
   Future<void> _removePhoto(Json photo) async {
-    if (_loading || _working || photo['removalBlockedReason'] != '') return;
+    if (_loading || _working) return;
+    final blocked = photo['removalBlockedReason'];
+    if (photo['ending'] == true || blocked != '') {
+      await showAppMessage(
+        context,
+        title: '无法删除照片',
+        message: blocked is String && blocked.isNotEmpty
+            ? blocked
+            : photo['ending'] == true
+            ? '结束照和卡片素材仅供核对。'
+            : '当前照片不支持删除，请刷新后核对。',
+      );
+      return;
+    }
     setState(() => _working = true);
     try {
       final confirmed = await showDialog<bool>(
@@ -787,7 +812,66 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     final blocked = photo['blockedReason'] as String?;
     final unavailable =
         blocked ?? (!ending && !hasDestination ? '所选日期没有其他可接收批次' : null);
-    final tile = SizedBox(
+    final preview = Stack(
+      fit: StackFit.expand,
+      children: [
+        Material(
+          color: WorkstationStyle.bg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+            side: BorderSide(
+              color: ending ? WorkstationStyle.accent : WorkstationStyle.line,
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            mouseCursor: canMove ? SystemMouseCursors.grab : null,
+            onTap: () => _preview(photo),
+            child: _thumbnail(photo),
+          ),
+        ),
+        if (!ending && (canMove || unavailable != null))
+          Positioned(
+            left: 4,
+            top: 4,
+            child: Material(
+              color: WorkstationStyle.card,
+              borderRadius: BorderRadius.circular(6),
+              child: canMove
+                  ? IconButton(
+                      key: ValueKey('move-photo-$id'),
+                      tooltip: '按住拖动 · 单击选择批次',
+                      mouseCursor: SystemMouseCursors.grab,
+                      onPressed: () => _chooseTarget(item),
+                      constraints: const BoxConstraints.tightFor(
+                        width: 32,
+                        height: 32,
+                      ),
+                      padding: EdgeInsets.zero,
+                      icon: const Icon(
+                        Icons.drag_indicator,
+                        color: WorkstationStyle.accent,
+                        size: 20,
+                      ),
+                    )
+                  : Tooltip(
+                      message: unavailable!,
+                      child: Padding(
+                        padding: const EdgeInsets.all(5),
+                        child: Icon(
+                          blocked != null
+                              ? Icons.lock_outline
+                              : Icons.drag_indicator,
+                          color: WorkstationStyle.muted,
+                          size: 16,
+                        ),
+                      ),
+                    ),
+            ),
+          ),
+      ],
+    );
+    return SizedBox(
       width: 100,
       child: Column(
         children: [
@@ -796,66 +880,75 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                Material(
-                  color: WorkstationStyle.bg,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    side: BorderSide(
-                      color: ending
-                          ? WorkstationStyle.accent
-                          : WorkstationStyle.line,
+                if (canMove)
+                  Draggable<_Dragged>(
+                    data: item,
+                    maxSimultaneousDrags: 1,
+                    dragAnchorStrategy: pointerDragAnchorStrategy,
+                    feedback: Material(
+                      elevation: 3,
+                      child: SizedBox(
+                        width: 68,
+                        height: 68,
+                        child: _thumbnail(photo),
+                      ),
                     ),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    mouseCursor: canMove ? SystemMouseCursors.grab : null,
-                    onTap: () => _preview(photo, batch),
-                    child: _thumbnail(photo),
-                  ),
-                ),
-                if (!ending && (canMove || unavailable != null))
-                  Positioned(
-                    left: 4,
-                    bottom: 4,
-                    child: Material(
-                      color: WorkstationStyle.card,
-                      borderRadius: BorderRadius.circular(6),
-                      child: canMove
-                          ? IconButton(
-                              key: ValueKey('move-photo-$id'),
-                              tooltip: '按住拖动 · 单击选择批次',
-                              mouseCursor: SystemMouseCursors.grab,
-                              onPressed: () => _chooseTarget(item),
-                              constraints: const BoxConstraints.tightFor(
-                                width: 32,
-                                height: 32,
-                              ),
-                              padding: EdgeInsets.zero,
-                              icon: const Icon(
-                                Icons.drag_indicator,
-                                color: WorkstationStyle.accent,
-                                size: 20,
-                              ),
-                            )
-                          : Tooltip(
-                              message: unavailable!,
-                              child: Padding(
-                                padding: const EdgeInsets.all(5),
-                                child: Icon(
-                                  blocked != null
-                                      ? Icons.lock_outline
-                                      : Icons.drag_indicator,
-                                  color: WorkstationStyle.muted,
-                                  size: 16,
-                                ),
+                    childWhenDragging: Opacity(opacity: .45, child: preview),
+                    child: preview,
+                  )
+                else
+                  preview,
+                Positioned(
+                  right: 4,
+                  top: 4,
+                  child: Material(
+                    color: WorkstationStyle.card,
+                    borderRadius: BorderRadius.circular(6),
+                    child: SizedBox.square(
+                      dimension: 34,
+                      child: PopupMenuButton<_PhotoAction>(
+                        key: ValueKey('photo-actions-$id'),
+                        tooltip: '照片操作',
+                        icon: const Icon(Icons.more_vert, size: 20),
+                        padding: EdgeInsets.zero,
+                        position: PopupMenuPosition.under,
+                        enabled: !_working && !_loading,
+                        onSelected: (action) =>
+                            _runPhotoAction(action, photo, batch),
+                        itemBuilder: (_) => [
+                          for (final action in _PhotoAction.values)
+                            PopupMenuItem(
+                              value: action,
+                              child: Row(
+                                spacing: 10,
+                                children: [
+                                  Icon(
+                                    action.icon,
+                                    size: 17,
+                                    color: action == _PhotoAction.remove
+                                        ? WorkstationStyle.bad
+                                        : null,
+                                  ),
+                                  Text(
+                                    action.label,
+                                    style: TextStyle(
+                                      color: action == _PhotoAction.remove
+                                          ? WorkstationStyle.bad
+                                          : null,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
+                        ],
+                      ),
                     ),
                   ),
+                ),
                 if (canFill && _movable(photo))
                   Positioned(
                     right: 4,
-                    top: 4,
+                    bottom: 4,
                     child: Material(
                       color: WorkstationStyle.card,
                       borderRadius: BorderRadius.circular(6),
@@ -908,23 +1001,6 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
         ],
       ),
     );
-    if (!canMove) {
-      return Tooltip(message: unavailable ?? '单击预览和处理照片', child: tile);
-    }
-    return Tooltip(
-      message: '按住拖到目标批次 · 单击预览和处理照片',
-      child: Draggable<_Dragged>(
-        data: item,
-        maxSimultaneousDrags: 1,
-        dragAnchorStrategy: pointerDragAnchorStrategy,
-        feedback: Material(
-          elevation: 3,
-          child: SizedBox(width: 68, height: 68, child: _thumbnail(photo)),
-        ),
-        childWhenDragging: Opacity(opacity: .45, child: tile),
-        child: tile,
-      ),
-    );
   }
 
   Future<void> _chooseTarget(_Dragged item) async {
@@ -946,63 +1022,91 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     if (target != null && mounted) await _move(item, target);
   }
 
-  Future<void> _preview(Json photo, Json batch) async {
-    final item = (photo: photo, batch: batch);
-    final targets = _movable(photo)
-        ? _batches.where((target) => _canDrop(item, target)).toList()
-        : <Json>[];
-    final choice = await showDialog<Object>(
+  Future<void> _runPhotoAction(
+    _PhotoAction action,
+    Json photo,
+    Json batch,
+  ) async {
+    switch (action) {
+      case _PhotoAction.recognize:
+        if (photo['previewUrl'] is! String || photo['previewUrl'] == '') {
+          await showAppMessage(
+            context,
+            title: action.label,
+            message: '当前照片没有可用于识别的大图。',
+          );
+          return;
+        }
+        await _recognizeTail(photo, batch);
+      case _PhotoAction.remove:
+        await _removePhoto(photo);
+      case _PhotoAction.capture:
+        await _showCapture(photo);
+      case _PhotoAction.preview:
+        await _preview(photo);
+    }
+  }
+
+  Future<void> _showCapture(Json photo) async {
+    final station = _station;
+    if (station == null) return;
+    final capture = widget.call('getBatchPhotoCapture', [station, photo['id']]);
+    await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(photo['ending'] == true ? '结束照' : '游客照'),
+        title: Text(_PhotoAction.capture.label),
         content: SizedBox(
-          width: 680,
-          height: MediaQuery.sizeOf(context).height * .52,
-          child: Column(
-            spacing: 8,
-            children: [
-              Expanded(child: InteractiveViewer(child: _previewImage(photo))),
-              if (photo['removalBlockedReason'] case final String reason
-                  when reason.isNotEmpty)
-                Text(
-                  '删除受限 · $reason',
-                  style: const TextStyle(color: WorkstationStyle.muted),
-                ),
-            ],
+          width: 360,
+          child: FutureBuilder<dynamic>(
+            future: capture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const Text('正在读取拍摄信息…');
+              }
+              if (snapshot.hasError) {
+                return Text('拍摄信息暂不可用：${appErrorMessage(snapshot.error!)}');
+              }
+              final data = snapshot.data;
+              if (data is! Json || data['collected'] is! bool) {
+                return const Text('拍摄信息响应不完整，请关闭后重试。');
+              }
+              if (data['collected'] == false) {
+                return const Text('这张照片尚未采集 EXIF 作者与相机信息。');
+              }
+              final artist = [
+                data['artist'],
+                data['conflictingArtist'],
+              ].whereType<String>().join(' / ');
+              final camera = [
+                data['cameraMake'],
+                data['cameraModel'],
+              ].whereType<String>().join(' ');
+              final photographer = data['photographer'];
+              final source = data['assignmentSource'] == 'MANUAL'
+                  ? '人工'
+                  : 'EXIF';
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 10,
+                children: [
+                  Text(
+                    '作者  ${artist.isNotEmpty
+                        ? artist
+                        : data['reviewReason'] == 'ARTIST_UNAVAILABLE'
+                        ? '无法读取'
+                        : '未读到'}',
+                  ),
+                  Text('相机  ${camera.isNotEmpty ? camera : '未知'}'),
+                  Text(
+                    '摄影师  ${photographer == null ? '待确认' : '$photographer（$source）'}',
+                  ),
+                ],
+              );
+            },
           ),
         ),
         actions: [
-          if (photo['previewUrl'] is String)
-            TextButton.icon(
-              onPressed: () => Navigator.pop(context, 'recognize'),
-              icon: const Icon(Icons.document_scanner_outlined, size: 18),
-              label: const Text('识别取片码'),
-            ),
-          if (photo['removalBlockedReason'] == '')
-            TextButton.icon(
-              onPressed: () => Navigator.pop(context, 'remove'),
-              style: TextButton.styleFrom(
-                foregroundColor: WorkstationStyle.bad,
-              ),
-              icon: const Icon(Icons.delete_outline, size: 18),
-              label: const Text('删除照片'),
-            ),
-          if (targets.isNotEmpty)
-            PopupMenuButton<Json>(
-              onSelected: (target) => Navigator.pop(context, target),
-              itemBuilder: (_) => targets
-                  .map(
-                    (target) => PopupMenuItem(
-                      value: target,
-                      child: Text(_label(target)),
-                    ),
-                  )
-                  .toList(),
-              child: const Padding(
-                padding: EdgeInsets.all(12),
-                child: Text('移动到…'),
-              ),
-            ),
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('关闭'),
@@ -1010,16 +1114,25 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
         ],
       ),
     );
-    if (!mounted) return;
-    switch (choice) {
-      case 'recognize':
-        await _recognizeTail(photo, batch);
-      case 'remove':
-        await _removePhoto(photo);
-      case final Json target:
-        await _move(item, target);
-    }
   }
+
+  Future<void> _preview(Json photo) => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(photo['ending'] == true ? '结束照预览' : '游客照预览'),
+      content: SizedBox(
+        width: 680,
+        height: MediaQuery.sizeOf(context).height * .52,
+        child: InteractiveViewer(child: _previewImage(photo)),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('关闭'),
+        ),
+      ],
+    ),
+  );
 }
 
 class _BatchTimestamp extends StatelessWidget {

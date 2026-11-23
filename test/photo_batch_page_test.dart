@@ -85,6 +85,17 @@ void main() {
               removals.add(request);
               return {'requestId': request['requestId'], 'photoId': '1'};
             }(),
+            'getBatchPhotoCapture' => () {
+              expect(args, ['17', '1']);
+              return {
+                'collected': true,
+                'artist': 'PH-023',
+                'cameraMake': 'Canon',
+                'cameraModel': 'EOS R6',
+                'photographer': '张三',
+                'assignmentSource': 'MANUAL',
+              };
+            }(),
             _ => throw StateError(method),
           };
       await tester.pumpWidget(
@@ -217,21 +228,43 @@ void main() {
       }
       await tester.binding.setSurfaceSize(const Size(1120, 850));
       await tester.pumpAndSettle();
-      final preview = find
-          .descendant(of: movablePhoto, matching: find.byType(InkWell))
-          .first;
-      await tester.tapAt(tester.getTopLeft(preview) + const Offset(62, 46));
+      Future<void> selectPhotoAction(String id, String action) async {
+        await tester.tap(find.byKey(ValueKey('photo-actions-$id')));
+        await tester.pumpAndSettle();
+        expect(find.text('识别取片码'), findsOneWidget);
+        expect(find.text('删除照片'), findsOneWidget);
+        expect(find.text('查询拍摄信息'), findsOneWidget);
+        expect(find.text('查看图片'), findsOneWidget);
+        await tester.tap(find.text(action));
+        await tester.pumpAndSettle();
+      }
+
+      await selectPhotoAction('1', '查看图片');
+      expect(find.text('游客照预览'), findsOneWidget);
+      await tester.tap(find.text('关闭'));
       await tester.pumpAndSettle();
+      await selectPhotoAction('1', '查询拍摄信息');
+      expect(find.textContaining('Canon EOS R6'), findsOneWidget);
+      expect(find.textContaining('张三（人工）'), findsOneWidget);
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
+      await selectPhotoAction('1', '识别取片码');
       expect(find.text('识别取片码'), findsOneWidget);
-      await tester.tap(find.text('删除照片'));
+      await tester.tap(find.text('关闭'));
       await tester.pumpAndSettle();
+      await selectPhotoAction('2', '识别取片码');
+      expect(find.text('当前照片没有可用于识别的大图。'), findsOneWidget);
+      await tester.tap(find.text('知道了'));
+      await tester.pumpAndSettle();
+      await selectPhotoAction('2', '删除照片');
+      expect(find.text('无法删除照片'), findsOneWidget);
+      await tester.tap(find.text('知道了'));
+      await tester.pumpAndSettle();
+      await selectPhotoAction('1', '删除照片');
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
       expect(removals, isEmpty);
-      await tester.tapAt(tester.getTopLeft(preview) + const Offset(62, 46));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('删除照片'));
-      await tester.pumpAndSettle();
+      await selectPhotoAction('1', '删除照片');
       await tester.tap(find.text('确认删除'));
       await tester.pumpAndSettle();
       expect(removals.single['revision'], 0);

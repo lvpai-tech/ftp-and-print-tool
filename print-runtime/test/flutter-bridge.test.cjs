@@ -36,6 +36,10 @@ test('Flutter桥：真实密钥校验、脱敏、互斥与回写失败不重打'
       let data;
       if (req.url === '/print-agents/me') data = { scenicId: '2', scenicName: '第二景区' };
       else if (req.url === '/print-agents/photo-batches/stations') data = [{ id: '27' }];
+      else if (req.url === '/print-agents/photo-batches/stations/27/photos/31/capture') {
+        assert.equal(req.method, 'GET');
+        data = { collected: true, cameraMake: 'Canon' };
+      }
       else if (req.url === '/print-agents/photo-batches/stations/27/photos/31/removals') {
         let body = '';
         req.setEncoding('utf8');
@@ -100,6 +104,9 @@ test('Flutter桥：真实密钥校验、脱敏、互斥与回写失败不重打'
   const scope = { profileId: second.id, scenicId: '2' };
   assert.match((await call('listBatchStations', { ...scope, scenicId: '1' })).error, /档案已变更/);
   assert.deepEqual((await call('listBatchStations', scope)).data, [{ id: '27' }]);
+  assert.deepEqual((await call('getBatchPhotoCapture', '27', '31', scope)).data,
+    { collected: true, cameraMake: 'Canon' });
+  assert.match((await call('getBatchPhotoCapture', '27', '31', { ...scope, scenicId: '1' })).error, /档案已变更/);
   const removal = { requestId: 'local-removal-test', revision: 2 };
   assert.deepEqual((await call('removeBatchPhoto', '27', '31', removal, scope)).data,
     { requestId: removal.requestId, photoId: '31' });
