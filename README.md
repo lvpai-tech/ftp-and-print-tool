@@ -10,7 +10,7 @@ Windows 和 macOS 打印使用本仓的 [Node 打印内核](print-runtime/README
 
 ## 设计与维护
 
-Windows 和 macOS 工作台首页提供「上传照片」与「打印照片」。上传页通过「COS 直传设置」保存 HTTPS 服务地址、机位 ID 和机位密钥，再选择相机照片落盘目录开始监听。未配置机位时，应用提示先完成配置。
+Windows 和 macOS 工作台首页提供「上传照片」与「打印照片」。上传页默认连接 `https://hilvpai.com`。现场可提交机位申请，运营审核后由原工作台自动领取并激活上传凭据。持有机位 ID 和机位密钥时也可手工配置。完成绑定后选择相机照片落盘目录开始监听。
 
 源码边界：
 
@@ -101,7 +101,7 @@ iPad自动监听已启用，仅限前台和有权限读取的本机目录。可�
 
 脚本从 `PATH` 或 `%USERPROFILE%\develop\flutter` 查找 Flutter，也可用 `-Flutter` 指定 `flutter.bat`。保存 Dart 修改后，在运行终端按 `r` 热重载，修改入口或初始化逻辑后按 `R` 热重启。修改 Windows 原生代码、依赖或 Node 打印内核后，按 `q` 退出并重跑命令。
 
-上传使用系统安全存储中的机位档案。接生产时，在「COS 直传设置」填写 `https://hilvpai.com` 和对应生产机位凭据。打印运营 API 默认是 `https://hilvpai.com/api/operation`，可在启动前用 `PRINT_AGENT_BASE` 显式选择；打印页需激活对应景区密钥档案。
+上传使用系统安全存储中的机位档案。联调其他环境时，通过 Flutter 的 `--dart-define=LVPAI_WORKSTATION_API_BASE=<HTTPS 网关地址>` 指定该环境的 HTTPS 网关根地址，再用对应环境签发的机位凭据配置。旧档案的网关地址与当前网关一致时可直接使用，切换网关后需填写当前网关的机位凭据。打印运营 API 默认是 `https://hilvpai.com/api/operation`，可在启动前用 `PRINT_AGENT_BASE` 显式选择；打印页需激活对应景区密钥档案。
 
 Windows 本地 Debug 构建已通过用户级 Flutter 3.50.1 验证。需要复现 CI 时使用上文的 FVM 配置。严格校验依赖锁文件时运行 `flutter pub get --enforce-lockfile`；下载工具链和依赖的镜像配置见上文的接续开发步骤。
 2026-11-18 已通过管理员命令补齐 **C++ CMake tools for Windows**、

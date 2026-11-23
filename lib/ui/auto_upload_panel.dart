@@ -262,6 +262,11 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
         )
         .length;
     final failed = jobs.where((j) => j.state == 'failed').length;
+    final station = [
+      widget.cosProfile.scenicName,
+      widget.cosProfile.stationName,
+      widget.cosProfile.stationCode,
+    ].whereType<String>().where((name) => name.isNotEmpty).join(' · ');
 
     return DecoratedBox(
       decoration: WorkstationStyle.surface(),
@@ -295,6 +300,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                     ],
                   ),
                   const SizedBox(height: 6),
+                  if (station.isNotEmpty) Text(station),
                   const Text(
                     '相机软件把照片保存到本地文件夹，本应用自动检测并批量上传。',
                     style: TextStyle(

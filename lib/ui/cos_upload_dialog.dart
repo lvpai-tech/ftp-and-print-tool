@@ -4,23 +4,22 @@ import '../auto_upload/cos_upload.dart';
 
 /// Edits the direct-upload profile stored in the system keychain.
 class CosUploadDialog extends StatefulWidget {
+  final Uri api;
   final CosUploadProfile? initial;
 
-  const CosUploadDialog({super.key, this.initial});
+  const CosUploadDialog({super.key, required this.api, this.initial});
 
   @override
   State<CosUploadDialog> createState() => _CosUploadDialogState();
 }
 
 class _CosUploadDialogState extends State<CosUploadDialog> {
-  late final _api = TextEditingController(text: widget.initial?.api.origin);
   late final _station = TextEditingController(text: widget.initial?.stationId);
   late final _token = TextEditingController(text: widget.initial?.token);
   String? _error;
 
   @override
   void dispose() {
-    _api.dispose();
     _station.dispose();
     _token.dispose();
     super.dispose();
@@ -28,14 +27,20 @@ class _CosUploadDialogState extends State<CosUploadDialog> {
 
   void _save() {
     try {
+      final initial = widget.initial;
+      final stationId = _station.text.trim();
+      final sameStation = initial?.stationId == stationId;
       final profile = CosUploadProfile(
-        _api.text,
-        _station.text.trim(),
+        widget.api.origin,
+        stationId,
         _token.text.trim(),
+        stationName: sameStation ? initial?.stationName : null,
+        stationCode: sameStation ? initial?.stationCode : null,
+        scenicName: sameStation ? initial?.scenicName : null,
       );
       Navigator.of(context).pop(profile);
-    } catch (_) {
-      setState(() => _error = '请填写 HTTPS 服务地址、机位 ID 和有效机位密钥');
+    } on StateError catch (error) {
+      setState(() => _error = error.message);
     }
   }
 
@@ -48,10 +53,6 @@ class _CosUploadDialogState extends State<CosUploadDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
-              controller: _api,
-              decoration: const InputDecoration(labelText: '业务服务 HTTPS 地址'),
-            ),
             TextField(
               controller: _station,
               keyboardType: TextInputType.number,

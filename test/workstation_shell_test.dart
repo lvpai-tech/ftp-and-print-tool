@@ -341,6 +341,6 @@ void main() {
     expect(find.text('COS 自动直传'), findsOneWidget);
     await tester.tap(find.text('保存配置'));
     await tester.pumpAndSettle();
-    expect(find.text('请填写 HTTPS 服务地址、机位 ID 和有效机位密钥'), findsOneWidget);
+    expect(find.text('请填写机位 ID 和有效机位密钥'), findsOneWidget);
   });
 }

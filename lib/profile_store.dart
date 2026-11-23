@@ -9,6 +9,7 @@ import 'transfer.dart';
 class ProfileStore {
   static const _key = 'ftp.profile.v1';
   static const _cosKey = 'cos.auto.profile.v1';
+  static const _enrollmentKey = 'cos.enrollment.v1';
   final FlutterSecureStorage _storage;
 
   const ProfileStore({this._storage = const FlutterSecureStorage()});
@@ -28,6 +29,15 @@ class ProfileStore {
   Future<void> saveCos(CosUploadProfile? profile) => profile == null
       ? _storage.delete(key: _cosKey)
       : _storage.write(key: _cosKey, value: jsonEncode(profile.toJson()));
+
+  Future<Map<String, dynamic>?> loadEnrollment() async {
+    final value = await _storage.read(key: _enrollmentKey);
+    return value == null ? null : jsonDecode(value) as Map<String, dynamic>;
+  }
+
+  Future<void> saveEnrollment(Map<String, dynamic>? value) => value == null
+      ? _storage.delete(key: _enrollmentKey)
+      : _storage.write(key: _enrollmentKey, value: jsonEncode(value));
 
   Future<void> save(ServerProfile profile) =>
       _storage.write(key: _key, value: jsonEncode(profile.toJson()));

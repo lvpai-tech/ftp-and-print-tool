@@ -153,6 +153,7 @@ class FolderUploader extends ChangeNotifier {
   Timer? _timer, _debounce, _progressTimer;
   ServerProfile? _profile;
   CosUpload? _cos;
+  bool _authorizationPaused = false;
   Directory? _root;
   Future<void>? _scanTask, _pumpTask;
   bool running = false, stopping = false, _initialized = false, _closed = false;
@@ -376,6 +377,7 @@ class FolderUploader extends ChangeNotifier {
     }
     _root = absolute;
     _profile = profile;
+    _authorizationPaused = false;
     _cos = cosProfile == null ? null : CosUpload(cosProfile);
     _recursive = recursive;
     _includeExisting = includeExisting;
@@ -746,6 +748,7 @@ class FolderUploader extends ChangeNotifier {
   }
 
   Future<void> _pump() async {
+    if (_authorizationPaused) return;
     for (final job in _jobs.values.toList()) {
       if (!running) break;
       if (_cos != null && job.state == 'accepted') {
@@ -811,6 +814,12 @@ class FolderUploader extends ChangeNotifier {
         }
         job.progress = 1;
         job.error = '';
+      } on CosUploadAuthorizationError catch (error) {
+        _authorizationPaused = true;
+        message = error.message;
+        job.error = error.message;
+        job.state = 'pending';
+        job.attempts--;
       } catch (error) {
         job.error = error is StateError
             ? error.message
@@ -839,7 +848,7 @@ class FolderUploader extends ChangeNotifier {
         break;
       }
     }
-    if (_cos != null) await _refreshCosStatus();
+    if (_cos != null && !_authorizationPaused) await _refreshCosStatus();
   }
 
   Future<void> _removeSnapshot(AutoJob job) async {
@@ -874,6 +883,11 @@ class FolderUploader extends ChangeNotifier {
       late final ({String status, String error}) result;
       try {
         result = await _cos!.status(job.id);
+      } on CosUploadAuthorizationError catch (error) {
+        _authorizationPaused = true;
+        message = error.message;
+        _notify();
+        break;
       } catch (_) {
         message = '暂时无法查询 COS 归集状态，稍后重试';
         _notify();

@@ -9,6 +9,7 @@ import 'app_dialogs.dart';
 import 'auto_upload_panel.dart';
 import 'cos_upload_dialog.dart';
 import 'update_button.dart';
+import 'workstation_enrollment_panel.dart';
 
 class TransferPage extends StatefulWidget {
   const TransferPage({
@@ -33,6 +34,7 @@ class TransferPage extends StatefulWidget {
 
 class _TransferPageState extends State<TransferPage> {
   final _store = const ProfileStore();
+  final _api = CosUploadProfile.tryParseApiBase(workstationUploadApiBase);
   CosUploadProfile? _profile;
   bool _loading = true;
   bool _saving = false;
@@ -46,9 +48,18 @@ class _TransferPageState extends State<TransferPage> {
 
   Future<void> _load() async {
     try {
+      final api = _api;
+      if (api == null) {
+        _loadError = '上传服务地址无效，请联系管理员';
+        return;
+      }
       final profile = await _store.loadCos();
       if (!mounted) return;
-      _profile = profile;
+      if (profile != null && profile.api.origin != api.origin) {
+        _loadError = '已保存的机位配置属于其他服务，请填写当前服务的机位凭据';
+      } else {
+        _profile = profile;
+      }
     } catch (_) {
       _loadError = '无法读取机位配置，请重新填写';
     } finally {
@@ -60,10 +71,11 @@ class _TransferPageState extends State<TransferPage> {
   }
 
   Future<void> _configure() async {
-    if (_saving) return;
+    final api = _api;
+    if (_saving || api == null) return;
     final profile = await showDialog<CosUploadProfile>(
       context: context,
-      builder: (context) => CosUploadDialog(initial: _profile),
+      builder: (context) => CosUploadDialog(api: api, initial: _profile),
     );
     if (profile == null || !mounted) return;
     setState(() => _saving = true);
@@ -90,18 +102,23 @@ class _TransferPageState extends State<TransferPage> {
     }
     final profile = _profile;
     if (profile == null) {
+      final api = _api;
       return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(_loadError ?? '请先配置机位连接'),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: _saving ? null : _configure,
-              icon: const Icon(Icons.settings_ethernet),
-              label: const Text('去配置机位'),
-            ),
-          ],
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_loadError ?? '请先配置机位连接', textAlign: TextAlign.center),
+              if (api != null) ...[
+                const SizedBox(height: 16),
+                WorkstationEnrollmentPanel(
+                  api: api,
+                  onBound: _load,
+                  onManual: _configure,
+                ),
+              ],
+            ],
+          ),
         ),
       );
     }

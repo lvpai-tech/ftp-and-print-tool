@@ -3,24 +3,46 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+const workstationUploadApiBase = String.fromEnvironment(
+  'LVPAI_WORKSTATION_API_BASE',
+  defaultValue: 'https://hilvpai.com',
+);
+
 /// The HTTPS endpoint and credential for one workstation camera station.
 class CosUploadProfile {
   final Uri api;
   final String stationId;
   final String token;
+  final String? stationName;
+  final String? stationCode;
+  final String? scenicName;
 
-  CosUploadProfile(String apiBase, this.stationId, this.token)
-    : api = Uri.parse(apiBase.trim()) {
-    if (api.scheme != 'https' ||
+  CosUploadProfile(
+    String apiBase,
+    this.stationId,
+    this.token, {
+    this.stationName,
+    this.stationCode,
+    this.scenicName,
+  }) : api = tryParseApiBase(apiBase) ?? (throw StateError('上传服务地址无效')) {
+    if (!RegExp(r'^[1-9][0-9]{0,17}$').hasMatch(stationId) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(token)) {
+      throw StateError('请填写机位 ID 和有效机位密钥');
+    }
+  }
+
+  static Uri? tryParseApiBase(String value) {
+    final api = Uri.tryParse(value.trim());
+    if (api == null ||
+        api.scheme != 'https' ||
         api.host.isEmpty ||
         api.userInfo.isNotEmpty ||
         !{'', '/'}.contains(api.path) ||
         api.hasQuery ||
-        api.hasFragment ||
-        !RegExp(r'^[1-9][0-9]{0,17}$').hasMatch(stationId) ||
-        !RegExp(r'^[a-f0-9]{64}$').hasMatch(token)) {
-      throw StateError('请填写 HTTPS 服务地址、机位 ID 和有效机位密钥');
+        api.hasFragment) {
+      return null;
     }
+    return api;
   }
 
   String get queueTarget => '${api.origin}/$stationId';
@@ -29,6 +51,9 @@ class CosUploadProfile {
     'api': api.origin,
     'stationId': stationId,
     'token': token,
+    'stationName': ?stationName,
+    'stationCode': ?stationCode,
+    'scenicName': ?scenicName,
   };
 
   factory CosUploadProfile.fromJson(Map<String, dynamic> json) =>
@@ -36,7 +61,14 @@ class CosUploadProfile {
         json['api'] as String,
         json['stationId'] as String,
         json['token'] as String,
+        stationName: json['stationName'] as String?,
+        stationCode: json['stationCode'] as String?,
+        scenicName: json['scenicName'] as String?,
       );
+}
+
+class CosUploadAuthorizationError extends StateError {
+  CosUploadAuthorizationError(super.message);
 }
 
 /// Streams queued originals to COS and confirms their upload with the backend.
@@ -186,6 +218,9 @@ class CosUpload {
     );
     if (response.statusCode != 200) {
       await response.drain<void>().timeout(const Duration(seconds: 10));
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        throw CosUploadAuthorizationError('机位收图授权已失效或停用，请联系运营');
+      }
       throw StateError('工作台上传服务请求失败（HTTP ${response.statusCode}）');
     }
     final text = await response
@@ -193,6 +228,9 @@ class CosUpload {
         .join()
         .timeout(const Duration(seconds: 10));
     final result = jsonDecode(text);
+    if (result is Map && const {40101, 40102, 40301}.contains(result['code'])) {
+      throw CosUploadAuthorizationError('机位收图授权已失效或停用，请联系运营');
+    }
     if (result is! Map || result['code'] != 200 || result['data'] is! Map) {
       throw StateError('工作台上传服务拒绝请求，请检查机位权限和服务配置');
     }
