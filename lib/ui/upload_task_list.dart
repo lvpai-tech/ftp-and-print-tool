@@ -19,7 +19,7 @@ class UploadTaskList extends StatelessWidget {
     required this.onConfirmNext,
     required this.onReview,
     this.onDiscard,
-    this.onOpenBatches,
+    this.batchTimeline,
   });
 
   final String folder;
@@ -29,7 +29,7 @@ class UploadTaskList extends StatelessWidget {
   final ValueChanged<String>? onConfirmNext;
   final ValueChanged<AutoJob> onReview;
   final Future<void> Function(String, String?)? onDiscard;
-  final VoidCallback? onOpenBatches;
+  final Widget? batchTimeline;
 
   Future<void> _discard(BuildContext context, String source) async {
     final signature = waiting[source];
@@ -123,194 +123,200 @@ class UploadTaskList extends StatelessWidget {
       for (final group in dated)
         _FileSpan(group.map((job) => _fileStamp(job.signature))),
     ];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Wrap(
-          spacing: 10,
-          runSpacing: 4,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            const Text(
-              '任务列表',
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: WorkstationStyle.ink,
-              ),
+    final incoming = <Widget>[
+      Wrap(
+        spacing: 10,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          const Text(
+            '任务列表',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: WorkstationStyle.ink,
             ),
-            const Text(
-              '文件修改时间 · 北京时间',
-              style: TextStyle(color: WorkstationStyle.muted, fontSize: 12),
-            ),
-            if (onOpenBatches != null)
-              TextButton.icon(
-                onPressed: onOpenBatches,
-                icon: const Icon(Icons.view_timeline_outlined, size: 17),
-                label: const Text('设置取片批次'),
-              ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        if (needingOrder.isNotEmpty)
-          _TaskGroup(
-            key: const ValueKey('order'),
-            stamp: orderSpan.latest,
-            title: '确认上传顺序',
-            note: '同时发现多张照片，请选出下一张',
-            count: needingOrder.length,
-            attention: true,
-            extra: onConfirmNext == null
-                ? null
-                : DragTarget<String>(
-                    onWillAcceptWithDetails: (details) =>
-                        unordered.contains(details.data),
-                    onAcceptWithDetails: (details) =>
-                        _confirm(context, details.data),
-                    builder: (context, candidates, _) => Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
+          ),
+          const Text(
+            '文件修改时间 · 北京时间',
+            style: TextStyle(color: WorkstationStyle.muted, fontSize: 12),
+          ),
+        ],
+      ),
+      const SizedBox(height: 10),
+      if (needingOrder.isNotEmpty)
+        _TaskGroup(
+          key: const ValueKey('order'),
+          stamp: orderSpan.latest,
+          title: '确认上传顺序',
+          note: '同时发现多张照片，请选出下一张',
+          count: needingOrder.length,
+          attention: true,
+          extra: onConfirmNext == null
+              ? null
+              : DragTarget<String>(
+                  onWillAcceptWithDetails: (details) =>
+                      unordered.contains(details.data),
+                  onAcceptWithDetails: (details) =>
+                      _confirm(context, details.data),
+                  builder: (context, candidates, _) => Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: candidates.isEmpty
+                          ? WorkstationStyle.warnSoft
+                          : WorkstationStyle.accentSoft,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '拖到这里选为下一张',
+                      style: TextStyle(
                         color: candidates.isEmpty
-                            ? WorkstationStyle.warnSoft
-                            : WorkstationStyle.accentSoft,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        '拖到这里选为下一张',
-                        style: TextStyle(
-                          color: candidates.isEmpty
-                              ? WorkstationStyle.warn
-                              : WorkstationStyle.accent,
-                          fontSize: 12,
-                        ),
+                            ? WorkstationStyle.warn
+                            : WorkstationStyle.accent,
+                        fontSize: 12,
                       ),
                     ),
                   ),
-            photoBuilder: (_, index) {
-              final source = needingOrder[index];
-              return _PhotoTile(
-                name: p.relative(source, from: folder),
-                time: _clock(_fileStamp(waiting[source])),
-                photo: _sourcePhoto(source, signature: waiting[source]),
-                action: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (onConfirmNext != null)
-                      Draggable<String>(
-                        data: source,
-                        maxSimultaneousDrags: 1,
-                        feedback: Material(
-                          borderRadius: BorderRadius.circular(8),
-                          color: WorkstationStyle.bg,
-                          child: SizedBox(
-                            width: 120,
-                            height: 84,
-                            child: _sourcePhoto(
-                              source,
-                              signature: waiting[source],
-                            ),
+                ),
+          photoBuilder: (_, index) {
+            final source = needingOrder[index];
+            return _PhotoTile(
+              name: p.relative(source, from: folder),
+              time: _clock(_fileStamp(waiting[source])),
+              photo: _sourcePhoto(source, signature: waiting[source]),
+              action: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (onConfirmNext != null)
+                    Draggable<String>(
+                      data: source,
+                      maxSimultaneousDrags: 1,
+                      feedback: Material(
+                        borderRadius: BorderRadius.circular(8),
+                        color: WorkstationStyle.bg,
+                        child: SizedBox(
+                          width: 120,
+                          height: 84,
+                          child: _sourcePhoto(
+                            source,
+                            signature: waiting[source],
                           ),
                         ),
-                        child: const Tooltip(
-                          message: '按住拖动选择下一张',
-                          child: SizedBox(
-                            width: 34,
-                            height: 34,
-                            child: ColoredBox(
-                              color: WorkstationStyle.card,
-                              child: Icon(
-                                Icons.drag_indicator,
-                                size: 18,
-                                color: WorkstationStyle.accent,
-                              ),
+                      ),
+                      child: const Tooltip(
+                        message: '按住拖动选择下一张',
+                        child: SizedBox(
+                          width: 34,
+                          height: 34,
+                          child: ColoredBox(
+                            color: WorkstationStyle.card,
+                            child: Icon(
+                              Icons.drag_indicator,
+                              size: 18,
+                              color: WorkstationStyle.accent,
                             ),
                           ),
                         ),
                       ),
-                    if (onDiscard != null)
-                      _RemovePhotoButton(
-                        onPressed: () => _discard(context, source),
-                      ),
-                  ],
+                    ),
+                  if (onDiscard != null)
+                    _RemovePhotoButton(
+                      onPressed: () => _discard(context, source),
+                    ),
+                ],
+              ),
+              caption: const SizedBox.shrink(),
+              footer: TextButton(
+                style: TextButton.styleFrom(
+                  foregroundColor: WorkstationStyle.accent,
+                  minimumSize: const Size(0, 32),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
                 ),
-                caption: const SizedBox.shrink(),
-                footer: TextButton(
-                  style: TextButton.styleFrom(
-                    foregroundColor: WorkstationStyle.accent,
-                    minimumSize: const Size(0, 32),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                  ),
-                  onPressed: onConfirmNext == null
-                      ? null
-                      : () => _confirm(context, source),
-                  child: const Text('选为下一张'),
-                ),
-              );
-            },
-          ),
-        if (needingOrder.isNotEmpty && preparing.isNotEmpty)
-          _TimeGap(between: orderSpan.gapTo(waitingSpan)),
-        if (preparing.isNotEmpty)
-          _TaskGroup(
-            key: const ValueKey('preparing'),
-            stamp: waitingSpan.latest,
-            title: '已发现的照片',
-            note: needingOrder.isEmpty ? '等待进入上传队列' : '等待前面的照片确认顺序',
-            count: preparing.length,
-            photoBuilder: (_, index) {
-              final source = preparing[index];
-              return _PhotoTile(
-                name: p.relative(source, from: folder),
-                time: _clock(_fileStamp(waiting[source])),
-                photo: _sourcePhoto(source, signature: waiting[source]),
-                action: onDiscard == null
+                onPressed: onConfirmNext == null
                     ? null
-                    : _RemovePhotoButton(
-                        onPressed: () => _discard(context, source),
-                      ),
-                caption: const _TileStatus(
-                  label: '待准备',
-                  color: WorkstationStyle.muted,
-                  background: WorkstationStyle.bg,
+                    : () => _confirm(context, source),
+                child: const Text('选为下一张'),
+              ),
+            );
+          },
+        ),
+      if (needingOrder.isNotEmpty && preparing.isNotEmpty)
+        _TimeGap(between: orderSpan.gapTo(waitingSpan)),
+      if (preparing.isNotEmpty)
+        _TaskGroup(
+          key: const ValueKey('preparing'),
+          stamp: waitingSpan.latest,
+          title: '已发现的照片',
+          note: needingOrder.isEmpty ? '等待进入上传队列' : '等待前面的照片确认顺序',
+          count: preparing.length,
+          photoBuilder: (_, index) {
+            final source = preparing[index];
+            return _PhotoTile(
+              name: p.relative(source, from: folder),
+              time: _clock(_fileStamp(waiting[source])),
+              photo: _sourcePhoto(source, signature: waiting[source]),
+              action: onDiscard == null
+                  ? null
+                  : _RemovePhotoButton(
+                      onPressed: () => _discard(context, source),
+                    ),
+              caption: const _TileStatus(
+                label: '待准备',
+                color: WorkstationStyle.muted,
+                background: WorkstationStyle.bg,
+              ),
+            );
+          },
+        ),
+    ];
+    return SliverMainAxisGroup(
+      slivers: [
+        SliverList.list(children: incoming),
+        ?batchTimeline,
+        SliverList.builder(
+          itemCount: dated.length,
+          itemBuilder: (context, group) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (group > 0 || batchTimeline == null)
+                _TimeGap(
+                  between:
+                      (group > 0
+                              ? jobSpans[group - 1]
+                              : preparing.isNotEmpty
+                              ? waitingSpan
+                              : orderSpan)
+                          .gapTo(jobSpans[group]),
                 ),
-              );
-            },
+              _TaskGroup(
+                key: ObjectKey(dated[group].last),
+                stamp: jobSpans[group].latest,
+                title: '已入队任务',
+                note: '最近入队在前',
+                count: dated[group].length,
+                photoBuilder: (context, index) {
+                  final job = dated[group][index];
+                  return _JobPhoto(
+                    key: ValueKey(job.id),
+                    job: job,
+                    onReview: () => onReview(job),
+                  );
+                },
+              ),
+            ],
           ),
-        for (var group = 0; group < dated.length; group++) ...[
-          _TimeGap(
-            between:
-                (group > 0
-                        ? jobSpans[group - 1]
-                        : preparing.isNotEmpty
-                        ? waitingSpan
-                        : orderSpan)
-                    .gapTo(jobSpans[group]),
-          ),
-          _TaskGroup(
-            key: ObjectKey(dated[group].last),
-            stamp: jobSpans[group].latest,
-            title: '已入队任务',
-            note: '最近入队在前',
-            count: dated[group].length,
-            photoBuilder: (context, index) {
-              final job = dated[group][index];
-              return _JobPhoto(
-                key: ValueKey(job.id),
-                job: job,
-                onReview: () => onReview(job),
-              );
-            },
-          ),
-        ],
+        ),
         if (waiting.isEmpty && needingOrder.isEmpty && jobs.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 28),
-            child: Center(
-              child: Text(
-                '新照片到达后，会自动显示在这里',
-                style: TextStyle(color: WorkstationStyle.muted),
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 28),
+              child: Center(
+                child: Text(
+                  '本机暂无上传任务',
+                  style: TextStyle(color: WorkstationStyle.muted),
+                ),
               ),
             ),
           ),

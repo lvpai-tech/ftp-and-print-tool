@@ -22,6 +22,8 @@ class SettingsPanel extends StatefulWidget {
 
 class _SettingsPanelState extends State<SettingsPanel> {
   final token = TextEditingController();
+  final printForm = GlobalKey<FormState>();
+  late final TextEditingController dpi;
   List<String> printers = [];
   late Map<String, String> routes;
   String? printerError;
@@ -93,13 +95,29 @@ class _SettingsPanelState extends State<SettingsPanel> {
   void initState() {
     super.initState();
     routes = Map<String, String>.from(widget.bridge.config['printers'] ?? {});
+    dpi = TextEditingController(
+      text: '${widget.bridge.config['printDpi'] ?? 300}',
+    );
     loadPrinters();
   }
 
   @override
   void dispose() {
     token.dispose();
+    dpi.dispose();
     super.dispose();
+  }
+
+  Future<void> savePrintSettings() async {
+    if (!printForm.currentState!.validate()) return;
+    final saved = await widget.perform('saveConfig', [
+      {'printers': routes, 'printDpi': int.parse(dpi.text.trim(), radix: 10)},
+    ]);
+    if (saved && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('打印设置已保存')),
+      );
+    }
   }
 
   List<Map<String, dynamic>> get scenicProfiles {
@@ -487,17 +505,45 @@ class _SettingsPanelState extends State<SettingsPanel> {
                             style: const TextStyle(color: muted),
                           ),
                         ),
+                      const SizedBox(height: 12),
+                      Form(
+                        key: printForm,
+                        child: TextFormField(
+                          key: const ValueKey('print-dpi-field'),
+                          controller: dpi,
+                          enabled: !widget.bridge.busy,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: '打印分辨率',
+                            suffixText: 'DPI',
+                          ),
+                          validator: (value) {
+                            final number = int.tryParse(
+                              value?.trim() ?? '',
+                              radix: 10,
+                            );
+                            if (number == null ||
+                                number < 72 ||
+                                number > 1200) {
+                              return '请输入 72–1200 之间的整数';
+                            }
+                            return null;
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        '默认 300 DPI，所有景区共用。设备输出分辨率由打印机驱动决定。',
+                        style: TextStyle(color: muted),
+                      ),
+                      const SizedBox(height: 12),
                       Align(
                         alignment: Alignment.centerLeft,
                         child: FilledButton(
                           onPressed: widget.bridge.busy
                               ? null
-                              : () async {
-                                  await widget.perform('saveConfig', [
-                                    {'printers': routes},
-                                  ]);
-                                },
-                          child: Text(widget.embedded ? '保存打印机设置' : '保存并立即生效'),
+                              : savePrintSettings,
+                          child: const Text('保存打印设置'),
                         ),
                       ),
                       const SizedBox(height: 24),

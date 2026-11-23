@@ -46,6 +46,7 @@ function runPrintCommand(config, item, file, printer) {
     const child = spawn(args[0], args.slice(1), {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, LVPAI_PRINT_DPI: String(config.printDpi ?? 300) },
     });
     let output = '';
     let stdout = '';

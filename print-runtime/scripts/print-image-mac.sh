@@ -45,7 +45,13 @@ if ! [[ "$Copies" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-lp_args=(-n "$Copies" -t "lvpai-$Kind" -o fit-to-page)
+dpi="${LVPAI_PRINT_DPI:-300}"
+if ! [[ "$dpi" =~ ^[1-9][0-9]{1,3}$ ]] || (( dpi < 72 || dpi > 1200 )); then
+  echo "打印分辨率须为 72–1200 DPI 的整数" >&2
+  exit 2
+fi
+
+lp_args=(-n "$Copies" -t "lvpai-$Kind" -o fit-to-page -o "printer-resolution=${dpi}dpi")
 if [[ -n "$Printer" ]]; then
   if ! /usr/bin/lpstat -p "$Printer" >/dev/null 2>&1; then
     echo "打印机不可用：$Printer" >&2

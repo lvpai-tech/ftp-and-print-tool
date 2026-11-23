@@ -4,59 +4,59 @@ import 'dart:ui' show PictureRecorder, PointerDeviceKind;
 import 'package:flutter/foundation.dart' show SynchronousFuture;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/printing/ui/photo_batch_page.dart';
+import 'package:lvpai_ftp_client/ui/upload_task_list.dart';
 import 'package:material_ui/material_ui.dart';
 
 void main() {
-  testWidgets('最新批次在前，拖动和补录各自确认且取消时不写入', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(1120, 850));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final writes = <Map<String, dynamic>>[];
-    final batches = <Map<String, dynamic>>[
-      {
-        'id': 'pending-1',
-        'receivedAt': '2026-11-22T02:01:00Z',
-        'status': 'MISSING_END',
-        'photos': <Map<String, dynamic>>[
-          {
-            'id': '1',
-            'ending': false,
-            'revision': 0,
-            'receivedAt': '2026-11-22T02:01:00Z',
-            'thumbnailUrl': 'https://example.invalid/pending.jpg',
-          },
-          {
-            'id': '3',
-            'ending': false,
-            'blockedReason': '照片已用于打印',
-            'receivedAt': '2026-11-22T02:01:05Z',
-            'thumbnailUrl': 'https://example.invalid/blocked.jpg',
-          },
-        ],
-      },
-      {
-        'id': 'card-2',
-        'receivedAt': '2026-11-22T02:04:05Z',
-        'status': 'CARD',
-        'cardTail': '1234',
-        'targetPhotoId': '2',
-        'targetCardId': '99',
-        'photos': <Map<String, dynamic>>[
-          {
-            'id': '2',
-            'ending': true,
-            'revision': 0,
-            'receivedAt': '2026-11-22T02:04:05Z',
-            'thumbnailUrl': 'https://example.invalid/ending.jpg',
-          },
-        ],
-      },
-    ];
-    await tester.pumpWidget(
-      MaterialApp(
-        home: PhotoBatchPage(
-          scenicName: '测试景区',
-          initialStationId: '17',
-          call: (method, args) async => switch (method) {
+  for (final inline in [false, true]) {
+    testWidgets('${inline ? '上传任务列表' : '打印矫正页'}中拖动和补录各自确认，取消时不写入', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1120, 850));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final writes = <Map<String, dynamic>>[];
+      final batches = <Map<String, dynamic>>[
+        {
+          'id': 'pending-1',
+          'receivedAt': '2026-11-22T02:01:00Z',
+          'status': 'MISSING_END',
+          'photos': <Map<String, dynamic>>[
+            {
+              'id': '1',
+              'ending': false,
+              'revision': 0,
+              'receivedAt': '2026-11-22T02:01:00Z',
+              'thumbnailUrl': 'https://example.invalid/pending.jpg',
+            },
+            {
+              'id': '3',
+              'ending': false,
+              'blockedReason': '照片已用于打印',
+              'receivedAt': '2026-11-22T02:01:05Z',
+              'thumbnailUrl': 'https://example.invalid/blocked.jpg',
+            },
+          ],
+        },
+        {
+          'id': 'card-2',
+          'receivedAt': '2026-11-22T02:04:05Z',
+          'status': 'CARD',
+          'cardTail': '1234',
+          'targetPhotoId': '2',
+          'targetCardId': '99',
+          'photos': <Map<String, dynamic>>[
+            {
+              'id': '2',
+              'ending': true,
+              'revision': 0,
+              'receivedAt': '2026-11-22T02:04:05Z',
+              'thumbnailUrl': 'https://example.invalid/ending.jpg',
+            },
+          ],
+        },
+      ];
+      Future<dynamic> call(String method, List<dynamic> args) async =>
+          switch (method) {
             'listBatchStations' => <Map<String, dynamic>>[
               {'id': '18', 'code': 'A18', 'name': '其他机位'},
               {'id': '17', 'code': 'A17', 'name': '测试机位'},
@@ -76,92 +76,137 @@ void main() {
               };
             }(),
             _ => throw StateError(method),
-          },
+          };
+      await tester.pumpWidget(
+        MaterialApp(
+          home: inline
+              ? Scaffold(
+                  body: CustomScrollView(
+                    slivers: [
+                      UploadTaskList(
+                        folder: '',
+                        waiting: const {},
+                        needingOrder: const [],
+                        jobs: const [],
+                        onConfirmNext: null,
+                        onReview: (_) {},
+                        batchTimeline: PhotoBatchTimeline.inline(
+                          call: call,
+                          scenicName: '测试景区',
+                          stationId: '17',
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : PhotoBatchPage(
+                  scenicName: '测试景区',
+                  initialStationId: '17',
+                  call: call,
+                ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    final newer = find.text('10:04:05').first;
-    final older = find.text('10:01:00').first;
-    final gap = find.text('间隔 3 分 0 秒');
-    expect(tester.getTopLeft(gap).dy, greaterThan(tester.getTopLeft(newer).dy));
-    expect(tester.getTopLeft(gap).dy, lessThan(tester.getTopLeft(older).dy));
-    expect(
-      tester.getCenter(find.text('10:01:00').last).dx,
-      lessThan(tester.getCenter(find.text('10:01:05')).dx),
-    );
-
-    final moveButton = find.byKey(const ValueKey('move-photo-1'));
-    expect(find.byTooltip('按住拖动 · 单击选择批次'), findsOneWidget);
-    final movablePhoto = find.ancestor(
-      of: moveButton,
-      matching: find.byWidgetPredicate((widget) => widget is Draggable),
-    );
-    expect(find.byKey(const ValueKey('move-photo-3')), findsNothing);
-    expect(find.byTooltip('照片已用于打印'), findsWidgets);
-    expect(find.byIcon(Icons.lock_outline), findsOneWidget);
-
-    Future<void> dragToCard(Finder source) async {
-      final from = tester.getCenter(source);
-      final target = find.ancestor(
-        of: find.text('取片卡 1234'),
-        matching: find.byWidgetPredicate((widget) => widget is DragTarget),
       );
-      final to = Offset(
-        tester.getCenter(newer).dx,
-        tester.getCenter(target).dy,
-      );
-      final gesture = await tester.startGesture(
-        from,
-        kind: PointerDeviceKind.mouse,
-      );
-      await gesture.moveBy(const Offset(0, -30));
-      await tester.pump();
-      await gesture.moveTo(to);
-      await tester.pump();
-      await gesture.up();
       await tester.pumpAndSettle();
-    }
+      if (inline) {
+        expect(find.text('任务列表'), findsOneWidget);
+        expect(find.text('取片批次'), findsOneWidget);
+        expect(find.text('设置取片批次'), findsNothing);
+        expect(find.byTooltip('选择机位'), findsNothing);
+        expect(find.textContaining('A17'), findsOneWidget);
+      }
+      final newer = find.text('10:04:05').first;
+      final older = find.text('10:01:00').first;
+      final gap = find.text('间隔 3 分 0 秒');
+      expect(
+        tester.getTopLeft(gap).dy,
+        greaterThan(tester.getTopLeft(newer).dy),
+      );
+      expect(tester.getTopLeft(gap).dy, lessThan(tester.getTopLeft(older).dy));
+      expect(
+        tester.getCenter(find.text('10:01:00').last).dx,
+        lessThan(tester.getCenter(find.text('10:01:05')).dx),
+      );
 
-    await dragToCard(movablePhoto);
-    expect(find.text('确认移动照片'), findsOneWidget);
-    await tester.tap(find.text('取消'));
-    await tester.pumpAndSettle();
-    expect(writes, isEmpty);
+      final moveButton = find.byKey(const ValueKey('move-photo-1'));
+      expect(find.byTooltip('按住拖动 · 单击选择批次'), findsOneWidget);
+      final movablePhoto = find.ancestor(
+        of: moveButton,
+        matching: find.byWidgetPredicate((widget) => widget is Draggable),
+      );
+      expect(find.byKey(const ValueKey('move-photo-3')), findsNothing);
+      expect(find.byTooltip('照片已用于打印'), findsWidgets);
+      expect(find.byIcon(Icons.lock_outline), findsOneWidget);
 
-    await dragToCard(moveButton);
-    await tester.tap(find.text('确认移动'));
-    await tester.pumpAndSettle();
-    expect(writes.single['targetPhotoId'], '2');
-    expect(writes.single['targetCardId'], '99');
+      Future<void> dragToCard(Finder source) async {
+        final from = tester.getCenter(source);
+        final target = find.ancestor(
+          of: find.text('取片卡 1234'),
+          matching: find.byWidgetPredicate((widget) => widget is DragTarget),
+        );
+        final to = Offset(
+          tester.getCenter(newer).dx,
+          tester.getCenter(target).dy,
+        );
+        final gesture = await tester.startGesture(
+          from,
+          kind: PointerDeviceKind.mouse,
+        );
+        await gesture.moveBy(const Offset(0, -30));
+        await tester.pump();
+        await gesture.moveTo(to);
+        await tester.pump();
+        await gesture.up();
+        await tester.pumpAndSettle();
+      }
 
-    await tester.tap(moveButton);
-    await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('取片卡 1234 ·'));
-    await tester.pumpAndSettle();
-    expect(find.text('确认移动照片'), findsOneWidget);
-    await tester.tap(find.text('取消'));
-    await tester.pumpAndSettle();
-    expect(writes, hasLength(1));
+      await dragToCard(movablePhoto);
+      expect(find.text('确认移动照片'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(writes, isEmpty);
 
-    await tester.tap(find.text('补录取片码'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).last, '1234');
-    await tester.tap(find.text('取消'));
-    await tester.pumpAndSettle();
-    expect(writes, hasLength(1));
+      await dragToCard(moveButton);
+      await tester.tap(find.text('确认移动'));
+      await tester.pumpAndSettle();
+      expect(writes.single['targetPhotoId'], '2');
+      expect(writes.single['targetCardId'], '99');
 
-    await tester.tap(find.text('补录取片码'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).last, '1234');
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('确认归批'));
-    await tester.pumpAndSettle();
-    expect(writes.last['cardCode'], '1234');
-    expect(writes.last['photos'], [
-      {'photoId': '1', 'revision': 0},
-    ]);
-  });
+      await tester.tap(moveButton);
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('取片卡 1234 ·'));
+      await tester.pumpAndSettle();
+      expect(find.text('确认移动照片'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(writes, hasLength(1));
+
+      await tester.tap(find.text('补录取片码'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).last, '1234');
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(writes, hasLength(1));
+
+      await tester.tap(find.text('补录取片码'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).last, '1234');
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认归批'));
+      await tester.pumpAndSettle();
+      expect(writes.last['cardCode'], '1234');
+      expect(writes.last['photos'], [
+        {'photoId': '1', 'revision': 0},
+      ]);
+      if (inline) {
+        await tester.binding.setSurfaceSize(const Size(375, 650));
+        await tester.pumpAndSettle();
+        expect(find.text('任务列表'), findsOneWidget);
+        expect(find.text('取片卡 1234'), findsOneWidget);
+        expect(find.text('补录取片码'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      }
+    });
+  }
 
   testWidgets('弹窗先显示列表缩略图，大图加载成功或失败时状态明确', (tester) async {
     const thumbnailUrl = 'https://example.invalid/batch-thumb.jpg';
@@ -295,9 +340,8 @@ void main() {
     );
     expect(defaultFrom, endsWith('T00:00:00+08:00'));
     expect(
-      DateTime.parse(
-        queries.single['to'] as String,
-      ).difference(DateTime.parse(defaultFrom)),
+      DateTime.parse(queries.single['to'] as String)
+          .difference(DateTime.parse(defaultFrom)),
       const Duration(days: 1),
     );
 

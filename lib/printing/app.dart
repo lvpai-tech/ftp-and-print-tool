@@ -271,6 +271,8 @@ class _WorkstationState extends State<Workstation> {
                     bridge.connected &&
                     bridge.configured)
                   _autoPrintControl(),
+                if (putControlsInHeader && bridge.connected)
+                  _printSettingsButton(),
                 const SizedBox(width: 8),
                 const UpdateButton(),
                 const SizedBox(width: 8),
@@ -326,6 +328,7 @@ class _WorkstationState extends State<Workstation> {
                   _connectionStatus(),
                   _autoPrintControl(),
                 ],
+                _printSettingsButton(),
               ],
             ),
           if (bridge.busy) const LinearProgressIndicator(minHeight: 2),
@@ -353,6 +356,14 @@ class _WorkstationState extends State<Workstation> {
       ),
     );
   }
+
+  Widget _printSettingsButton() => TextButton.icon(
+    key: const ValueKey('print-settings-button'),
+    onPressed: openConfig,
+    style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
+    icon: const Icon(Icons.tune_outlined, size: 18),
+    label: const Text('打印设置'),
+  );
 
   Widget _scenicControl() => TextButton(
     key: const ValueKey('print-open-config'),

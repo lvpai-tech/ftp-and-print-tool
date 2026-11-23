@@ -11,6 +11,7 @@ const DEFAULT_CONFIG_PATH = path.join(ROOT, 'config.json');
 const EXAMPLE_CONFIG_PATH = path.join(ROOT, 'config.example.json');
 /** 正式运营 API 根；界面不展示，本机可用 PRINT_AGENT_BASE 覆盖（联调/测试）。 */
 const DEFAULT_OPERATION_BASE = 'https://hilvpai.com/api/operation';
+const DEFAULT_PRINT_DPI = 300;
 
 const KIND_KEYS = ['COVER', 'SIZE_6', 'ORIGINAL', 'CREATIVE'];
 const MAC_SUPPORT_DIR_NAME = 'lvpai-print-desktop';
@@ -134,6 +135,10 @@ function normalizeConfig(raw, options = {}) {
 
   const command = normalizeCommand(raw.command);
   const printers = normalizePrinters(raw.printers);
+  const printDpi = raw.printDpi === undefined ? DEFAULT_PRINT_DPI : raw.printDpi;
+  if (!Number.isInteger(printDpi) || printDpi < 72 || printDpi > 1200) {
+    throw new Error('打印分辨率须为 72–1200 DPI 的整数');
+  }
   const allowDefaultPrinter = Boolean(raw.allowDefaultPrinter);
   const defaultPrinter = String(raw.defaultPrinter || '').trim();
   if (allowDefaultPrinter && !defaultPrinter) {
@@ -168,6 +173,7 @@ function normalizeConfig(raw, options = {}) {
     allowDefaultPrinter,
     defaultPrinter,
     printers,
+    printDpi,
     command,
     /** 打印机状态命令；null 表示本机不检查缺纸等异常，打印命令受理即报已打印。 */
     statusCommand: normalizeStatusCommand(raw.statusCommand, options.platform || process.platform, command),
@@ -360,6 +366,7 @@ function toWritableConfig(config) {
     allowDefaultPrinter: config.allowDefaultPrinter,
     defaultPrinter: config.defaultPrinter,
     printers: { ...config.printers },
+    printDpi: config.printDpi,
     command: config.command.slice(),
     statusCommand: config.statusCommand ? config.statusCommand.slice() : null,
     printerSettleMs: config.printerSettleMs,

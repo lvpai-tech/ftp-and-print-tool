@@ -8,6 +8,7 @@ import '../profile_store.dart';
 import 'app_dialogs.dart';
 import 'auto_upload_panel.dart';
 import 'cos_upload_dialog.dart';
+import 'design.dart';
 import 'update_button.dart';
 import 'workstation_enrollment_panel.dart';
 
@@ -127,27 +128,41 @@ class _TransferPageState extends State<TransferPage> {
       onConfigureCos: _configure,
       onActiveChanged: (active) => widget.onActiveChanged?.call(active),
       onUploadingChanged: widget.onUploadingChanged,
-      onOpenBatches: widget.printBridge == null
-          ? null
-          : () => _openPhotoBatches(profile.stationId),
+      batchTimeline: _batchTimeline(profile),
     );
   }
 
-  Future<void> _openPhotoBatches(String stationId) async {
-    final bridge = widget.printBridge!;
-    if (!bridge.connected || !bridge.configured) {
-      await showAppMessage(context, message: '请先在打印工作台连接景区，再设置取片批次。');
-      return;
-    }
-    final scenicName = (bridge.config['scenicName'] as String?)?.trim();
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute(
-        builder: (_) => PhotoBatchPage(
+  Widget? _batchTimeline(CosUploadProfile profile) {
+    final bridge = widget.printBridge;
+    if (bridge == null) return null;
+    return ListenableBuilder(
+      listenable: bridge,
+      builder: (context, _) {
+        if (!bridge.connected || !bridge.configured) {
+          return const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: Text(
+                '取片批次需要打印工作台连接景区后查看。',
+                style: TextStyle(color: WorkstationStyle.muted, fontSize: 12),
+              ),
+            ),
+          );
+        }
+        final config = bridge.config;
+        final scenicName = (config['scenicName'] as String?)?.trim();
+        return PhotoBatchTimeline.inline(
+          key: ValueKey((
+            bridge,
+            config['activeScenicProfileId'],
+            config['scenicCode'],
+            profile.stationId,
+          )),
           call: bridge.call,
           scenicName: scenicName?.isNotEmpty == true ? scenicName! : '（未返回名称）',
-          initialStationId: stationId,
-        ),
-      ),
+          stationId: profile.stationId,
+        );
+      },
     );
   }
 

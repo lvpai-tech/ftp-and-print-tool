@@ -8,7 +8,7 @@ import '../../ui/design.dart';
 import '../job_query_time.dart';
 import '../print_bridge.dart';
 
-class PhotoBatchPage extends StatefulWidget {
+class PhotoBatchPage extends StatelessWidget {
   const PhotoBatchPage({
     super.key,
     required this.call,
@@ -21,12 +21,58 @@ class PhotoBatchPage extends StatefulWidget {
   final String? initialStationId;
 
   @override
-  State<PhotoBatchPage> createState() => _PhotoBatchPageState();
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: WorkstationStyle.bg,
+    appBar: AppBar(
+      backgroundColor: WorkstationStyle.card,
+      surfaceTintColor: Colors.transparent,
+      title: const Text(
+        '照片批次矫正',
+        style: TextStyle(
+          color: WorkstationStyle.ink,
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    ),
+    body: SafeArea(
+      top: false,
+      child: PhotoBatchTimeline._(
+        call: call,
+        scenicName: scenicName,
+        initialStationId: initialStationId,
+      ),
+    ),
+  );
+}
+
+class PhotoBatchTimeline extends StatefulWidget {
+  const PhotoBatchTimeline._({
+    required this.call,
+    required this.scenicName,
+    this.initialStationId,
+  }) : inline = false;
+
+  const PhotoBatchTimeline.inline({
+    super.key,
+    required this.call,
+    required this.scenicName,
+    required String stationId,
+  }) : inline = true,
+       initialStationId = stationId;
+
+  final Future<dynamic> Function(String, List<dynamic>) call;
+  final String scenicName;
+  final String? initialStationId;
+  final bool inline;
+
+  @override
+  State<PhotoBatchTimeline> createState() => _PhotoBatchTimelineState();
 }
 
 const _batchThumbnailHeight = 84.0;
 
-class _PhotoBatchPageState extends State<PhotoBatchPage> {
+class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   final _selected = <String>{};
   final _requests = <String, String>{};
   List<Json>? _stations;
@@ -216,118 +262,127 @@ class _PhotoBatchPageState extends State<PhotoBatchPage> {
     final selectedStation = stations
         .where((row) => row['id'] == _station)
         .firstOrNull;
-    return PopScope(
-      canPop: !_working,
-      child: Scaffold(
-        backgroundColor: WorkstationStyle.bg,
-        appBar: AppBar(
-          backgroundColor: WorkstationStyle.card,
-          surfaceTintColor: Colors.transparent,
-          title: const Text(
-            '照片批次矫正',
-            style: TextStyle(
-              color: WorkstationStyle.ink,
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-        body: SafeArea(
-          top: false,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              DecoratedBox(
-                decoration: const BoxDecoration(
-                  color: WorkstationStyle.card,
-                  border: Border(
-                    bottom: BorderSide(color: WorkstationStyle.line),
-                  ),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 14),
-                  child: Wrap(
-                    spacing: 12,
-                    runSpacing: 10,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      if (stations.isNotEmpty)
-                        _BatchFilterMenu(
-                          tooltip: '选择机位',
-                          label: selectedStation == null
-                              ? '选择机位'
-                              : _stationName(selectedStation),
-                          icon: Icons.videocam_outlined,
-                          width: 236,
-                          enabled: enabled,
-                          items: [
-                            for (final row in stations)
-                              MenuItemButton(
-                                onPressed: () {
-                                  if (row['id'] == _station) return;
-                                  setState(
-                                    () => _station = row['id'] as String,
-                                  );
-                                  _load();
-                                },
-                                trailingIcon: row['id'] == _station
-                                    ? const Icon(Icons.check, size: 16)
-                                    : null,
-                                child: Text(
-                                  _stationName(row),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                          ],
-                        ),
-                      _BatchDayMenu(
-                        day: _day,
-                        enabled: enabled,
-                        onChanged: (day) {
-                          if (day == _day) return;
-                          setState(() => _day = day);
-                          _load();
-                        },
-                      ),
-                      IconButton(
-                        tooltip: '刷新批次',
-                        onPressed: enabled ? _load : null,
-                        style: IconButton.styleFrom(
-                          minimumSize: const Size(44, 44),
-                          foregroundColor: WorkstationStyle.accent,
-                          backgroundColor: WorkstationStyle.accentSoft,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        icon: const Icon(Icons.refresh_rounded, size: 20),
-                      ),
-                      Text(
-                        '${widget.scenicName} · 最新批次在前 · 北京时间',
-                        style: const TextStyle(
-                          color: WorkstationStyle.muted,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
+    final controls = DecoratedBox(
+      decoration: const BoxDecoration(
+        color: WorkstationStyle.card,
+        border: Border(bottom: BorderSide(color: WorkstationStyle.line)),
+      ),
+      child: Padding(
+        padding: widget.inline
+            ? const EdgeInsets.only(bottom: 10)
+            : const EdgeInsets.fromLTRB(20, 4, 20, 14),
+        child: Wrap(
+          spacing: 12,
+          runSpacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            if (widget.inline)
+              const Text(
+                '取片批次',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: WorkstationStyle.ink,
                 ),
               ),
-              if (_loading || _submitting)
-                const LinearProgressIndicator(minHeight: 2),
-              Expanded(child: _timeline()),
-            ],
-          ),
+            if (!widget.inline && stations.isNotEmpty)
+              _BatchFilterMenu(
+                tooltip: '选择机位',
+                label: selectedStation == null
+                    ? '选择机位'
+                    : _stationName(selectedStation),
+                icon: Icons.videocam_outlined,
+                width: 236,
+                enabled: enabled,
+                items: [
+                  for (final row in stations)
+                    MenuItemButton(
+                      onPressed: () {
+                        if (row['id'] == _station) return;
+                        setState(() => _station = row['id'] as String);
+                        _load();
+                      },
+                      trailingIcon: row['id'] == _station
+                          ? const Icon(Icons.check, size: 16)
+                          : null,
+                      child: Text(
+                        _stationName(row),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+              ),
+            _BatchDayMenu(
+              day: _day,
+              enabled: enabled,
+              onChanged: (day) {
+                if (day == _day) return;
+                setState(() => _day = day);
+                _load();
+              },
+            ),
+            IconButton(
+              tooltip: '刷新批次',
+              onPressed: enabled ? _load : null,
+              style: IconButton.styleFrom(
+                minimumSize: const Size(44, 44),
+                foregroundColor: WorkstationStyle.accent,
+                backgroundColor: WorkstationStyle.accentSoft,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              icon: const Icon(Icons.refresh_rounded, size: 20),
+            ),
+            Text(
+              [
+                widget.scenicName,
+                if (widget.inline && selectedStation != null)
+                  _stationName(selectedStation),
+                '最新批次在前',
+                '北京时间',
+              ].join(' · '),
+              style: const TextStyle(
+                color: WorkstationStyle.muted,
+                fontSize: 12,
+              ),
+            ),
+          ],
         ),
       ),
+    );
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        controls,
+        if (_loading || _submitting)
+          const LinearProgressIndicator(minHeight: 2),
+      ],
+    );
+    final timeline = _timeline();
+    return PopScope(
+      canPop: !_working,
+      child: widget.inline
+          ? SliverMainAxisGroup(
+              slivers: [
+                SliverToBoxAdapter(child: header),
+                timeline,
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                header,
+                Expanded(child: CustomScrollView(slivers: [timeline])),
+              ],
+            ),
     );
   }
 
   Widget _timeline() {
     if (_error case final error?) {
-      return Center(
-        child: Padding(
+      return _timelineMessage(
+        Padding(
           padding: const EdgeInsets.all(20),
           child: _BatchMessage(
             icon: Icons.error_outline,
@@ -344,8 +399,8 @@ class _PhotoBatchPageState extends State<PhotoBatchPage> {
           : _station == null
           ? '当前景区暂无机位'
           : '当天暂无收图';
-      return Center(
-        child: Padding(
+      return _timelineMessage(
+        Padding(
           padding: const EdgeInsets.all(20),
           child: _BatchMessage(
             icon: _loading ? Icons.schedule : Icons.photo_library_outlined,
@@ -356,20 +411,31 @@ class _PhotoBatchPageState extends State<PhotoBatchPage> {
         ),
       );
     }
-    return LayoutBuilder(
+    return SliverLayoutBuilder(
       builder: (context, constraints) {
         final wide =
-            constraints.maxWidth >= 600 &&
+            constraints.crossAxisExtent >= 600 &&
             MediaQuery.textScalerOf(context).scale(16) <= 22;
         final gutter = wide ? 24.0 : 12.0;
-        return ListView.builder(
-          padding: EdgeInsets.fromLTRB(gutter, 18, gutter, 24),
-          itemCount: _batches.length,
-          itemBuilder: (context, index) => _timelineItem(index, wide: wide),
+        return SliverPadding(
+          padding: widget.inline
+              ? const EdgeInsets.fromLTRB(0, 12, 0, 16)
+              : EdgeInsets.fromLTRB(gutter, 18, gutter, 24),
+          sliver: SliverList.builder(
+            itemCount: _batches.length,
+            itemBuilder: (context, index) => _timelineItem(index, wide: wide),
+          ),
         );
       },
     );
   }
+
+  Widget _timelineMessage(Widget message) => widget.inline
+      ? SliverToBoxAdapter(child: Center(child: message))
+      : SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(child: message),
+        );
 
   Widget _timelineItem(int index, {required bool wide}) {
     final batch = _batches[index];

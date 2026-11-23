@@ -9,6 +9,13 @@
 # 等比留白还是裁切铺满属于版式（O08），这里只做等比。
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
+$printDpi = 300
+if ($env:LVPAI_PRINT_DPI) {
+  if (-not [int]::TryParse($env:LVPAI_PRINT_DPI, [ref]$printDpi) -or
+    $printDpi -lt 72 -or $printDpi -gt 1200) {
+    throw '打印分辨率须为 72–1200 DPI 的整数'
+  }
+}
 $image = [System.Drawing.Image]::FromFile($File)
 try {
   $document = New-Object System.Drawing.Printing.PrintDocument
@@ -22,6 +29,11 @@ try {
   $document.DefaultPageSettings.PaperSize = $sixInch
   $document.DefaultPageSettings.Landscape = $image.Width -gt $image.Height
   $document.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0, 0, 0, 0)
+  # 队列可能只公开设备原生分辨率，例如 360×360 DPI。
+  $resolution = $document.PrinterSettings.PrinterResolutions | Where-Object {
+    $_.X -eq $printDpi -and $_.Y -eq $printDpi
+  } | Select-Object -First 1
+  if ($resolution) { $document.DefaultPageSettings.PrinterResolution = $resolution }
   $document.PrinterSettings.Copies = [int16]$Copies
   # 去掉默认「正在打印 Document」状态小窗，静默送后台假脱机。
   $document.PrintController = New-Object System.Drawing.Printing.StandardPrintController
@@ -35,8 +47,25 @@ try {
     $scale = [Math]::Min($areaWidth / $image.Width, $areaHeight / $image.Height)
     $width = [int]($image.Width * $scale)
     $height = [int]($image.Height * $scale)
-    $event.Graphics.DrawImage($image, [int](($areaWidth - $width) / 2), [int](($areaHeight - $height) / 2),
-      $width, $height)
+    # 按设定分辨率生成位图，打印位置和尺寸仍以百分之一英寸计算。
+    $rasterWidth = [Math]::Max(1, [int]($width * $printDpi / 100))
+    $rasterHeight = [Math]::Max(1, [int]($height * $printDpi / 100))
+    $raster = [System.Drawing.Bitmap]::new($rasterWidth, $rasterHeight)
+    try {
+      $raster.SetResolution($printDpi, $printDpi)
+      $rasterGraphics = [System.Drawing.Graphics]::FromImage($raster)
+      try {
+        $rasterGraphics.Clear([System.Drawing.Color]::White)
+        $rasterGraphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $rasterGraphics.DrawImage($image, 0, 0, $rasterWidth, $rasterHeight)
+      } finally {
+        $rasterGraphics.Dispose()
+      }
+      $event.Graphics.DrawImage($raster, [int](($areaWidth - $width) / 2), [int](($areaHeight - $height) / 2),
+        $width, $height)
+    } finally {
+      $raster.Dispose()
+    }
     $event.HasMorePages = $false
   })
   $document.Print()

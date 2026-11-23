@@ -82,7 +82,7 @@ void main() {
       await tester.pumpAndSettle();
       await open(tester, 'open-print');
       expect(find.text('#9007199254740993'), findsOneWidget);
-      await open(tester, 'print-open-config');
+      await open(tester, 'print-settings-button');
       await tester.tap(keyed('print-inspect-printers'));
       await tester.pumpAndSettle();
       expect(find.text('隔离测试打印机：正常（0 项任务）'), findsOneWidget);
@@ -93,6 +93,42 @@ void main() {
       await tester.pumpAndSettle();
       await open(tester, 'open-upload');
       expect(tester.state(find.byType(TransferPage)), same(transferState));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final size in [const Size(375, 800), const Size(1000, 680)]) {
+    testWidgets('打印设置在 ${size.width} 宽可校验和保存 DPI', (tester) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final bridge = WorkstationBridge();
+      await tester.pumpWidget(PhotoFtpApp(session: WorkstationSession(bridge)));
+      await tester.pumpAndSettle();
+      await open(tester, 'open-print');
+      await open(tester, 'print-settings-button');
+      final field = keyed('print-dpi-field');
+      final save = find.text('保存打印设置');
+      await tester.ensureVisible(field);
+      expect(tester.widget<TextFormField>(field).controller!.text, '300');
+      await tester.enterText(field, '300.5');
+      await tester.ensureVisible(save);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(find.text('请输入 72–1200 之间的整数'), findsOneWidget);
+      expect(bridge.calls, isNot(contains('saveConfig')));
+      await tester.ensureVisible(field);
+      await tester.enterText(field, '360');
+      await tester.ensureVisible(save);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(bridge.arguments['saveConfig'], [
+        {
+          'printers': {'COVER': WorkstationBridge.printer},
+          'printDpi': 360,
+        },
+      ]);
       expect(tester.takeException(), isNull);
     });
   }

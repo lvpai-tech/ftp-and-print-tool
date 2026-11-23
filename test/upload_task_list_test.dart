@@ -25,13 +25,12 @@ void main() {
     final confirmed = <String>[];
     final reviewed = <AutoJob>[];
     final removed = <String>[];
-    var openedBatches = false;
 
     Future<void> render(List<String> needingOrder) => tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: ListView(
-            children: [
+          body: CustomScrollView(
+            slivers: [
               UploadTaskList(
                 folder: folder,
                 waiting: {
@@ -47,7 +46,6 @@ void main() {
                   expect(stamp, signature(9));
                   removed.add(source);
                 },
-                onOpenBatches: () => openedBatches = true,
               ),
             ],
           ),
@@ -66,8 +64,7 @@ void main() {
     expect(find.text('2026-11-23'), findsNWidgets(3));
     expect(find.text('08:33:09'), findsAtLeastNWidgets(1));
     expect(find.text('间隔 5 分 0 秒'), findsOneWidget);
-    await tester.tap(find.text('设置取片批次'));
-    expect(openedBatches, isTrue);
+    expect(find.text('设置取片批次'), findsNothing);
 
     final handle = find.byTooltip('按住拖动选择下一张').at(1);
     final target = find.text('拖到这里选为下一张');
@@ -108,7 +105,11 @@ void main() {
     expect(find.text('确认上传顺序'), findsNothing);
     expect(find.text('visitor-2.jpg'), findsOneWidget);
     expect(find.text('等待进入上传队列'), findsOneWidget);
-    await tester.ensureVisible(find.byTooltip('识别取片卡尾号'));
+    await tester.scrollUntilVisible(
+      find.byTooltip('识别取片卡尾号'),
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.tap(find.byTooltip('识别取片卡尾号'));
     expect(reviewed, [uploaded]);
     expect(tester.takeException(), isNull);
@@ -127,16 +128,18 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              UploadTaskList(
-                folder: folder,
-                waiting: {for (final source in sources) source: null},
-                needingOrder: sources,
-                jobs: const [],
-                onConfirmNext: (_) {},
-                onReview: (_) {},
+          body: CustomScrollView(
+            slivers: [
+              SliverPadding(
+                padding: const EdgeInsets.all(20),
+                sliver: UploadTaskList(
+                  folder: folder,
+                  waiting: {for (final source in sources) source: null},
+                  needingOrder: sources,
+                  jobs: const [],
+                  onConfirmNext: (_) {},
+                  onReview: (_) {},
+                ),
               ),
             ],
           ),

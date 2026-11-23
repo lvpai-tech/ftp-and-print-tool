@@ -22,14 +22,14 @@ class AutoUploadPanel extends StatefulWidget {
   final ValueChanged<bool>? onUploadingChanged;
   final CosUploadProfile cosProfile;
   final VoidCallback onConfigureCos;
-  final VoidCallback? onOpenBatches;
+  final Widget? batchTimeline;
   const AutoUploadPanel({
     super.key,
     required this.onActiveChanged,
     this.onUploadingChanged,
     required this.cosProfile,
     required this.onConfigureCos,
-    this.onOpenBatches,
+    this.batchTimeline,
   });
   @override
   State<AutoUploadPanel> createState() => _AutoUploadPanelState();
@@ -272,302 +272,303 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
       decoration: WorkstationStyle.surface(),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(22, 20, 22, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: ListView(
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          '监听与上传',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                            color: WorkstationStyle.ink,
-                          ),
+        child: CustomScrollView(
+          slivers: [
+            SliverList.list(
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '监听与上传',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                          color: WorkstationStyle.ink,
                         ),
                       ),
-                      if (_active)
-                        const StatusTag(
-                          label: '监听中',
-                          color: WorkstationStyle.ok,
-                          soft: WorkstationStyle.okSoft,
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  if (station.isNotEmpty) Text(station),
-                  const Text(
-                    '相机软件把照片保存到本地文件夹，本应用自动检测并批量上传。',
-                    style: TextStyle(
-                      color: WorkstationStyle.muted,
-                      fontSize: 13,
-                      height: 1.4,
                     ),
-                  ),
-                  const SizedBox(height: 14),
-                  SelectableText(
-                    _folder.isEmpty ? '尚未选择文件夹' : _folder,
-                    style: TextStyle(
-                      color: _folder.isEmpty
-                          ? WorkstationStyle.muted
-                          : WorkstationStyle.ink,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      OutlinedButton.icon(
-                        onPressed: locked || !supported ? null : _choose,
-                        icon: const Icon(Icons.folder_open, size: 18),
-                        label: Text(_folder.isEmpty ? '选择监听文件夹' : '更换文件夹'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: WorkstationStyle.ink,
-                          side: const BorderSide(color: WorkstationStyle.line),
-                          minimumSize: const Size(0, 40),
-                        ),
+                    if (_active)
+                      const StatusTag(
+                        label: '监听中',
+                        color: WorkstationStyle.ok,
+                        soft: WorkstationStyle.okSoft,
                       ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                if (station.isNotEmpty) Text(station),
+                const Text(
+                  '相机软件把照片保存到本地文件夹，本应用自动检测并批量上传。',
+                  style: TextStyle(
+                    color: WorkstationStyle.muted,
+                    fontSize: 13,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                SelectableText(
+                  _folder.isEmpty ? '尚未选择文件夹' : _folder,
+                  style: TextStyle(
+                    color: _folder.isEmpty
+                        ? WorkstationStyle.muted
+                        : WorkstationStyle.ink,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: locked || !supported ? null : _choose,
+                      icon: const Icon(Icons.folder_open, size: 18),
+                      label: Text(_folder.isEmpty ? '选择监听文件夹' : '更换文件夹'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: WorkstationStyle.ink,
+                        side: const BorderSide(color: WorkstationStyle.line),
+                        minimumSize: const Size(0, 40),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: locked ? null : widget.onConfigureCos,
+                      child: const Text('COS 直传设置'),
+                    ),
+                    if (Platform.isIOS)
                       TextButton(
-                        onPressed: locked ? null : widget.onConfigureCos,
-                        child: const Text('COS 直传设置'),
+                        onPressed: locked ? null : _inbox,
+                        child: const Text('使用本机收图文件夹'),
                       ),
-                      if (Platform.isIOS)
-                        TextButton(
-                          onPressed: locked ? null : _inbox,
-                          child: const Text('使用本机收图文件夹'),
-                        ),
-                      FilterChip(
-                        label: const Text('包含子文件夹'),
-                        selected: _recursive,
-                        onSelected: locked
-                            ? null
-                            : (value) => setState(() => _recursive = value),
-                        selectedColor: WorkstationStyle.accentSoft,
-                        checkmarkColor: WorkstationStyle.accent,
-                      ),
-                      FilterChip(
-                        label: const Text('同时扫描已有照片'),
-                        selected: _existing,
-                        onSelected: locked
-                            ? null
-                            : (value) => setState(() => _existing = value),
-                        selectedColor: WorkstationStyle.accentSoft,
-                        checkmarkColor: WorkstationStyle.accent,
-                      ),
-                    ],
-                  ),
-                  if (Platform.isIOS) ...[
-                    const SizedBox(height: 8),
-                    const Text(
-                      'iPad 仅在前台监听。切换应用或锁屏后停止，回来点击开始监听补传。请使用已下载到本机的目录；相机软件须支持写入此授权目录。',
-                      style: TextStyle(
-                        color: WorkstationStyle.muted,
-                        fontSize: 12,
-                        height: 1.4,
-                      ),
+                    FilterChip(
+                      label: const Text('包含子文件夹'),
+                      selected: _recursive,
+                      onSelected: locked
+                          ? null
+                          : (value) => setState(() => _recursive = value),
+                      selectedColor: WorkstationStyle.accentSoft,
+                      checkmarkColor: WorkstationStyle.accent,
+                    ),
+                    FilterChip(
+                      label: const Text('同时扫描已有照片'),
+                      selected: _existing,
+                      onSelected: locked
+                          ? null
+                          : (value) => setState(() => _existing = value),
+                      selectedColor: WorkstationStyle.accentSoft,
+                      checkmarkColor: WorkstationStyle.accent,
                     ),
                   ],
-                  const SizedBox(height: 14),
-                  if (!supported) ...[
-                    const Text(
-                      '当前平台不支持自动目录模式。',
-                      style: TextStyle(color: WorkstationStyle.bad),
-                    ),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton(
-                        onPressed: _pickCardPhoto,
-                        child: const Text('从照片识别尾号'),
-                      ),
-                    ),
-                  ],
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: const Color(0xfff8fafc),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: WorkstationStyle.line),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Wrap(
-                          spacing: 18,
-                          runSpacing: 8,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            _Stat(
-                              label: '待准备',
-                              value: '${_uploader?.settling ?? 0}',
-                              color: WorkstationStyle.muted,
-                            ),
-                            _Stat(
-                              label: '上传中',
-                              value: '$uploading',
-                              color: WorkstationStyle.accent,
-                            ),
-                            _Stat(
-                              label: '待传',
-                              value: '$pending',
-                              color: WorkstationStyle.warn,
-                            ),
-                            _Stat(
-                              label: '已上传',
-                              value: '$done',
-                              color: WorkstationStyle.ok,
-                            ),
-                            _Stat(
-                              label: '失败',
-                              value: '$failed',
-                              color: WorkstationStyle.bad,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            FilledButton.icon(
-                              onPressed: _working || _loading || !supported
-                                  ? null
-                                  : _toggle,
-                              icon: Icon(
-                                _active
-                                    ? Icons.stop_circle_outlined
-                                    : Icons.play_arrow,
-                                size: 18,
-                              ),
-                              label: Text(
-                                _working
-                                    ? '处理中…'
-                                    : _active
-                                    ? '停止监听'
-                                    : '开始监听',
-                              ),
-                              style: FilledButton.styleFrom(
-                                backgroundColor: _active
-                                    ? WorkstationStyle.ink
-                                    : WorkstationStyle.accent,
-                                minimumSize: const Size(0, 40),
-                              ),
-                            ),
-                            OutlinedButton(
-                              onPressed:
-                                  !_active ||
-                                      _working ||
-                                      _uploader?.running != true ||
-                                      failed == 0
-                                  ? null
-                                  : () => _uploader!.retryFailed(),
-                              style: OutlinedButton.styleFrom(
-                                minimumSize: const Size(0, 40),
-                                foregroundColor: WorkstationStyle.bad,
-                                side: BorderSide(
-                                  color: failed == 0
-                                      ? WorkstationStyle.line
-                                      : WorkstationStyle.bad.withValues(
-                                          alpha: .35,
-                                        ),
-                                ),
-                              ),
-                              child: const Text('重试失败任务'),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Semantics(
-                    liveRegion: true,
-                    child: Text(
-                      _uploader?.fatalError ??
-                          (_message.isNotEmpty
-                              ? _message
-                              : _uploader?.message ?? '尚未开始监听'),
-                      style: const TextStyle(
-                        color: WorkstationStyle.muted,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-                  if (_uploader?.watcherNotice.isNotEmpty == true)
-                    Text(
-                      _uploader!.watcherNotice,
-                      style: const TextStyle(
-                        color: WorkstationStyle.warn,
-                        fontSize: 12,
-                      ),
-                    ),
-                  if (orderWait != null)
-                    Text(
-                      orderWait,
-                      style: const TextStyle(
-                        color: WorkstationStyle.warn,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ...?_uploader?.issues.entries
-                      .where(
-                        (entry) =>
-                            '${p.relative(entry.key, from: _folder)}：${entry.value}' !=
-                            orderWait,
-                      )
-                      .take(8)
-                      .map(
-                        (entry) => Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: Text(
-                            '${p.basename(entry.key)}：${entry.value}',
-                            style: const TextStyle(
-                              color: WorkstationStyle.warn,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                      ),
-                  const SizedBox(height: 12),
-                  UploadTaskList(
-                    folder: _folder,
-                    waiting: uploader?.waitingSources ?? const {},
-                    needingOrder: uploader?.sourcesNeedingOrder ?? const [],
-                    jobs: jobs,
-                    onDiscard: uploader != null && uploader.running
-                        ? uploader.discardWaitingSource
-                        : null,
-                    onOpenBatches: widget.onOpenBatches,
-                    onConfirmNext: uploader != null && uploader.running
-                        ? (source) {
-                            if (identical(_uploader, uploader)) {
-                              uploader.confirmNextSource(source);
-                            }
-                          }
-                        : null,
-                    onReview: (job) => showCardTailDialog(
-                      context,
-                      readPhoto: job.readPhotoForReview,
-                      guidance: '请根据候选尾号核对卡面。归集由服务端识别结束照。',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
+                ),
+                if (Platform.isIOS) ...[
+                  const SizedBox(height: 8),
                   const Text(
-                    '支持 JPEG、PNG、MPO、HEIF、RAW / DNG、TIFF、WebP 和 AVIF。按发现顺序排队，前一张入库后继续。',
+                    'iPad 仅在前台监听。切换应用或锁屏后停止，回来点击开始监听补传。请使用已下载到本机的目录；相机软件须支持写入此授权目录。',
                     style: TextStyle(
-                      fontSize: 12,
                       color: WorkstationStyle.muted,
+                      fontSize: 12,
                       height: 1.4,
                     ),
                   ),
                 ],
+                const SizedBox(height: 14),
+                if (!supported) ...[
+                  const Text(
+                    '当前平台不支持自动目录模式。',
+                    style: TextStyle(color: WorkstationStyle.bad),
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: _pickCardPhoto,
+                      child: const Text('从照片识别尾号'),
+                    ),
+                  ),
+                ],
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xfff8fafc),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: WorkstationStyle.line),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Wrap(
+                        spacing: 18,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          _Stat(
+                            label: '待准备',
+                            value: '${_uploader?.settling ?? 0}',
+                            color: WorkstationStyle.muted,
+                          ),
+                          _Stat(
+                            label: '上传中',
+                            value: '$uploading',
+                            color: WorkstationStyle.accent,
+                          ),
+                          _Stat(
+                            label: '待传',
+                            value: '$pending',
+                            color: WorkstationStyle.warn,
+                          ),
+                          _Stat(
+                            label: '已上传',
+                            value: '$done',
+                            color: WorkstationStyle.ok,
+                          ),
+                          _Stat(
+                            label: '失败',
+                            value: '$failed',
+                            color: WorkstationStyle.bad,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          FilledButton.icon(
+                            onPressed: _working || _loading || !supported
+                                ? null
+                                : _toggle,
+                            icon: Icon(
+                              _active
+                                  ? Icons.stop_circle_outlined
+                                  : Icons.play_arrow,
+                              size: 18,
+                            ),
+                            label: Text(
+                              _working
+                                  ? '处理中…'
+                                  : _active
+                                  ? '停止监听'
+                                  : '开始监听',
+                            ),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _active
+                                  ? WorkstationStyle.ink
+                                  : WorkstationStyle.accent,
+                              minimumSize: const Size(0, 40),
+                            ),
+                          ),
+                          OutlinedButton(
+                            onPressed:
+                                !_active ||
+                                    _working ||
+                                    _uploader?.running != true ||
+                                    failed == 0
+                                ? null
+                                : () => _uploader!.retryFailed(),
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 40),
+                              foregroundColor: WorkstationStyle.bad,
+                              side: BorderSide(
+                                color: failed == 0
+                                    ? WorkstationStyle.line
+                                    : WorkstationStyle.bad.withValues(
+                                        alpha: .35,
+                                      ),
+                              ),
+                            ),
+                            child: const Text('重试失败任务'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    _uploader?.fatalError ??
+                        (_message.isNotEmpty
+                            ? _message
+                            : _uploader?.message ?? '尚未开始监听'),
+                    style: const TextStyle(
+                      color: WorkstationStyle.muted,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                if (_uploader?.watcherNotice.isNotEmpty == true)
+                  Text(
+                    _uploader!.watcherNotice,
+                    style: const TextStyle(
+                      color: WorkstationStyle.warn,
+                      fontSize: 12,
+                    ),
+                  ),
+                if (orderWait != null)
+                  Text(
+                    orderWait,
+                    style: const TextStyle(
+                      color: WorkstationStyle.warn,
+                      fontSize: 12,
+                    ),
+                  ),
+                ...?_uploader?.issues.entries
+                    .where(
+                      (entry) =>
+                          '${p.relative(entry.key, from: _folder)}：${entry.value}' !=
+                          orderWait,
+                    )
+                    .take(8)
+                    .map(
+                      (entry) => Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(
+                          '${p.basename(entry.key)}：${entry.value}',
+                          style: const TextStyle(
+                            color: WorkstationStyle.warn,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                const SizedBox(height: 12),
+              ],
+            ),
+            UploadTaskList(
+              folder: _folder,
+              waiting: uploader?.waitingSources ?? const {},
+              needingOrder: uploader?.sourcesNeedingOrder ?? const [],
+              jobs: jobs,
+              onDiscard: uploader != null && uploader.running
+                  ? uploader.discardWaitingSource
+                  : null,
+              batchTimeline: widget.batchTimeline,
+              onConfirmNext: uploader != null && uploader.running
+                  ? (source) {
+                      if (identical(_uploader, uploader)) {
+                        uploader.confirmNextSource(source);
+                      }
+                    }
+                  : null,
+              onReview: (job) => showCardTailDialog(
+                context,
+                readPhoto: job.readPhotoForReview,
+                guidance: '请根据候选尾号核对卡面。归集由服务端识别结束照。',
+              ),
+            ),
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.only(top: 12),
+                child: Text(
+                  '支持 JPEG、PNG、MPO、HEIF、RAW / DNG、TIFF、WebP 和 AVIF。按发现顺序排队，前一张入库后继续。',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: WorkstationStyle.muted,
+                    height: 1.4,
+                  ),
+                ),
               ),
             ),
           ],

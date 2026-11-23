@@ -71,13 +71,17 @@ test('Flutter桥：真实密钥校验、脱敏、互斥与回写失败不重打'
   const configured = await call('configure', { token: 'controlled-secret' });
   assert.equal(configured.data.configured, true);
   assert.equal(configured.data.config.token, '[已配置]');
+  assert.equal(configured.data.config.printDpi, 300);
   assert.equal(configured.data.state.autoPrint, false);
   assert.match((await call('__proto__')).error, /不支持/);
   const marker = path.join(temp, 'submitted');
-  const settings = await call('saveConfig', { statusCommand: null, resultRetries: 1,
+  const settings = await call('saveConfig', { statusCommand: null, resultRetries: 1, printDpi: 360,
     printers: { ORIGINAL: '受控打印机' }, command: [process.execPath, '-e',
-      'require("node:fs").appendFileSync(process.argv[1],"submitted\\n");setTimeout(()=>{},200)', marker] });
-  assert.ok(settings.data);
+      'require("node:fs").appendFileSync(process.argv[1], process.env.LVPAI_PRINT_DPI + "\\n");setTimeout(()=>{},200)', marker] });
+  assert.equal(settings.data.config.printDpi, 360);
+  assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).printDpi, 360);
+  assert.match((await call('saveConfig', { printDpi: 300.5 })).error, /72–1200/);
+  assert.equal((await call('snapshot')).data.config.printDpi, 360);
   const printing = call('printJobs', ['9']);
   // 同一管道紧接着发修改请求，必须拒绝并保持原配置。
   const concurrent = await call('saveConfig', { printers: { ORIGINAL: '禁止生效' } });
@@ -85,7 +89,7 @@ test('Flutter桥：真实密钥校验、脱敏、互斥与回写失败不重打'
   const result = await printing;
   assert.equal(beginCount, 1);
   assert.equal(resultCount, 1);
-  assert.equal(fs.readFileSync(marker, 'utf8'), 'submitted\n');
+  assert.equal(fs.readFileSync(marker, 'utf8'), '360\n');
   assert.match(JSON.stringify(result), /回写失败/);
   assert.equal(wire.includes('controlled-secret'), false);
   assert.equal((await call('snapshot')).data.config.printers.ORIGINAL, '受控打印机');
@@ -100,6 +104,6 @@ test('Flutter桥：真实密钥校验、脱敏、互斥与回写失败不重打'
   child.stdout.destroy();
   await exited;
   assert.equal(resultCount, 2);
-  assert.equal(fs.readFileSync(marker, 'utf8'), 'submitted\nsubmitted\n');
+  assert.equal(fs.readFileSync(marker, 'utf8'), '360\n360\n');
   assert.equal(fs.existsSync(path.join(temp, '.runtime/print-desktop.lock')), false);
 });
