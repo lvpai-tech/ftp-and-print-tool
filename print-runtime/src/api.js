@@ -49,6 +49,12 @@ function correctPhotoBatch(config, stationId, correction) {
     AbortSignal.timeout(120000));
 }
 
+function removeBatchPhoto(config, stationId, photoId, request) {
+  if (typeof photoId !== 'string' || !/^[1-9]\d*$/.test(photoId)) throw new Error('照片编号无效');
+  return callJson(config, 'POST', `${batchStationRoute(stationId)}/photos/${photoId}/removals`,
+    request, AbortSignal.timeout(30000));
+}
+
 /** 用当前密钥查询绑定景区；失败显式抛错，不做静默兜底。 */
 async function fetchMe(config) {
   return callJson(config, 'GET', '/print-agents/me');
@@ -191,6 +197,7 @@ module.exports = {
   listBatchStations,
   listPhotoBatches,
   correctPhotoBatch,
+  removeBatchPhoto,
   generatingThumbnailPath,
   beginJob,
   continueJob,

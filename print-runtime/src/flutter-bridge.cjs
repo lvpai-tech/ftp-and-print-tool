@@ -8,7 +8,7 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { createRuntime } = require('./runtime');
 const { normalizeConfig, saveConfig, DEFAULT_OPERATION_BASE } = require('./config');
-const { fetchMe, listBatchStations, listPhotoBatches, correctPhotoBatch } = require('./api');
+const { fetchMe, listBatchStations, listPhotoBatches, correctPhotoBatch, removeBatchPhoto } = require('./api');
 const { CUPS_SOCKET } = require('./mac-printer');
 
 const execute = promisify(execFile);
@@ -54,7 +54,18 @@ async function serve({ input = process.stdin, send, configPath, root }) {
   const read = readline.createInterface({ input, crlfDelay: Infinity });
   const mutations = new Set(['configure', 'saveConfig', 'autoPrint', 'printJobs', 'continueJobs',
     'markUnprinted', 'confirmPrinted', 'queryJobs', 'refreshJobs', 'trialPrintItem', 'downloadJobZip',
-    'addScenicProfile', 'activateScenicProfile', 'deleteScenicProfile', 'updateScenicProfile', 'correctPhotoBatch']);
+    'addScenicProfile', 'activateScenicProfile', 'deleteScenicProfile', 'updateScenicProfile',
+    'correctPhotoBatch', 'removeBatchPhoto']);
+  function batchConfig(scope) {
+    const config = bridge.runtime.getConfig();
+    if (scope === undefined) return config;
+    const profile = config.scenicProfiles.find((entry) => entry.id === scope?.profileId);
+    if (!profile || (scope.scenicId && !profile.scenicIds.includes(scope.scenicId))) {
+      throw new Error('机位所属景区的打印档案已变更，请重新打开取片批次');
+    }
+    return { ...config, token: profile.token };
+  }
+
   async function dispatch(method, args) {
     if (method === 'snapshot') return snapshot();
     if (method === 'listPrinters') return listPrinters();
@@ -105,6 +116,9 @@ async function serve({ input = process.stdin, send, configPath, root }) {
       const me = await fetchMe(meProbe);
       if (!me?.scenicId) throw new Error('密钥校验失败：缺少景区信息');
       const scenicIds = (me.scenicIds?.length ? me.scenicIds : [me.scenicId]).map(String);
+      if (args[0]?.scenicId && !scenicIds.includes(args[0].scenicId)) {
+        throw new Error('该打印密钥不属于此机位的景区');
+      }
       const scenicName = me.scenicName || '';
       const scenicCode = me.scenicCode || '';
       const config = normalizeConfig({
@@ -126,9 +140,10 @@ async function serve({ input = process.stdin, send, configPath, root }) {
       return snapshot();
     }
     if (!bridge) throw new Error('请先验证景区打印密钥');
-    if (method === 'listBatchStations') return listBatchStations(bridge.runtime.getConfig());
-    if (method === 'listPhotoBatches') return listPhotoBatches(bridge.runtime.getConfig(), args[0]);
-    if (method === 'correctPhotoBatch') return correctPhotoBatch(bridge.runtime.getConfig(), ...args);
+    if (method === 'listBatchStations') return listBatchStations(batchConfig(args[0]));
+    if (method === 'listPhotoBatches') return listPhotoBatches(batchConfig(args[1]), args[0]);
+    if (method === 'correctPhotoBatch') return correctPhotoBatch(batchConfig(args[2]), args[0], args[1]);
+    if (method === 'removeBatchPhoto') return removeBatchPhoto(batchConfig(args[3]), args[0], args[1], args[2]);
     if (method === 'saveConfig') {
       await bridge.applyConfigPatch(args[0]);
       return snapshot();

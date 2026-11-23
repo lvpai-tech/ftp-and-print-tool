@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
+import 'package:lvpai_ftp_client/printing/print_bridge.dart';
 import 'package:lvpai_ftp_client/profile_store.dart';
 import 'package:lvpai_ftp_client/ui/transfer_page.dart';
 import 'package:material_ui/material_ui.dart';
@@ -26,12 +27,51 @@ void main() {
     await support.delete(recursive: true);
   });
 
-  Future<void> showUpload(WidgetTester tester) async {
+  Future<void> showUpload(WidgetTester tester, {PrintBridge? bridge}) async {
     await tester.pumpWidget(
-      MaterialApp(home: TransferPage(supportDirectory: () async => support)),
+      MaterialApp(
+        home: TransferPage(
+          supportDirectory: () async => support,
+          printBridge: bridge,
+        ),
+      ),
     );
     await tester.pumpAndSettle();
   }
+
+  testWidgets('上传页使用机位所属档案并保留上传队列入口', (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    FlutterSecureStorage.setMockInitialValues({
+      'cos.auto.profile.v1': jsonEncode({
+        'api': gateway.origin,
+        'stationId': '317',
+        'stationCode': 'A08',
+        'scenicId': '5',
+        'scenicName': '汉京中心',
+        'token': 'a' * 64,
+      }),
+    });
+    final bridge = _BatchBridge();
+    addTearDown(bridge.dispose);
+    await showUpload(tester, bridge: bridge);
+    await tester.tap(find.text('A08'));
+    await tester.pumpAndSettle();
+    expect(find.text('照片批次矫正'), findsOneWidget);
+    expect(find.text('取片卡 6969'), findsOneWidget);
+    expect(bridge.calls, ['listBatchStations', 'listPhotoBatches']);
+    await tester.tap(find.text('上传队列'));
+    await tester.pumpAndSettle();
+    expect(find.text('本机暂无上传任务'), findsOneWidget);
+    await tester.tap(find.text('取片批次'));
+    await tester.pumpAndSettle();
+    expect(find.text('取片卡 6969'), findsOneWidget);
+    expect(bridge.calls, hasLength(2));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   Future<void> settleStorage(
     WidgetTester tester,
@@ -220,4 +260,62 @@ void main() {
       expect(field.controller?.text, isEmpty);
     }
   });
+}
+
+class _BatchBridge extends PrintBridge {
+  _BatchBridge() {
+    connected = true;
+    snapshot = {
+      'configured': true,
+      'config': {
+        'activeScenicProfileId': 'active-print',
+        'scenicProfiles': [
+          {
+            'id': 'active-print',
+            'scenicIds': ['1'],
+            'scenicName': '蓝月谷',
+          },
+          {
+            'id': 'upload-scenic',
+            'scenicIds': ['5'],
+            'scenicName': '汉京中心',
+          },
+        ],
+      },
+    };
+  }
+
+  final calls = <String>[];
+
+  @override
+  Future<dynamic> call(String method, [List<dynamic> args = const []]) async {
+    calls.add(method);
+    expect(args.last, {'profileId': 'upload-scenic', 'scenicId': '5'});
+    return switch (method) {
+      'listBatchStations' => <Json>[
+        {'id': '317', 'code': 'A08', 'name': '验收机位'},
+      ],
+      'listPhotoBatches' => {
+        'batches': <Json>[
+          {
+            'id': 'card-6969',
+            'receivedAt': '2026-11-23T09:23:24Z',
+            'status': 'CARD',
+            'cardTail': '6969',
+            'targetPhotoId': '209',
+            'targetCardId': '6969',
+            'photos': <Json>[
+              {
+                'id': '209',
+                'receivedAt': '2026-11-23T09:23:24Z',
+                'ending': true,
+                'thumbnailUrl': 'https://example.invalid/photo.jpg',
+              },
+            ],
+          },
+        ],
+      },
+      _ => throw StateError(method),
+    };
+  }
 }

@@ -28,9 +28,29 @@ test('Flutter桥：真实密钥校验、脱敏、互斥与回写失败不重打'
   let beginCount = 0;
   let resultCount = 0;
   let failResult = true;
+  const scopedRemovals = [];
   const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json');
-    if (req.headers['x-print-agent-token'] !== 'controlled-secret') {
+    const token = req.headers['x-print-agent-token'];
+    if (token === 'other-scenic-key') {
+      let data;
+      if (req.url === '/print-agents/me') data = { scenicId: '2', scenicName: '第二景区' };
+      else if (req.url === '/print-agents/photo-batches/stations') data = [{ id: '27' }];
+      else if (req.url === '/print-agents/photo-batches/stations/27/photos/31/removals') {
+        let body = '';
+        req.setEncoding('utf8');
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+          const request = JSON.parse(body);
+          scopedRemovals.push(request);
+          res.end(JSON.stringify({ code: 200, data: { requestId: request.requestId, photoId: '31' } }));
+        });
+        return;
+      } else { res.statusCode = 404; res.end('{}'); return; }
+      res.end(JSON.stringify({ code: 200, data }));
+      return;
+    }
+    if (token !== 'controlled-secret') {
       res.end(JSON.stringify({ code: 401, message: '密钥无效' })); return;
     }
     let data;
@@ -67,12 +87,25 @@ test('Flutter桥：真实密钥校验、脱敏、互斥与回写失败不重打'
   });
   assert.equal((await call('snapshot')).data.configured, false);
   assert.match((await call('configure', { token: 'bad' })).error, /401/);
+  assert.match((await call('configure', { token: 'controlled-secret', scenicId: '2' })).error, /不属于/);
   assert.equal(fs.existsSync(configPath), false);
   const configured = await call('configure', { token: 'controlled-secret' });
   assert.equal(configured.data.configured, true);
   assert.equal(configured.data.config.token, '[已配置]');
   assert.equal(configured.data.config.printDpi, 300);
   assert.equal(configured.data.state.autoPrint, false);
+  assert.match((await call('addScenicProfile', { token: 'other-scenic-key', scenicId: '1' })).error, /不属于/);
+  const added = await call('addScenicProfile', { token: 'other-scenic-key', scenicId: '2' });
+  const second = added.data.config.scenicProfiles.find(profile => profile.scenicIds.includes('2'));
+  const scope = { profileId: second.id, scenicId: '2' };
+  assert.match((await call('listBatchStations', { ...scope, scenicId: '1' })).error, /档案已变更/);
+  assert.deepEqual((await call('listBatchStations', scope)).data, [{ id: '27' }]);
+  const removal = { requestId: 'local-removal-test', revision: 2 };
+  assert.deepEqual((await call('removeBatchPhoto', '27', '31', removal, scope)).data,
+    { requestId: removal.requestId, photoId: '31' });
+  assert.deepEqual(scopedRemovals, [removal]);
+  assert.equal((await call('snapshot')).data.config.activeScenicProfileId, 'default');
+  assert.equal(wire.includes('other-scenic-key'), false);
   assert.match((await call('__proto__')).error, /不支持/);
   const marker = path.join(temp, 'submitted');
   const settings = await call('saveConfig', { statusCommand: null, resultRetries: 1, printDpi: 360,

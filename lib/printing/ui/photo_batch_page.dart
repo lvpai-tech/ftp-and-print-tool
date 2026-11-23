@@ -1,9 +1,12 @@
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
 
 import '../../ui/app_dialogs.dart';
+import '../../ui/card_tail_dialog.dart';
 import '../../ui/design.dart';
 import '../job_query_time.dart';
 import '../print_bridge.dart';
@@ -183,13 +186,27 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     }
   }
 
-  Future<void> _fill(Json batch) async {
-    if (_working || _loading) return;
+  List<Json> _photosToFill(Json batch, {String? cardPhotoId}) {
     final available = _photos(batch).where(_movable).toList();
     final chosen = available
         .where((photo) => _selected.contains(photo['id']))
         .toList();
-    final photos = chosen.isEmpty ? available : chosen;
+    return (chosen.isEmpty ? available : chosen)
+        .where((photo) => photo['id'] != cardPhotoId)
+        .toList();
+  }
+
+  Future<void> _fill(
+    Json batch, {
+    String? candidate,
+    String? cardPhotoId,
+  }) async {
+    if (_working || _loading) return;
+    final photos = _photosToFill(batch, cardPhotoId: cardPhotoId);
+    if (photos.isEmpty) {
+      await showAppMessage(context, message: '请至少选择一张游客照，卡面照片不会随本次补录归批。');
+      return;
+    }
     if (photos.length > 100) {
       await showAppMessage(context, message: '请勾选本次归批的照片，每次最多 100 张。');
       return;
@@ -198,7 +215,11 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     try {
       final code = await showDialog<String>(
         context: context,
-        builder: (_) => _CodeDialog(count: photos.length, time: _time(batch)),
+        builder: (_) => _CodeDialog(
+          count: photos.length,
+          time: _time(batch),
+          candidate: candidate,
+        ),
       );
       if (code != null && mounted) await _submit(photos, {'cardCode': code});
     } finally {
@@ -216,13 +237,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       ...fields,
     };
     final key = jsonEncode([_station, change]);
-    final requestId = _requests.putIfAbsent(key, () {
-      final random = Random.secure();
-      return List.generate(
-        16,
-        (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
-      ).join();
-    });
+    final requestId = _requestId(key);
     setState(() => _submitting = true);
     try {
       final result = await widget.call('correctPhotoBatch', [
@@ -255,6 +270,98 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     }
   }
 
+  String _requestId(String key) => _requests.putIfAbsent(key, () {
+    final random = Random.secure();
+    return List.generate(
+      16,
+      (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join();
+  });
+
+  Future<void> _removePhoto(Json photo) async {
+    if (_loading || _working || photo['removalBlockedReason'] != '') return;
+    setState(() => _working = true);
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('删除这张照片？'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            spacing: 12,
+            children: [
+              SizedBox(width: 120, height: 96, child: _thumbnail(photo)),
+              const Text('照片将从批次和游客取片列表移除，系统会保留原图与操作记录。'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: WorkstationStyle.bad,
+              ),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('确认删除'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      final photoId = photo['id'] as String;
+      final revision = photo['revision'];
+      final key = jsonEncode(['remove', _station, photoId, revision]);
+      final requestId = _requestId(key);
+      setState(() => _submitting = true);
+      final result = await widget.call('removeBatchPhoto', [
+        _station!,
+        photoId,
+        {'requestId': requestId, 'revision': revision},
+      ]) as Json;
+      if (result['requestId'] != requestId || result['photoId'] != photoId) {
+        throw StateError('删除结果未确认，请刷新核对。');
+      }
+      _requests.remove(key);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('已删除 1 张照片')));
+      await _load();
+    } catch (error) {
+      if (mounted) {
+        await showAppMessage(
+          context,
+          title: '无法确认删除结果',
+          message: appErrorMessage(error),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _working = false;
+          _submitting = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _recognizeTail(Json photo, Json batch) async {
+    final cardPhotoId = photo['id'] as String;
+    final canFill =
+        _unassigned(batch) &&
+        _photosToFill(batch, cardPhotoId: cardPhotoId).isNotEmpty;
+    final candidate = await showCardTailDialog(
+      context,
+      readPhoto: () => _readBatchPhoto(photo),
+      guidance: '条形码拍不全时，请框住卡面印刷的四位数字。',
+      allowUse: canFill,
+    );
+    if (candidate != null && mounted) {
+      await _fill(batch, candidate: candidate, cardPhotoId: cardPhotoId);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final enabled = !_loading && !_working;
@@ -278,7 +385,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
           children: [
             if (widget.inline)
               const Text(
-                '取片批次',
+                '照片批次矫正',
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
                   color: WorkstationStyle.ink,
@@ -516,10 +623,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   Widget _batchCard(Json batch, bool hovering) {
     final photos = _photos(batch);
     final status = batch['status'];
-    final pending =
-        status == 'MISSING_END' ||
-        status == 'INVALID_END' ||
-        status == 'AFTER_END';
+    final pending = _unassigned(batch);
     final canFill = pending && photos.any(_movable);
     final canReceive = batch['targetPhotoId'] != null;
     final hasDestination = _batches.any(
@@ -805,10 +909,10 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       ),
     );
     if (!canMove) {
-      return Tooltip(message: unavailable ?? '照片预览', child: tile);
+      return Tooltip(message: unavailable ?? '单击预览和处理照片', child: tile);
     }
     return Tooltip(
-      message: '按住拖到目标批次 · 单击预览',
+      message: '按住拖到目标批次 · 单击预览和处理照片',
       child: Draggable<_Dragged>(
         data: item,
         maxSimultaneousDrags: 1,
@@ -847,16 +951,42 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     final targets = _movable(photo)
         ? _batches.where((target) => _canDrop(item, target)).toList()
         : <Json>[];
-    final target = await showDialog<Json>(
+    final choice = await showDialog<Object>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(photo['ending'] == true ? '结束照' : '游客照'),
         content: SizedBox(
           width: 680,
           height: MediaQuery.sizeOf(context).height * .52,
-          child: InteractiveViewer(child: _previewImage(photo)),
+          child: Column(
+            spacing: 8,
+            children: [
+              Expanded(child: InteractiveViewer(child: _previewImage(photo))),
+              if (photo['removalBlockedReason'] case final String reason
+                  when reason.isNotEmpty)
+                Text(
+                  '删除受限 · $reason',
+                  style: const TextStyle(color: WorkstationStyle.muted),
+                ),
+            ],
+          ),
         ),
         actions: [
+          if (photo['previewUrl'] is String)
+            TextButton.icon(
+              onPressed: () => Navigator.pop(context, 'recognize'),
+              icon: const Icon(Icons.document_scanner_outlined, size: 18),
+              label: const Text('识别取片码'),
+            ),
+          if (photo['removalBlockedReason'] == '')
+            TextButton.icon(
+              onPressed: () => Navigator.pop(context, 'remove'),
+              style: TextButton.styleFrom(
+                foregroundColor: WorkstationStyle.bad,
+              ),
+              icon: const Icon(Icons.delete_outline, size: 18),
+              label: const Text('删除照片'),
+            ),
           if (targets.isNotEmpty)
             PopupMenuButton<Json>(
               onSelected: (target) => Navigator.pop(context, target),
@@ -880,7 +1010,15 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
         ],
       ),
     );
-    if (target != null && mounted) await _move(item, target);
+    if (!mounted) return;
+    switch (choice) {
+      case 'recognize':
+        await _recognizeTail(photo, batch);
+      case 'remove':
+        await _removePhoto(photo);
+      case final Json target:
+        await _move(item, target);
+    }
   }
 }
 
@@ -1167,16 +1305,17 @@ class _BatchFilterMenuState extends State<_BatchFilterMenu> {
 }
 
 class _CodeDialog extends StatefulWidget {
-  const _CodeDialog({required this.count, required this.time});
+  const _CodeDialog({required this.count, required this.time, this.candidate});
   final int count;
   final String time;
+  final String? candidate;
 
   @override
   State<_CodeDialog> createState() => _CodeDialogState();
 }
 
 class _CodeDialogState extends State<_CodeDialog> {
-  String _code = '';
+  late String _code = widget.candidate ?? '';
 
   @override
   Widget build(BuildContext context) {
@@ -1185,6 +1324,7 @@ class _CodeDialogState extends State<_CodeDialog> {
     final time = widget.time;
     return AlertDialog(
       title: const Text('确认补录取片码'),
+      scrollable: true,
       content: SizedBox(
         width: 390,
         child: Column(
@@ -1193,7 +1333,8 @@ class _CodeDialogState extends State<_CodeDialog> {
           children: [
             Text('将 $time 批次的 $count 张游客照归入下方取片卡。'),
             const SizedBox(height: 12),
-            TextField(
+            TextFormField(
+              initialValue: _code,
               autofocus: true,
               autocorrect: false,
               decoration: const InputDecoration(
@@ -1203,7 +1344,7 @@ class _CodeDialogState extends State<_CodeDialog> {
               ),
               onChanged: (text) =>
                   setState(() => _code = text.trim().toUpperCase()),
-              onSubmitted: (_) {
+              onFieldSubmitted: (_) {
                 if (valid) Navigator.pop(context, _code);
               },
             ),
@@ -1236,6 +1377,8 @@ String _stationName(Json row) => "${row['code']} · ${row['name']}";
 List<Json> _photos(Json batch) => (batch['photos'] as List).cast<Json>();
 bool _movable(Json photo) =>
     photo['ending'] == false && photo['blockedReason'] == null;
+bool _unassigned(Json batch) =>
+    const {'MISSING_END', 'INVALID_END', 'AFTER_END'}.contains(batch['status']);
 String _label(Json batch) => switch (batch['cardTail']) {
   final String tail => '取片卡 $tail',
   _ => batch['status'] == 'REVIEW' ? '待复核' : '未归批',
@@ -1273,6 +1416,32 @@ Widget _previewImage(Json photo) => Image.network(
       : _previewStatus(photo, '正在加载大图…'),
   errorBuilder: (_, _, _) => _previewStatus(photo, '大图加载失败，请刷新批次后重试'),
 );
+
+Future<Uint8List> _readBatchPhoto(Json photo) async {
+  const maxBytes = 35 * 1024 * 1024;
+  final uri = Uri.parse(photo['previewUrl'] as String);
+  final client = http.Client();
+  try {
+    final response = await client
+        .send(http.Request('GET', uri))
+        .timeout(const Duration(seconds: 15));
+    if (response.statusCode != 200) {
+      throw StateError('原图读取失败，请刷新批次后重试');
+    }
+    final bytes = BytesBuilder(copy: false);
+    await for (final chunk in response.stream.timeout(
+      const Duration(seconds: 15),
+    )) {
+      if (bytes.length + chunk.length > maxBytes) {
+        throw StateError('照片超过 35 MB，请直接核对并输入取片码');
+      }
+      bytes.add(chunk);
+    }
+    return bytes.takeBytes();
+  } finally {
+    client.close();
+  }
+}
 
 Widget _previewStatus(Json photo, String message) => Stack(
   fit: StackFit.expand,

@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../ui/app_dialogs.dart';
 import '../print_bridge.dart';
 import 'design.dart';
+import 'scenic_key_dialog.dart';
 
 class SettingsPanel extends StatefulWidget {
   const SettingsPanel({
@@ -114,9 +115,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
       {'printers': routes, 'printDpi': int.parse(dpi.text.trim(), radix: 10)},
     ]);
     if (saved && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('打印设置已保存')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('打印设置已保存')));
     }
   }
 
@@ -180,45 +180,11 @@ class _SettingsPanelState extends State<SettingsPanel> {
   }
 
   Future<void> promptAddOrUpdateProfile({String? profileId}) async {
-    final draft = TextEditingController();
-    var obscure = true;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialog) => AlertDialog(
-          title: Text(profileId == null ? '添加景区密钥' : '更新景区密钥'),
-          content: TextField(
-            controller: draft,
-            obscureText: obscure,
-            autofocus: true,
-            decoration: InputDecoration(
-              labelText: '景区打印密钥',
-              suffixIcon: IconButton(
-                onPressed: () => setDialog(() => obscure = !obscure),
-                icon: Icon(
-                  obscure
-                      ? Icons.visibility_outlined
-                      : Icons.visibility_off_outlined,
-                ),
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('校验并保存'),
-            ),
-          ],
-        ),
-      ),
+    final value = await showScenicKeyDialog(
+      context,
+      title: profileId == null ? '添加景区密钥' : '更新景区密钥',
     );
-    final value = draft.text.trim();
-    draft.dispose();
-    if (ok != true || !mounted) return;
+    if (value == null || !mounted) return;
     if (value.isEmpty) {
       await showAppMessage(context, title: '操作未完成', message: '请输入景区打印密钥');
       return;
@@ -286,10 +252,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
                     icon: const Icon(Icons.edit_outlined, size: 18),
                   ),
                   IconButton(
-                    tooltip: profile['id'] == activeId
-                        ? '请先切换到其他景区再删除'
-                        : '删除',
-                    onPressed: widget.bridge.busy ||
+                    tooltip: profile['id'] == activeId ? '请先切换到其他景区再删除' : '删除',
+                    onPressed:
+                        widget.bridge.busy ||
                             profiles.length <= 1 ||
                             profile['id'] == activeId
                         ? null
@@ -362,9 +327,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
                           labelText: '景区打印密钥',
                           suffixIcon: IconButton(
                             tooltip: obscureToken ? '显示密钥' : '隐藏密钥',
-                            onPressed: () => setState(
-                              () => obscureToken = !obscureToken,
-                            ),
+                            onPressed: () =>
+                                setState(() => obscureToken = !obscureToken),
                             icon: Icon(
                               obscureToken
                                   ? Icons.visibility_outlined
@@ -384,9 +348,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                                     {'token': token.text.trim()},
                                   ]);
                                 },
-                          child: Text(
-                            widget.embedded ? '连接景区' : '验证并连接景区',
-                          ),
+                          child: Text(widget.embedded ? '连接景区' : '验证并连接景区'),
                         ),
                       ),
                     ] else ...[
@@ -456,9 +418,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
                                 : null,
                             options: _options(entry.key).toList(),
                             enabled: !widget.bridge.busy,
-                            onChanged: (value) => setState(
-                              () => routes[entry.key] = value ?? '',
-                            ),
+                            onChanged: (value) =>
+                                setState(() => routes[entry.key] = value ?? ''),
                             onOpenPreferences:
                                 widget.bridge.busy ||
                                     routes[entry.key]?.isNotEmpty != true
@@ -492,9 +453,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                             Icons.monitor_heart_outlined,
                             size: 18,
                           ),
-                          label: Text(
-                            checkingPrinters ? '正在检查…' : '读取打印机状态',
-                          ),
+                          label: Text(checkingPrinters ? '正在检查…' : '读取打印机状态'),
                         ),
                       ),
                       if (printerStatus != null)

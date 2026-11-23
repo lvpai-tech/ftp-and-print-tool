@@ -3,20 +3,30 @@ import 'package:material_ui/material_ui.dart';
 
 import '../manual_batch/card_tail_recognizer.dart';
 
-Future<void> showCardTailDialog(
+Future<String?> showCardTailDialog(
   BuildContext context, {
   required Future<Uint8List> Function() readPhoto,
   required String guidance,
-}) => showDialog<void>(
+  bool allowUse = false,
+}) => showDialog<String>(
   context: context,
-  builder: (_) => _CardTailDialog(readPhoto: readPhoto, guidance: guidance),
+  builder: (_) => _CardTailDialog(
+    readPhoto: readPhoto,
+    guidance: guidance,
+    allowUse: allowUse,
+  ),
 );
 
 class _CardTailDialog extends StatefulWidget {
-  const _CardTailDialog({required this.readPhoto, required this.guidance});
+  const _CardTailDialog({
+    required this.readPhoto,
+    required this.guidance,
+    required this.allowUse,
+  });
 
   final Future<Uint8List> Function() readPhoto;
   final String guidance;
+  final bool allowUse;
 
   @override
   State<_CardTailDialog> createState() => _CardTailDialogState();
@@ -27,6 +37,7 @@ class _CardTailDialogState extends State<_CardTailDialog> {
   Rect? _selection;
   Offset? _start;
   String _result = '';
+  String? _candidate;
   bool _reading = false;
 
   Future<(Uint8List, Uint8List, Size)> _loadPhoto() async {
@@ -41,11 +52,13 @@ class _CardTailDialogState extends State<_CardTailDialog> {
     setState(() {
       _reading = true;
       _result = '';
+      _candidate = null;
     });
     String result;
+    String? tail;
     try {
       final (bytes, _, _) = await _photo;
-      final tail = await CardTailRecognizer.shared.recognize(bytes, selection);
+      tail = await CardTailRecognizer.shared.recognize(bytes, selection);
       result = tail == null ? '未能确认四位尾号，请调整选区后重试' : '候选尾号 $tail';
     } on StateError catch (error) {
       result = error.message;
@@ -56,6 +69,7 @@ class _CardTailDialogState extends State<_CardTailDialog> {
       setState(() {
         _reading = false;
         _result = result;
+        _candidate = tail;
       });
     }
   }
@@ -83,6 +97,7 @@ class _CardTailDialogState extends State<_CardTailDialog> {
                     _start = normalize(details.localPosition);
                     _selection = null;
                     _result = '';
+                    _candidate = null;
                   }),
             onPanUpdate: _reading
                 ? null
@@ -134,7 +149,8 @@ class _CardTailDialogState extends State<_CardTailDialog> {
   Widget build(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
     return AlertDialog(
-      title: const Text('识别取片卡尾号'),
+      title: const Text('识别取片码'),
+      scrollable: true,
       content: SizedBox(
         width: 620,
         height: screen.height * 0.55,
@@ -184,6 +200,11 @@ class _CardTailDialogState extends State<_CardTailDialog> {
               : _recognize,
           child: const Text('识别尾号'),
         ),
+        if (widget.allowUse && _candidate != null)
+          FilledButton.tonal(
+            onPressed: () => Navigator.pop(context, _candidate),
+            child: const Text('核对后用于补录'),
+          ),
       ],
     );
   }

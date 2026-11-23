@@ -37,6 +37,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
   String get _folder => station.folder;
   bool _picking = false;
   bool _dragging = false;
+  bool? _showQueue;
   bool? _scanExisting;
   bool get _canDrop =>
       widget.allowDrop &&
@@ -178,422 +179,481 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final supported =
-        Platform.isWindows ||
-        Platform.isMacOS ||
-        Platform.isLinux ||
-        Platform.isIOS;
+    final desktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+    final supported = desktop || Platform.isIOS;
     final uploader = station.uploader;
-    final active = uploader.running && !uploader.authorizationPaused;
+    final active = station.running;
     final working = station.busy || _picking;
     final jobs = uploader.jobs;
     final orderWait = uploader.orderWaitMessage;
-
-    final pending = jobs.where((j) => j.state == 'pending').length;
-    final uploading = jobs.where((j) => j.state == 'uploading').length;
+    final pending = jobs.where((job) => job.state == 'pending').length;
+    final uploading = jobs.where((job) => job.state == 'uploading').length;
     final done = jobs
         .where(
-          (j) => const {
+          (job) => const {
             'done',
             'accepted',
             'ingested',
             'grouped',
-          }.contains(j.state),
+          }.contains(job.state),
         )
         .length;
-    final failed = jobs.where((j) => j.state == 'failed').length;
-    final stationLabel = [
-      station.profile.scenicName,
-      station.profile.stationName,
-      station.profile.stationCode,
-    ].whereType<String>().where((name) => name.isNotEmpty).join(' · ');
+    final failed = jobs.where((job) => job.state == 'failed').length;
+    final batchTimeline = widget.batchTimeline;
+    final showQueue =
+        (_showQueue ?? uploader.sourcesNeedingOrder.isNotEmpty) ||
+        batchTimeline == null;
 
-    return DecoratedBox(
-      decoration: WorkstationStyle.surface(),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(22, 20, 22, 16),
-        child: CustomScrollView(
-          slivers: [
-            SliverList.list(
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        '监听与上传',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: WorkstationStyle.ink,
-                        ),
-                      ),
-                    ),
-                    if (active)
-                      const StatusTag(
-                        label: '监听中',
-                        color: WorkstationStyle.ok,
-                        soft: WorkstationStyle.okSoft,
-                      ),
-                  ],
+    final identity = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      spacing: 12,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: WorkstationStyle.accentSoft,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Icon(
+            Icons.photo_camera_outlined,
+            color: WorkstationStyle.accent,
+          ),
+        ),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            spacing: 4,
+            children: [
+              Text(
+                station.name.isEmpty
+                    ? '机位 ${station.profile.stationId}'
+                    : station.name,
+                style: const TextStyle(
+                  color: WorkstationStyle.ink,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
                 ),
-                const SizedBox(height: 6),
-                if (stationLabel.isNotEmpty) Text(stationLabel),
+              ),
+              if (station.profile.scenicName case final name?)
                 Text(
-                  station.hasFolder
-                      ? '把相机软件的导出目标设为这个机位的收图文件夹。'
-                      : '请先选择相机照片的收图文件夹。',
-                  style: const TextStyle(
-                    color: WorkstationStyle.muted,
-                    fontSize: 13,
-                    height: 1.4,
-                  ),
+                  name,
+                  style: const TextStyle(color: WorkstationStyle.muted),
                 ),
-                const SizedBox(height: 14),
-                if (station.hasFolder) ...[
-                  SelectableText(
-                    _folder,
-                    style: const TextStyle(
-                      color: WorkstationStyle.ink,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                if ((Platform.isWindows ||
-                        Platform.isMacOS ||
-                        Platform.isLinux) &&
-                    station.canImport) ...[
-                  DropTarget(
-                    enable: _canDrop,
-                    onDragEntered: (_) => setState(() => _dragging = true),
-                    onDragExited: (_) => setState(() => _dragging = false),
-                    onDragDone: _dropPhotos,
-                    child: InkWell(
-                      onTap: working ? null : _importPhotos,
-                      borderRadius: BorderRadius.circular(10),
-                      child: Container(
-                        padding: const EdgeInsets.all(16),
-                        alignment: Alignment.center,
+            ],
+          ),
+        ),
+      ],
+    );
+    final actions = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        FilledButton.icon(
+          onPressed: working || !supported || !station.hasFolder
+              ? null
+              : () => station.setEnabled(
+                  !uploader.running,
+                  scanExisting: _scanExisting,
+                ),
+          style: FilledButton.styleFrom(
+            minimumSize: const Size(0, 44),
+            backgroundColor: active ? WorkstationStyle.ink : null,
+          ),
+          icon: Icon(
+            uploader.running ? Icons.pause : Icons.play_arrow,
+            size: 20,
+          ),
+          label: Text(
+            uploader.running
+                ? '暂停监听'
+                : station.legacy
+                ? '恢复旧目录监听'
+                : station.enabled
+                ? '继续监听'
+                : '开始监听',
+          ),
+        ),
+        OutlinedButton.icon(
+          onPressed: working || !supported || !station.canImport
+              ? null
+              : _importPhotos,
+          style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+          icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
+          label: Text(_picking ? '正在处理…' : '导入照片'),
+        ),
+        if (failed > 0)
+          OutlinedButton.icon(
+            onPressed: active && !working ? uploader.retryFailed : null,
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(0, 44),
+              foregroundColor: WorkstationStyle.bad,
+            ),
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('重试失败任务'),
+          ),
+        StatusTag(
+          label: station.status,
+          color: active ? WorkstationStyle.ok : WorkstationStyle.muted,
+          soft: active ? WorkstationStyle.okSoft : WorkstationStyle.bg,
+        ),
+      ],
+    );
+    final folderPath = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      spacing: 8,
+      children: [
+        const Icon(
+          Icons.folder_outlined,
+          size: 20,
+          color: WorkstationStyle.muted,
+        ),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            spacing: 3,
+            children: [
+              const Text(
+                '收图文件夹',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              if (station.hasFolder)
+                SelectableText(
+                  _folder,
+                  style: const TextStyle(color: WorkstationStyle.muted),
+                )
+              else
+                const Text('选择相机照片的导出目录。'),
+            ],
+          ),
+        ),
+      ],
+    );
+    final folderControls = Wrap(
+      spacing: 8,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        TextButton(
+          onPressed: working || !supported ? null : _pickFolder,
+          child: Text(station.hasFolder ? '更换收图文件夹' : '选择收图文件夹'),
+        ),
+        if (!Platform.isIOS && station.hasFolder)
+          TextButton(
+            onPressed: working || !supported ? null : _openFolder,
+            child: const Text('打开收图文件夹'),
+          ),
+        if (station.hasFolder)
+          TextButton(onPressed: _copyFolder, child: const Text('复制路径')),
+        TextButton(
+          onPressed: working ? null : widget.onConfigureCos,
+          child: const Text('更新机位密钥'),
+        ),
+        if ((station.legacy || station.custom) && !uploader.running)
+          FilterChip(
+            label: const Text('补扫目录已有照片'),
+            selected: _scanExisting ?? station.scanExisting,
+            onSelected: working
+                ? null
+                : (value) => setState(() => _scanExisting = value),
+          ),
+      ],
+    );
+    final dropTarget = desktop && station.canImport
+        ? DropTarget(
+            enable: _canDrop,
+            onDragEntered: (_) => setState(() => _dragging = true),
+            onDragExited: (_) => setState(() => _dragging = false),
+            onDragDone: _dropPhotos,
+            child: OutlinedButton.icon(
+              onPressed: working ? null : _importPhotos,
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(0, 44),
+                backgroundColor: _dragging && _canDrop
+                    ? WorkstationStyle.accentSoft
+                    : null,
+              ),
+              icon: const Icon(Icons.file_download_outlined, size: 18),
+              label: const Text('拖入照片到这个机位'),
+            ),
+          )
+        : null;
+    final stats = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _Stat(
+          label: '待准备',
+          value: uploader.settling,
+          color: WorkstationStyle.muted,
+        ),
+        _Stat(label: '待传', value: pending, color: WorkstationStyle.warn),
+        _Stat(label: '上传中', value: uploading, color: WorkstationStyle.accent),
+        _Stat(label: '已上传', value: done, color: WorkstationStyle.ok),
+        _Stat(label: '失败', value: failed, color: WorkstationStyle.bad),
+      ],
+    );
+
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: DecoratedBox(
+            decoration: WorkstationStyle.surface(),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final wide = constraints.maxWidth >= 780;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    spacing: 14,
+                    children: [
+                      if (wide)
+                        Row(
+                          spacing: 20,
+                          children: [
+                            Expanded(flex: 4, child: identity),
+                            Flexible(
+                              flex: 5,
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: actions,
+                              ),
+                            ),
+                          ],
+                        )
+                      else ...[
+                        identity,
+                        actions,
+                      ],
+                      Container(
+                        padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
                           color: _dragging && _canDrop
                               ? WorkstationStyle.accentSoft
-                              : null,
+                              : WorkstationStyle.bg,
                           borderRadius: BorderRadius.circular(10),
-                          border: Border.all(
-                            color: _dragging && _canDrop
-                                ? WorkstationStyle.accent
-                                : WorkstationStyle.line,
+                        ),
+                        child: constraints.maxWidth >= 980
+                            ? Row(
+                                spacing: 12,
+                                children: [
+                                  Expanded(child: folderPath),
+                                  Flexible(
+                                    child: Align(
+                                      alignment: Alignment.centerRight,
+                                      child: folderControls,
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                spacing: 6,
+                                children: [folderPath, folderControls],
+                              ),
+                      ),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.spaceBetween,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [stats, ?dropTarget],
+                      ),
+                      if (Platform.isIOS)
+                        const Text(
+                          'iPad 在前台收图，回到应用后会继续未完成任务。',
+                          style: TextStyle(color: WorkstationStyle.muted),
+                        ),
+                      if (!supported) ...[
+                        const Text(
+                          '当前平台不支持自动目录模式。',
+                          style: TextStyle(color: WorkstationStyle.bad),
+                        ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            onPressed: _pickCardPhoto,
+                            child: const Text('从照片识别尾号'),
                           ),
                         ),
-                        child: const Text('拖入照片到这个机位'),
-                      ),
-                    ),
+                      ],
+                      if ((uploader.fatalError ??
+                              station.message ??
+                              (uploader.running ? uploader.message : null))
+                          case final message?
+                          when message.isNotEmpty && message != station.status)
+                        Semantics(
+                          liveRegion: true,
+                          child: Text(
+                            message,
+                            style: const TextStyle(
+                              color: WorkstationStyle.muted,
+                            ),
+                          ),
+                        ),
+                      if (uploader.watcherNotice.isNotEmpty)
+                        Text(
+                          uploader.watcherNotice,
+                          style: const TextStyle(color: WorkstationStyle.warn),
+                        ),
+                      if (orderWait != null)
+                        Text(
+                          orderWait,
+                          style: const TextStyle(color: WorkstationStyle.warn),
+                        ),
+                      ...{...uploader.issues, ...uploader.noticeIssues}.entries
+                          .where(
+                            (entry) =>
+                                '${p.relative(entry.key, from: _folder)}：${entry.value}' !=
+                                orderWait,
+                          )
+                          .take(8)
+                          .map(
+                            (entry) => Text(
+                              '${p.basename(entry.key)}：${entry.value}',
+                              style: const TextStyle(
+                                color: WorkstationStyle.warn,
+                              ),
+                            ),
+                          ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+        if (batchTimeline != null)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 20, bottom: 12),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _sectionChip(
+                    label: '取片批次',
+                    icon: Icons.view_timeline_outlined,
+                    queue: false,
+                    selected: !showQueue,
                   ),
-                  const SizedBox(height: 12),
+                  _sectionChip(
+                    label: '上传队列',
+                    icon: Icons.cloud_upload_outlined,
+                    queue: true,
+                    selected: showQueue,
+                  ),
                 ],
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    OutlinedButton.icon(
-                      onPressed: working || !supported ? null : _pickFolder,
-                      icon: const Icon(
-                        Icons.create_new_folder_outlined,
-                        size: 18,
-                      ),
-                      label: Text(station.hasFolder ? '更换收图文件夹' : '选择收图文件夹'),
-                    ),
-                    FilledButton.icon(
-                      onPressed: working || !supported || !station.canImport
-                          ? null
-                          : _importPhotos,
-                      icon: const Icon(
-                        Icons.add_photo_alternate_outlined,
-                        size: 18,
-                      ),
-                      label: Text(_picking ? '选择照片中…' : '导入照片'),
-                    ),
-                    if (!Platform.isIOS)
-                      OutlinedButton.icon(
-                        onPressed: working || !supported || !station.hasFolder
-                            ? null
-                            : _openFolder,
-                        icon: const Icon(Icons.folder_open, size: 18),
-                        label: const Text('打开收图文件夹'),
-                      ),
-                    TextButton(
-                      onPressed: station.hasFolder ? _copyFolder : null,
-                      child: const Text('复制路径'),
-                    ),
-                    TextButton(
-                      onPressed: working ? null : widget.onConfigureCos,
-                      child: const Text('更新机位密钥'),
-                    ),
-                    if ((station.legacy || station.custom) && !uploader.running)
-                      FilterChip(
-                        label: const Text('补扫目录已有照片'),
-                        selected: _scanExisting ?? station.scanExisting,
-                        onSelected: working
-                            ? null
-                            : (value) => setState(() => _scanExisting = value),
-                      ),
-                  ],
+              ),
+            ),
+          )
+        else
+          const SliverToBoxAdapter(child: SizedBox(height: 20)),
+        if (batchTimeline != null)
+          SliverVisibility(
+            visible: !showQueue,
+            maintainState: true,
+            sliver: batchTimeline,
+          ),
+        SliverVisibility(
+          visible: showQueue,
+          sliver: SliverMainAxisGroup(
+            slivers: [
+              UploadTaskList(
+                folder: _folder,
+                waiting: uploader.waitingSources,
+                needingOrder: uploader.sourcesNeedingOrder,
+                jobs: jobs,
+                onDiscard: uploader.running
+                    ? uploader.discardWaitingSource
+                    : null,
+                onConfirmNext: uploader.running
+                    ? uploader.confirmNextSource
+                    : null,
+                onReview: (job) => showCardTailDialog(
+                  context,
+                  readPhoto: job.readPhotoForReview,
+                  guidance: [
+                    if (job.captureMetadata != null)
+                      job.captureMetadata!.description,
+                    '请根据候选尾号核对卡面。归集由服务端识别结束照。',
+                  ].join('\n'),
                 ),
-                if (Platform.isIOS) ...[
-                  const SizedBox(height: 8),
-                  const Text(
-                    'iPad 在前台收图，回到应用后会继续未完成任务。',
+              ),
+              const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.only(top: 12),
+                  child: Text(
+                    '支持 JPEG、PNG、MPO、HEIF、RAW / DNG、TIFF、WebP 和 AVIF。按发现顺序排队，前一张入库后继续。',
                     style: TextStyle(
-                      color: WorkstationStyle.muted,
                       fontSize: 12,
+                      color: WorkstationStyle.muted,
                       height: 1.4,
                     ),
                   ),
-                ],
-                const SizedBox(height: 14),
-                if (!supported) ...[
-                  const Text(
-                    '当前平台不支持自动目录模式。',
-                    style: TextStyle(color: WorkstationStyle.bad),
-                  ),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton(
-                      onPressed: _pickCardPhoto,
-                      child: const Text('从照片识别尾号'),
-                    ),
-                  ),
-                ],
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xfff8fafc),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: WorkstationStyle.line),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Wrap(
-                        spacing: 18,
-                        runSpacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          _Stat(
-                            label: '待准备',
-                            value: '${uploader.settling}',
-                            color: WorkstationStyle.muted,
-                          ),
-                          _Stat(
-                            label: '上传中',
-                            value: '$uploading',
-                            color: WorkstationStyle.accent,
-                          ),
-                          _Stat(
-                            label: '待传',
-                            value: '$pending',
-                            color: WorkstationStyle.warn,
-                          ),
-                          _Stat(
-                            label: '已上传',
-                            value: '$done',
-                            color: WorkstationStyle.ok,
-                          ),
-                          _Stat(
-                            label: '失败',
-                            value: '$failed',
-                            color: WorkstationStyle.bad,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          FilledButton.icon(
-                            onPressed:
-                                working || !supported || !station.hasFolder
-                                ? null
-                                : () => station.setEnabled(
-                                    !uploader.running,
-                                    scanExisting: _scanExisting,
-                                  ),
-                            icon: Icon(
-                              active
-                                  ? Icons.stop_circle_outlined
-                                  : Icons.play_arrow,
-                              size: 18,
-                            ),
-                            label: Text(
-                              working
-                                  ? '处理中…'
-                                  : uploader.running
-                                  ? '暂停监听'
-                                  : station.legacy
-                                  ? '恢复旧目录监听'
-                                  : station.enabled
-                                  ? '继续监听'
-                                  : '开始监听',
-                            ),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: active
-                                  ? WorkstationStyle.ink
-                                  : WorkstationStyle.accent,
-                              minimumSize: const Size(0, 40),
-                            ),
-                          ),
-                          OutlinedButton(
-                            onPressed:
-                                !active ||
-                                    working ||
-                                    !uploader.running ||
-                                    failed == 0
-                                ? null
-                                : () => uploader.retryFailed(),
-                            style: OutlinedButton.styleFrom(
-                              minimumSize: const Size(0, 40),
-                              foregroundColor: WorkstationStyle.bad,
-                              side: BorderSide(
-                                color: failed == 0
-                                    ? WorkstationStyle.line
-                                    : WorkstationStyle.bad.withValues(
-                                        alpha: .35,
-                                      ),
-                              ),
-                            ),
-                            child: const Text('重试失败任务'),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Semantics(
-                  liveRegion: true,
-                  child: Text(
-                    uploader.fatalError ??
-                        station.message ??
-                        (uploader.running ? uploader.message : station.status),
-                    style: const TextStyle(
-                      color: WorkstationStyle.muted,
-                      fontSize: 13,
-                    ),
-                  ),
-                ),
-                if (uploader.watcherNotice.isNotEmpty)
-                  Text(
-                    uploader.watcherNotice,
-                    style: const TextStyle(
-                      color: WorkstationStyle.warn,
-                      fontSize: 12,
-                    ),
-                  ),
-                if (orderWait != null)
-                  Text(
-                    orderWait,
-                    style: const TextStyle(
-                      color: WorkstationStyle.warn,
-                      fontSize: 12,
-                    ),
-                  ),
-                ...{...uploader.issues, ...uploader.noticeIssues}.entries
-                    .where(
-                      (entry) =>
-                          '${p.relative(entry.key, from: _folder)}：${entry.value}' !=
-                          orderWait,
-                    )
-                    .take(8)
-                    .map(
-                      (entry) => Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Text(
-                          '${p.basename(entry.key)}：${entry.value}',
-                          style: const TextStyle(
-                            color: WorkstationStyle.warn,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    ),
-                const SizedBox(height: 12),
-              ],
-            ),
-            UploadTaskList(
-              folder: _folder,
-              waiting: uploader.waitingSources,
-              needingOrder: uploader.sourcesNeedingOrder,
-              jobs: jobs,
-              onDiscard: uploader.running
-                  ? uploader.discardWaitingSource
-                  : null,
-              batchTimeline: widget.batchTimeline,
-              onConfirmNext: uploader.running
-                  ? uploader.confirmNextSource
-                  : null,
-              onReview: (job) => showCardTailDialog(
-                context,
-                readPhoto: job.readPhotoForReview,
-                guidance: [
-                  if (job.captureMetadata != null)
-                    job.captureMetadata!.description,
-                  '请根据候选尾号核对卡面。归集由服务端识别结束照。',
-                ].join('\n'),
-              ),
-            ),
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.only(top: 12),
-                child: Text(
-                  '支持 JPEG、PNG、MPO、HEIF、RAW / DNG、TIFF、WebP 和 AVIF。按发现顺序排队，前一张入库后继续。',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: WorkstationStyle.muted,
-                    height: 1.4,
-                  ),
                 ),
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Stat extends StatelessWidget {
-  const _Stat({required this.label, required this.value, required this.color});
-  final String label, value;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: const TextStyle(color: WorkstationStyle.muted, fontSize: 13),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          value,
-          style: TextStyle(
-            color: color,
-            fontWeight: FontWeight.w800,
-            fontFeatures: const [FontFeature.tabularFigures()],
+            ],
           ),
         ),
       ],
     );
   }
+
+  Widget _sectionChip({
+    required String label,
+    required IconData icon,
+    required bool queue,
+    required bool selected,
+  }) => ChoiceChip(
+    label: Text(label),
+    avatar: Icon(icon, size: 18),
+    selected: selected,
+    showCheckmark: false,
+    labelStyle: TextStyle(
+      fontWeight: FontWeight.w700,
+      color: selected ? WorkstationStyle.accent : WorkstationStyle.ink,
+    ),
+    selectedColor: WorkstationStyle.accentSoft,
+    backgroundColor: WorkstationStyle.card,
+    side: BorderSide(
+      color: selected ? WorkstationStyle.accent : WorkstationStyle.line,
+    ),
+    onSelected: (selected) {
+      if (selected) setState(() => _showQueue = queue);
+    },
+  );
+}
+
+class _Stat extends StatelessWidget {
+  const _Stat({required this.label, required this.value, required this.color});
+  final String label;
+  final int value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: WorkstationStyle.line),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      spacing: 8,
+      children: [
+        Text(label, style: const TextStyle(color: WorkstationStyle.muted)),
+        Text(
+          '$value',
+          style: TextStyle(
+            color: color,
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
+    ),
+  );
 }

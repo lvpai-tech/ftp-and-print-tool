@@ -425,6 +425,9 @@ async function createRuntime(options = {}) {
       throw new Error('该密钥已在档案列表中');
     }
     const bound = await bindToken(token);
+    if (body.scenicId && !bound.scenicIds.includes(body.scenicId)) {
+      throw new Error('该打印密钥不属于此机位的景区');
+    }
     const id = `scenic-${Date.now()}`;
     const profiles = [...(current.scenicProfiles || []), { id, ...bound }];
     const activate = Boolean(body.activate) || profiles.length === 1;

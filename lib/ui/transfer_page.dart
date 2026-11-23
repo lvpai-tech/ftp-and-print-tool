@@ -13,6 +13,7 @@ import '../auto_upload/upload_slots.dart';
 import '../branding.dart';
 import '../printing/print_bridge.dart';
 import '../printing/ui/photo_batch_page.dart';
+import '../printing/ui/scenic_key_dialog.dart';
 import '../profile_store.dart';
 import '../workstation_session.dart';
 import 'app_dialogs.dart';
@@ -59,6 +60,7 @@ class _TransferPageState extends State<TransferPage>
   Directory? _support, _inbox;
   UploadFolders? _folders;
   StationUpload? _selected;
+  String? _legacyBatchProfileId;
   bool _loading = true;
   bool _refreshing = false;
   bool _configuring = false;
@@ -429,7 +431,10 @@ class _TransferPageState extends State<TransferPage>
                 ),
                 onTap: _removing.contains(station)
                     ? null
-                    : () => setState(() => _selected = station),
+                    : () => setState(() {
+                        _selected = station;
+                        _legacyBatchProfileId = null;
+                      }),
               ),
             ),
           ),
@@ -488,41 +493,137 @@ class _TransferPageState extends State<TransferPage>
       listenable: bridge,
       builder: (context, _) {
         final config = bridge.config;
-        final scenicIds = config['scenicIds'] as List?;
-        final wrongScenic =
-            profile.scenicId != null &&
-            scenicIds?.isNotEmpty == true &&
-            !scenicIds!.any((id) => id.toString() == profile.scenicId);
-        if (!bridge.connected || !bridge.configured || wrongScenic) {
-          return SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Text(
-                wrongScenic
-                    ? '请切换到该机位所属景区的打印档案后查看取片批次。'
-                    : '取片批次需要打印工作台连接景区后查看。',
-                style: const TextStyle(
-                  color: WorkstationStyle.muted,
-                  fontSize: 12,
-                ),
-              ),
+        final scenicId = profile.scenicId;
+        final activeId = config['activeScenicProfileId'];
+        final profiles = (config['scenicProfiles'] as List? ?? const [])
+            .whereType<Map>()
+            .where((entry) => entry['id'] is String)
+            .toList();
+        final matches = profiles.where(
+          (entry) => scenicId == null
+              ? true
+              : (entry['scenicIds'] as List?)?.any(
+                      (id) => id.toString() == scenicId,
+                    ) ==
+                    true,
+        );
+        final matching =
+            (scenicId == null
+                ? matches
+                      .where((entry) => entry['id'] == _legacyBatchProfileId)
+                      .firstOrNull
+                : null) ??
+            matches.where((entry) => entry['id'] == activeId).firstOrNull ??
+            matches.firstOrNull;
+        if (!bridge.connected) {
+          return const SliverToBoxAdapter(
+            child: _BatchAccessNotice(
+              title: '打印服务未连接',
+              message: '请在打印照片页检查打印服务状态，连接后即可查看取片批次。',
             ),
           );
         }
-        final scenicName = (config['scenicName'] as String?)?.trim();
-        return PhotoBatchTimeline.inline(
-          key: ValueKey((
-            bridge,
-            config['activeScenicProfileId'],
-            config['scenicCode'],
-            profile.stationId,
-          )),
-          call: bridge.call,
-          scenicName: scenicName?.isNotEmpty == true ? scenicName! : '（未返回名称）',
+        if (!bridge.configured || matching == null) {
+          return SliverToBoxAdapter(
+            child: _BatchAccessNotice(
+              title: '添加景区打印密钥',
+              message: '使用该机位所属景区的打印密钥，即可查看取片批次和矫正照片归属。',
+              onAdd: () => _addBatchScenicKey(bridge, scenicId),
+              busy: bridge.busy,
+            ),
+          );
+        }
+        final profileId = matching['id'] as String;
+        final scope = {'profileId': profileId, 'scenicId': ?scenicId};
+        final timeline = PhotoBatchTimeline.inline(
+          key: ValueKey((bridge, profileId, scenicId, profile.stationId)),
+          call: (method, args) => bridge.call(method, [...args, scope]),
+          scenicName: _batchScenicLabel(matching),
           stationId: profile.stationId,
+        );
+        if (scenicId != null) return timeline;
+        return SliverMainAxisGroup(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    PopupMenuButton<String>(
+                      tooltip: '选择取片批次的景区档案',
+                      onSelected: (id) =>
+                          setState(() => _legacyBatchProfileId = id),
+                      itemBuilder: (_) => [
+                        for (final entry in profiles)
+                          CheckedPopupMenuItem(
+                            value: entry['id'] as String,
+                            checked: entry['id'] == profileId,
+                            child: Text(_batchScenicLabel(entry)),
+                          ),
+                      ],
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
+                        child: Text('选择景区档案 ▾'),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: bridge.busy
+                          ? null
+                          : () => _addBatchScenicKey(bridge, null),
+                      icon: const Icon(Icons.key_outlined, size: 18),
+                      label: const Text('添加打印密钥'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            timeline,
+          ],
         );
       },
     );
+  }
+
+  Future<void> _addBatchScenicKey(PrintBridge bridge, String? scenicId) async {
+    final token = await showScenicKeyDialog(context);
+    if (!mounted || token == null) return;
+    try {
+      if (token.isEmpty) throw StateError('请输入景区打印密钥');
+      final adding = bridge.configured;
+      final existing = bridge.config['scenicProfiles'] as List? ?? const [];
+      final result = await bridge.run(
+        adding ? 'addScenicProfile' : 'configure',
+        [
+          {'token': token, 'scenicId': ?scenicId},
+        ],
+      );
+      if (mounted && adding && scenicId == null) {
+        final previousIds = existing
+            .whereType<Map>()
+            .map((entry) => entry['id'])
+            .toSet();
+        final profiles = (result['config']['scenicProfiles'] as List)
+            .whereType<Map>();
+        final added = profiles
+            .where((entry) => !previousIds.contains(entry['id']))
+            .single;
+        setState(() => _legacyBatchProfileId = added['id'] as String);
+      }
+    } catch (error) {
+      if (mounted) {
+        await showAppMessage(
+          context,
+          title: '无法添加景区密钥',
+          message: appErrorMessage(error),
+        );
+      }
+    }
   }
 
   @override
@@ -539,13 +640,56 @@ class _TransferPageState extends State<TransferPage>
       child: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1120),
+          constraints: BoxConstraints(
+            maxWidth: _selected == null ? 1120 : 1320,
+          ),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
             child: _body(),
           ),
         ),
       ),
+    ),
+  );
+}
+
+String _batchScenicLabel(Map profile) {
+  final name = (profile['scenicName'] as String?)?.trim();
+  return name?.isNotEmpty == true ? name! : '未命名景区';
+}
+
+class _BatchAccessNotice extends StatelessWidget {
+  const _BatchAccessNotice({
+    required this.title,
+    required this.message,
+    this.onAdd,
+    this.busy = false,
+  });
+
+  final String title, message;
+  final VoidCallback? onAdd;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    margin: const EdgeInsets.only(top: 12),
+    padding: const EdgeInsets.all(20),
+    decoration: WorkstationStyle.surface(),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 6),
+        Text(message, style: const TextStyle(color: WorkstationStyle.muted)),
+        if (onAdd != null) ...[
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: busy ? null : onAdd,
+            icon: const Icon(Icons.key_outlined, size: 18),
+            label: const Text('添加打印密钥'),
+          ),
+        ],
+      ],
     ),
   );
 }
