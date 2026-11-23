@@ -19,6 +19,45 @@ Map<String, dynamic> manifest(List<int> bytes) => {
 };
 
 void main() {
+  test('安装版使用独立清单，仅接受同通道的版本化 Setup.exe', () async {
+    final bytes = [1, 2, 3];
+    final legacy = {...manifest(bytes), 'channel': 'test'};
+    final setup = {
+      ...legacy,
+      'installerUrl':
+          '$releaseOrigin/ftp-client/test/windows-x64/setup/'
+          'lvpai-ftp-0.3.0-3-windows-x64-setup.exe',
+    };
+    final client = MockClient((request) async {
+      expect(
+        request.url.path,
+        '/ftp-client/test/windows-x64/setup/latest.json',
+      );
+      return http.Response(jsonEncode(setup), 200);
+    });
+    final service = UpdateService(
+      client: client,
+      platform: 'windows-x64',
+      channel: 'test',
+      windowsInstaller: true,
+    );
+    addTearDown(service.close);
+    expect((await service.check()).url.toString(), setup['installerUrl']);
+    expect(
+      () => ReleaseManifest.parse(setup, 'windows-x64', 'test'),
+      throwsStateError,
+    );
+    expect(
+      () => ReleaseManifest.parse(
+        {...setup, 'installerUrl': legacy['installerUrl']},
+        'windows-x64',
+        'test',
+        windowsInstaller: true,
+      ),
+      throwsStateError,
+    );
+  });
+
   test('版本清单拒绝跨环境/平台、缺失校验、任意网址及路径绕过', () {
     final valid = manifest([1, 2, 3]);
     expect(ReleaseManifest.parse(valid, 'windows-x64', 'prd').code, 3);
@@ -35,8 +74,7 @@ void main() {
             '$releaseOrigin/ftp-client/prd/windows-x64/../malware.zip',
       },
       {
-        'installerUrl':
-            'https://evil.example/ftp-client/prd/windows-x64/lvpai-ftp-0.3.0-3-windows-x64.zip',
+        'installerUrl': 'https://evil.example/ftp-client/prd/windows-x64/lvpai-ftp-0.3.0-3-windows-x64.zip',
       },
     ]) {
       expect(

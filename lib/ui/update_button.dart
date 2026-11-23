@@ -1,15 +1,19 @@
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../release/desktop_update.dart';
 import '../release/update_service.dart';
+import '../workstation_session.dart';
 import 'app_dialogs.dart';
 
 class UpdateButton extends StatefulWidget {
-  const UpdateButton({super.key});
+  const UpdateButton({super.key, this.session});
+  final WorkstationSession? session;
   @override
   State<UpdateButton> createState() => _UpdateButtonState();
 }
@@ -21,10 +25,14 @@ class _UpdateButtonState extends State<UpdateButton> {
     setState(() => _busy = true);
     UpdateService? service;
     try {
+      final session = widget.session;
+      if (session?.updating == true) return;
+      if (session != null && Platform.isMacOS && await checkMacUpdate()) return;
       final info = await PackageInfo.fromPlatform();
       final code = int.tryParse(info.buildNumber);
       if (code == null || code < 1) throw StateError('无法读取当前安装版本，请重新安装正式包');
-      service = UpdateService();
+      final setup = session != null && Platform.isWindows && windowsAutoUpdate;
+      service = UpdateService(windowsInstaller: setup);
       final release = await service.check();
       if (!mounted) return;
       if (release.code <= code) {
@@ -36,7 +44,13 @@ class _UpdateButtonState extends State<UpdateButton> {
         await showDialog<void>(
           context: context,
           barrierDismissible: false,
-          builder: (_) => _UpdateDialog(release: release, service: service!),
+          builder: (_) => _UpdateDialog(
+            release: release,
+            service: service!,
+            install: setup
+                ? (file) => installWindowsUpdate(session, release, file)
+                : null,
+          ),
         );
       }
     } catch (error) {
@@ -44,9 +58,11 @@ class _UpdateButtonState extends State<UpdateButton> {
         await showAppMessage(
           context,
           title: '操作未完成',
-          message: error is StateError
-              ? error.message
-              : '更新检查失败，请检查网络或稍后重试',
+          message: switch (error) {
+            StateError(:final message) => message,
+            PlatformException(message: final String message) => message,
+            _ => '更新检查失败，请检查网络或稍后重试',
+          },
         );
       }
     } finally {
@@ -66,7 +82,12 @@ class _UpdateButtonState extends State<UpdateButton> {
 class _UpdateDialog extends StatefulWidget {
   final ReleaseManifest release;
   final UpdateService service;
-  const _UpdateDialog({required this.release, required this.service});
+  final Future<void> Function(File)? install;
+  const _UpdateDialog({
+    required this.release,
+    required this.service,
+    this.install,
+  });
   @override
   State<_UpdateDialog> createState() => _UpdateDialogState();
 }
@@ -92,16 +113,20 @@ class _UpdateDialogState extends State<_UpdateDialog> {
         }
       } else {
         final cache = await getTemporaryDirectory();
-        final file = await widget.service.download(widget.release, cache, (
-          value,
-        ) {
-          if (mounted) setState(() => _progress = value);
-        });
+        final file =
+            _file ??
+            await widget.service.download(widget.release, cache, (value) {
+              if (mounted) setState(() => _progress = value);
+            });
         if (mounted) {
           setState(() {
             _file = file;
             _message = '下载完成，SHA-256校验通过';
           });
+        }
+        if (widget.install case final install?) {
+          if (mounted) setState(() => _message = '已校验下载文件，正在准备安装…');
+          await install(file);
         }
       }
     } catch (error) {
@@ -152,6 +177,8 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                 Text(
                   ios
                       ? '前往官方安装入口完成更新。'
+                      : widget.install != null
+                      ? '下载校验后，等待当前上传和打印完成，再覆盖安装并重启。'
                       : '更新包 ${(release.size / 1048576).toStringAsFixed(1)} MiB，下载后校验完整性。'
                             '请先停止上传并退出旧版本；Windows解压完整ZIP运行，Mac打开DMG安装。',
                 ),
@@ -180,12 +207,14 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           FilledButton(
             onPressed: _busy
                 ? null
-                : _file == null
+                : _file == null || widget.install != null
                 ? _download
                 : _open,
             child: Text(
               _busy
                   ? '处理中…'
+                  : widget.install != null
+                  ? '安装并重启'
                   : _file != null
                   ? '打开更新包'
                   : ios

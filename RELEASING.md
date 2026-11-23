@@ -46,7 +46,7 @@ python tool/package_release.py --platform windows-x64 --channel test
 脚本重新构建指定通道，打包 EXE、DLL、data 和从本仓生成的 `print-runtime`，排除 PDB，输出到 `build/releases/test/windows-x64/`。
 如果需要每用户一键安装器，安装 Inno Setup 6.7 后加 `--iscc` 传入 `ISCC.exe` 的完整路径。同一次构建额外生成 `*-setup.exe` 和 `*.exe.sha256`，安装器会带上构建所用 Visual Studio 的 x64 VC++ 可再分发 DLL。
 安装器默认使用 `%LOCALAPPDATA%\Programs\Lvpai\ZhenjiWorkstation`，提供桌面与开始菜单快捷方式，并在 Windows「已安装的应用」登记卸载。先从系统托盘退出工作台，再安装或卸载。相同 Windows 账户继续使用 `%APPDATA%\ai.lvpai\lvpai_ftp_client` 中的现有配置及队列。
-当前下载站及「检查更新」仍使用 ZIP 清单。测试安装器通过 Windows Actions 的 `lvpai-ftp-windows-x64-setup` 产物单独领取。
+便携 ZIP 沿用原有清单。带更新器的签名安装版使用独立的 Setup.exe 清单。测试安装器也可从 Windows Actions 的 `lvpai-ftp-windows-x64-setup` 产物领取。
 若 MSBuild 报路径过长，从较短的源码路径构建。使用 `subst` 时，将项目放在映射盘的子目录。
 `release-info.json` 仅用于核对管理表单，不是已经发布的线上清单。同版本输出已存在时脚本明确失败，
 应提升版本号，或先明确归档自己的旧产物，避免误覆盖。
@@ -138,6 +138,27 @@ FTP二进制的contentType为`application/octet-stream`。接口返回沿用项�
 现有 COS 清单更新不是分布式原子版本比较，请串行发布同平台同环境版本；本轮没有引入并发发布锁。
 发现问题应发布更大构建号的修复版本，不能用覆盖旧同名包或降版本绕过校验。
 
+## 桌面自动更新测试通道
+
+两条桌面 Actions 默认仍生成内测产物。选择 `dev/huangml` 并开启 `publish_update` 后才走签名及发布流程。签名安装包生成后，工作流将其上传至 COS，并在公开 CDN 读回包大小后更新对应清单。重跑发布时同名对象须与前次的大小和 SHA-256 一致。新版本使用比已发布版本更高的 `pubspec.yaml` 构建号。
+
+| 构建 | 更新入口 | 发布产物 |
+| --- | --- | --- |
+| Windows x64 | `ftp-client/test/windows-x64/setup/latest.json` | Authenticode 签名的 `*-windows-x64-setup.exe` |
+| macOS Apple 芯片 | `ftp-client/test/macos-arm64/appcast.xml` | Developer ID 签名、公证、Sparkle EdDSA 签名的 `*-macos-arm64.dmg` |
+
+在 GitHub 的 `cos-test` 环境设置以下发布配置，环境允许 `dev/huangml`。COS 账号需要限定 Windows `setup/` 和 macOS 对应 DMG、`appcast.xml` 对象的 PUT、GET 和 HEAD 权限。原有 `COS_SMOKE_PUT_URL` 供上传测试继续使用。
+
+| 范围 | Secrets | Variables |
+| --- | --- | --- |
+| COS | `COS_SECRET_ID`、`COS_SECRET_KEY` | `COS_BUCKET`、`COS_REGION` |
+| Windows | `WINDOWS_SIGNING_PFX`（Base64）、`WINDOWS_SIGNING_PASSWORD` | |
+| macOS | `MACOS_SIGNING_P12`（Base64）、`MACOS_SIGNING_PASSWORD`、`MACOS_NOTARY_APPLE_ID`、`MACOS_NOTARY_PASSWORD`（应用专用密码）、`SPARKLE_PRIVATE_KEY`（`generate_keys -x` 导出的文本） | `MACOS_SIGN_IDENTITY`、`MACOS_NOTARY_TEAM_ID`、`SPARKLE_PUBLIC_KEY` |
+
+现场先手动装一版带更新器的签名包，再在 test 通道发布更高构建号。Windows 更新要求当前程序和安装器都通过 Authenticode 验证并使用同一证书。更换 Windows 签名证书时，先分发使用新证书的首装包。macOS 沿用现有个人 DMG 的应用标识和非沙箱数据目录，仍需核对新签名下的钥匙串、收图目录和队列访问。
+
+「检查更新」发现新版并确认后，应用下载和验证包，暂停接收新的上传任务并保留队列，等待当前上传与打印结束，再安装并重开工作台。复核版本、机位绑定、监听恢复、上传队列及打印档案。自动打印沿用每次启动需现场开启的规则。生产更新通道发布另按正式发布流程执行。
+
 ## 下载页上线
 
 `site/` 只需部署 `index.html`、`style.css`、`releases.js`、`download.js` 四个文件到
@@ -147,7 +168,7 @@ COS 的 `ftp-client/` 目录。入口 `https://cdn.hilvpai.com/ftp-client/index.
 
 网页同源读取四个平台的 prd 清单，没有版本时明确显示「尚未发布」；清单格式或网络错误显示失败，
 不展示虚构下载按钮。客户端下载后额外校验大小及 SHA-256；网页展示校验值供用户核对。
-客户端下载失败会清理自己的不完整缓存，成功后由用户打开安装包，不自动替换正在运行的应用。
+客户端下载失败会清理不完整缓存。桌面签名安装版使用上节的自动更新流程，便携 ZIP 与个人 DMG 使用手动安装入口。
 iOS 点击官方安装入口，由 Apple 完成分发更新。
 
 本地预览可执行 `python -m http.server 5189 --bind 127.0.0.1 --directory site`，

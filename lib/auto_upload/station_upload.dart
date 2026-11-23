@@ -118,6 +118,8 @@ class StationUpload extends ChangeNotifier {
 
   Future<void> suspend() => _run(_stop);
 
+  Future<void> suspendForUpdate() => _run(_stop, propagate: true);
+
   Future<void> resume() => restore();
 
   Future<void> replaceProfile(CosUploadProfile next, {required bool start}) =>
@@ -228,7 +230,10 @@ class StationUpload extends ChangeNotifier {
     await uploader.scanNow();
   });
 
-  Future<void> _run(Future<void> Function() operation) {
+  Future<void> _run(
+    Future<void> Function() operation, {
+    bool propagate = false,
+  }) {
     if (_closed) return Future.value();
     late final Future<void> next;
     next = (_work ?? Future<void>.value())
@@ -242,6 +247,7 @@ class StationUpload extends ChangeNotifier {
             message = error is StateError
                 ? error.message
                 : '收图操作失败，请检查目录、存储空间或访问权限';
+            if (propagate) rethrow;
           }
         })
         .whenComplete(() {

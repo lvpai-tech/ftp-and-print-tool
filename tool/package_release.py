@@ -63,6 +63,8 @@ def main():
     parser.add_argument('--node', help='Windows: path to x64 Node executable (defaults to PATH)')
     parser.add_argument('--node-license', help='Windows: path to the corresponding Node LICENSE')
     parser.add_argument('--iscc', type=pathlib.Path, help='Windows: Inno Setup ISCC.exe, also emit Setup.exe')
+    parser.add_argument('--windows-sign-tool', type=pathlib.Path, help='Windows: signtool.exe')
+    parser.add_argument('--windows-sign-thumbprint', help='Windows: certificate in CurrentUser/My')
     parser.add_argument('--app', type=pathlib.Path, help='Mac: signed release .app, matching current pubspec version')
     parser.add_argument('--notary-profile', help='Mac: existing notarytool Keychain profile, no credentials in repo')
     parser.add_argument('--sign-identity', help='Mac: Developer ID Application identity for signing the DMG')
@@ -77,6 +79,11 @@ def main():
     windows = args.platform == 'windows-x64'
     if args.iscc and (not windows or not args.iscc.is_file()):
         parser.error('--iscc must point to Inno Setup ISCC.exe for a Windows release')
+    signing = args.windows_sign_tool is not None or args.windows_sign_thumbprint is not None
+    if signing and (not args.iscc or not args.windows_sign_tool
+                    or not args.windows_sign_tool.is_file()
+                    or not re.fullmatch(r'[a-fA-F0-9]{40}', args.windows_sign_thumbprint or '')):
+        parser.error('signed Windows setup requires ISCC, SignTool and a certificate thumbprint')
     extension = '.zip' if windows else '.dmg'
     name = f'lvpai-ftp-{version}-{code}-{args.platform}{extension}'
     directory = APP / 'build' / 'releases' / args.channel / args.platform
@@ -96,10 +103,13 @@ def main():
             if not executable:
                 parser.error('Flutter executable not found; use --flutter with its absolute path')
             run(executable, '--no-version-check', 'build', 'windows', '--release',
-                f'--dart-define=LVPAI_UPDATE_ENV={args.channel}')
+                f'--dart-define=LVPAI_UPDATE_ENV={args.channel}',
+                f'--dart-define=LVPAI_WINDOWS_AUTO_UPDATE={str(signing).lower()}')
             release = APP / 'build/windows/x64/runner/Release'
             payload = staging / 'payload'
             windows_payload(release, payload, args.node, args.node_license)
+            if signing:
+                sign_windows(args, payload / 'lvpai_ftp_client.exe')
             with zipfile.ZipFile(package, 'w', zipfile.ZIP_DEFLATED) as archive:
                 for path in sorted(payload.rglob('*')):
                     if path.is_file():
@@ -110,6 +120,8 @@ def main():
                     f'/DPayloadDir={payload}', f'/DAppVersion={version}+{code}',
                     APP / 'windows/installer/workstation.iss')
                 staged_setup = staging / setup.name
+                if signing:
+                    sign_windows(args, staged_setup)
                 with staged_setup.open('rb') as source:
                     setup_digest = hashlib.file_digest(source, 'sha256').hexdigest()
         else:
@@ -160,6 +172,12 @@ def main():
     print(f'Local package: {destination}')
     print(json.dumps(manifest, indent=2))
     print('Not published. Use the administrator release page after testing this exact artifact.')
+
+
+def sign_windows(args, file):
+    run(args.windows_sign_tool, 'sign', '/sha1', args.windows_sign_thumbprint,
+        '/fd', 'SHA256', '/tr', 'http://timestamp.digicert.com', '/td', 'SHA256', file)
+    run(args.windows_sign_tool, 'verify', '/pa', file)
 
 
 if __name__ == '__main__':

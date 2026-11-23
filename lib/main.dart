@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import 'app.dart';
 import 'desktop_lifecycle.dart';
 import 'printing/print_bridge.dart';
+import 'release/desktop_update.dart';
 import 'workstation_session.dart';
 
 Future<void> main() async {
@@ -15,6 +16,7 @@ Future<void> main() async {
   }
   final bridge = PrintBridge();
   final session = WorkstationSession(bridge);
+  if (Platform.isMacOS) connectMacUpdater(session);
   final navigatorKey = GlobalKey<NavigatorState>();
   runApp(PhotoFtpApp(session: session, navigatorKey: navigatorKey));
   try {

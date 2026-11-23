@@ -1,8 +1,10 @@
 import Cocoa
 import FlutterMacOS
+import Sparkle
 
 class MainFlutterWindow: NSWindow {
   private var folderAccess: PhotoFolderAccess?
+  private var desktopUpdater: DesktopUpdater?
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
@@ -11,8 +13,64 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     folderAccess = PhotoFolderAccess(messenger: flutterViewController.engine.binaryMessenger)
+    desktopUpdater = DesktopUpdater(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
+  }
+}
+
+private final class DesktopUpdater: NSObject, SPUUpdaterDelegate {
+  private let channel: FlutterMethodChannel
+  private var updater: SPUUpdater?
+  private var feed: String?
+  private var prepared = false
+
+  init(messenger: FlutterBinaryMessenger) {
+    channel = FlutterMethodChannel(name: "ai.lvpai.ftp/desktop-update", binaryMessenger: messenger)
+    super.init()
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard let self = self, call.method == "check", let feed = call.arguments as? String else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      guard let key = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
+            Data(base64Encoded: key)?.count == 32 else {
+        result(false)
+        return
+      }
+      do {
+        if self.updater == nil {
+          self.feed = feed
+          let driver = WorkstationUpdateDriver(hostBundle: .main, delegate: nil)
+          driver.prepareUpdate = { [weak self] completion in
+            guard let self = self else { completion(false); return }
+            self.channel.invokeMethod("prepare", arguments: nil) { response in
+              self.prepared = (response as? Bool) == true
+              completion(self.prepared)
+            }
+          }
+          let updater = SPUUpdater(
+            hostBundle: .main, applicationBundle: .main, userDriver: driver, delegate: self)
+          try updater.start()
+          updater.automaticallyChecksForUpdates = false
+          self.updater = updater
+        }
+        self.updater?.checkForUpdates()
+        result(true)
+      } catch {
+        result(FlutterError(code: "UPDATE_START", message: "无法启动 macOS 更新器", details: nil))
+      }
+    }
+  }
+
+  func feedURLString(for updater: SPUUpdater) -> String? {
+    return feed
+  }
+
+  func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+    guard prepared else { return }
+    prepared = false
+    channel.invokeMethod("recover", arguments: nil)
   }
 }
 

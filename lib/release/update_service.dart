@@ -33,8 +33,9 @@ class ReleaseManifest {
   factory ReleaseManifest.parse(
     Map<String, dynamic> data,
     String platform,
-    String channel,
-  ) {
+    String channel, {
+    bool windowsInstaller = false,
+  }) {
     validateChannel(channel);
     final code = data['versionCode'];
     final version = data['versionName'];
@@ -63,7 +64,7 @@ class ReleaseManifest {
       );
     }
     final extension = switch (platform) {
-      'windows-x64' => '.zip',
+      'windows-x64' => windowsInstaller ? '-setup.exe' : '.zip',
       'macos-arm64' || 'macos-x64' => '.dmg',
       _ => throw StateError('当前平台暂无更新通道'),
     };
@@ -71,7 +72,7 @@ class ReleaseManifest {
     final size = data['sizeBytes'];
     final value = data['installerUrl'];
     final expected =
-        '$releaseOrigin/ftp-client/$channel/$platform/'
+        '${_releaseDirectory(platform, channel, windowsInstaller)}/'
         'lvpai-ftp-$version-$code-$platform$extension';
     if (sha is! String ||
         !RegExp(r'^[0-9a-f]{64}$').hasMatch(sha) ||
@@ -116,19 +117,31 @@ class ReleaseManifest {
     return (uri.host == 'testflight.apple.com' &&
             RegExp(r'^/join/[A-Za-z0-9]{8}$').hasMatch(uri.path)) ||
         (uri.host == 'apps.apple.com' &&
-            RegExp(
-              r'^/(?:[a-z]{2}/)?app/(?:[A-Za-z0-9%._~-]+/)?id[0-9]+$',
-            ).hasMatch(uri.path));
+            RegExp(r'^/(?:[a-z]{2}/)?app/(?:[A-Za-z0-9%._~-]+/)?id[0-9]+$')
+                .hasMatch(uri.path));
   }
+}
+
+String _releaseDirectory(
+  String platform,
+  String channel,
+  bool windowsInstaller,
+) {
+  final directory = '$releaseOrigin/ftp-client/$channel/$platform';
+  return windowsInstaller && platform == 'windows-x64'
+      ? '$directory/setup'
+      : directory;
 }
 
 class UpdateService {
   final http.Client client;
   final String platform, channel;
+  final bool windowsInstaller;
   UpdateService({
     http.Client? client,
     String? platform,
     this.channel = updateChannel,
+    this.windowsInstaller = false,
   }) : client = client ?? http.Client(),
        platform = platform ?? currentPlatform();
 
@@ -153,7 +166,9 @@ class UpdateService {
   Future<ReleaseManifest> check() async {
     ReleaseManifest.validateChannel(channel);
     final response = await _get(
-      Uri.parse('$releaseOrigin/ftp-client/$channel/$platform/latest.json'),
+      Uri.parse(
+        '${_releaseDirectory(platform, channel, windowsInstaller)}/latest.json',
+      ),
     );
     if (response.statusCode == 404) throw StateError('当前平台尚未发布版本');
     if (response.statusCode != 200) throw StateError('版本清单读取失败，请稍后重试');
@@ -166,7 +181,12 @@ class UpdateService {
     }
     final data = jsonDecode(utf8.decode(bytes.takeBytes()));
     if (data is! Map<String, dynamic>) throw StateError('版本清单格式错误');
-    return ReleaseManifest.parse(data, platform, channel);
+    return ReleaseManifest.parse(
+      data,
+      platform,
+      channel,
+      windowsInstaller: windowsInstaller,
+    );
   }
 
   /// 下载到应用私有缓存，大小及SHA-256均通过后才提供打开入口。
@@ -177,7 +197,9 @@ class UpdateService {
   ) async {
     if (release.platform == 'ios' ||
         release.platform != platform ||
-        release.channel != channel) {
+        release.channel != channel ||
+        (platform == 'windows-x64' &&
+            release.url.path.endsWith('-setup.exe') != windowsInstaller)) {
       throw StateError('安装包与当前平台或环境不匹配');
     }
     await cache.create(recursive: true);

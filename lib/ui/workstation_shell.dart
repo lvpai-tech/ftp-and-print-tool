@@ -145,7 +145,7 @@ class _WorkstationShellState extends State<WorkstationShell> {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const UpdateButton(),
+                                UpdateButton(session: session),
                                 if (Platform.isWindows) ...[
                                   const SizedBox(width: 8),
                                   TextButton(
@@ -157,7 +157,7 @@ class _WorkstationShellState extends State<WorkstationShell> {
                             ),
                           )
                         else
-                          const UpdateButton(),
+                          UpdateButton(session: session),
                         SizedBox(width: headerInset - 8),
                       ],
                     ),
@@ -196,10 +196,12 @@ class _WorkstationShellState extends State<WorkstationShell> {
                             onActiveChanged: session.setTransferActive,
                             onUploadingChanged: session.setTransferUploading,
                             onConfiguredChanged: session.setTransferConfigured,
+                            session: session,
                           ),
                           Workstation(
                             bridge: session.printBridge,
                             embedded: true,
+                            session: session,
                             onBack: () => setState(() => _module = null),
                           ),
                         ],
@@ -209,6 +211,7 @@ class _WorkstationShellState extends State<WorkstationShell> {
                 ),
               ),
             ),
+            if (session.updating) const ModalBarrier(dismissible: false),
           ],
         );
       },

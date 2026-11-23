@@ -30,6 +30,10 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>连接您配置的局域网 FTP 服务器并上传照片。</string>
 </dict>

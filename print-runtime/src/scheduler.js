@@ -457,6 +457,7 @@ function createScheduler(options = {}) {
         pageNum: 1,
         pageSize: Math.min(50, jobQuery.pageSize || 20),
       });
+      if (!running || !autoPrint || printBusy) return;
       const ids = (page && page.list ? page.list : [])
         .filter((row) => row && row.status === 'QUEUED')
         .map((row) => String(row.id));

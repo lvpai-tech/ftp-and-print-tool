@@ -33,6 +33,7 @@ class PrintBridge extends ChangeNotifier {
 
   /// 发布包只使用随包内核；开发通过显式环境变量指定仓库内核。
   Future<void> start() async {
+    error = null;
     try {
       final runtime = resolvePrintRuntime();
       final node =
@@ -159,8 +160,12 @@ class PrintBridge extends ChangeNotifier {
 
   Future<void> shutdown() async {
     if (busy) throw StateError('打印处理中，请等待完成后退出');
+    final process = _process;
     if (connected) await call('shutdown');
-    await _process?.stdin.close();
+    if (process == null) return;
+    await process.stdin.close();
+    await process.exitCode.timeout(const Duration(seconds: 30));
+    _process = null;
   }
 
   /// 环境变量优先；否则可执行文件旁，再尝试 macOS `Contents/Resources/print-runtime`。

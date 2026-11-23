@@ -1,7 +1,9 @@
 import 'dart:io';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
+
 import 'branding.dart';
 import 'ui/app_dialogs.dart';
 import 'workstation_session.dart';
@@ -67,6 +69,10 @@ class DesktopLifecycle with WindowListener, TrayListener {
       return;
     }
     if (menuItem.key != 'exit') return;
+    if (session.updating) {
+      await _showWindow();
+      return;
+    }
     if (_exitPhase == _ExitPhase.showingNotice) {
       await _showWindow();
       return;

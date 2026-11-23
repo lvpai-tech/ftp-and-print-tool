@@ -13,6 +13,7 @@ import '../branding.dart';
 import '../printing/print_bridge.dart';
 import '../printing/ui/photo_batch_page.dart';
 import '../profile_store.dart';
+import '../workstation_session.dart';
 import 'app_dialogs.dart';
 import 'auto_upload_panel.dart';
 import 'cos_upload_dialog.dart';
@@ -30,6 +31,7 @@ class TransferPage extends StatefulWidget {
     this.onConfiguredChanged,
     this.printBridge,
     this.supportDirectory,
+    this.session,
   });
 
   final bool embedded;
@@ -39,6 +41,7 @@ class TransferPage extends StatefulWidget {
   final ValueChanged<bool>? onConfiguredChanged;
   final PrintBridge? printBridge;
   final Future<Directory> Function()? supportDirectory;
+  final WorkstationSession? session;
 
   @override
   State<TransferPage> createState() => _TransferPageState();
@@ -56,6 +59,7 @@ class _TransferPageState extends State<TransferPage>
   bool _loading = true;
   bool _configuring = false;
   bool _foreground = true;
+  bool _pausedForUpdate = false;
   bool? _configuredReported;
   bool _activeReported = false, _uploadingReported = false;
   String? _error;
@@ -65,6 +69,7 @@ class _TransferPageState extends State<TransferPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    widget.session?.updateUploads = _pauseForUpdate;
     unawaited(_load());
   }
 
@@ -91,6 +96,19 @@ class _TransferPageState extends State<TransferPage>
     }
   }
 
+  Future<void> _pauseForUpdate(bool paused) {
+    final next = _reloadTail.then((_) async {
+      _pausedForUpdate = paused;
+      await Future.wait(
+        _stations.values.map(
+          (station) => paused ? station.suspendForUpdate() : station.resume(),
+        ),
+      );
+    });
+    _reloadTail = next.catchError((Object _) {});
+    return next;
+  }
+
   Future<void> _reloadStations() {
     final next = _reloadTail.then((_) async {
       if (!mounted) return;
@@ -113,7 +131,12 @@ class _TransferPageState extends State<TransferPage>
         final previous = _stations[profile.stationId];
         if (previous != null) {
           if (!mapEquals(previous.profile.toJson(), profile.toJson())) {
-            starts.add(previous.replaceProfile(profile, start: _foreground));
+            starts.add(
+              previous.replaceProfile(
+                profile,
+                start: _foreground && !_pausedForUpdate,
+              ),
+            );
           }
           continue;
         }
@@ -129,7 +152,7 @@ class _TransferPageState extends State<TransferPage>
           preparationSlots: _preparationSlots,
         )..addListener(_refresh);
         _stations[profile.stationId] = station;
-        if (_foreground) starts.add(station.restore());
+        if (_foreground && !_pausedForUpdate) starts.add(station.restore());
       }
       _error = null;
       _loading = false;
@@ -174,6 +197,7 @@ class _TransferPageState extends State<TransferPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.session?.updateUploads = null;
     for (final station in _stations.values) {
       station.removeListener(_refresh);
       station.dispose();

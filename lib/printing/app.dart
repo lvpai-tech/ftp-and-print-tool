@@ -4,6 +4,7 @@ import '../branding.dart';
 import '../ui/app_dialogs.dart';
 import '../ui/design.dart';
 import '../ui/update_button.dart';
+import '../workstation_session.dart';
 import 'job_query_time.dart';
 import 'print_bridge.dart';
 import 'ui/date_time_range_field.dart';
@@ -22,11 +23,13 @@ class Workstation extends StatefulWidget {
     this.embedded = false,
     this.selectedPage,
     this.onBack,
+    this.session,
   });
   final PrintBridge bridge;
   final bool embedded;
   final int? selectedPage;
   final VoidCallback? onBack;
+  final WorkstationSession? session;
   @override
   State<Workstation> createState() => _WorkstationState();
 }
@@ -274,7 +277,7 @@ class _WorkstationState extends State<Workstation> {
                 if (putControlsInHeader && bridge.connected)
                   _printSettingsButton(),
                 const SizedBox(width: 8),
-                const UpdateButton(),
+                UpdateButton(session: widget.session),
                 const SizedBox(width: 8),
               ],
             ),
