@@ -161,7 +161,7 @@ jobs:
     if: ${{ !inputs.publish_update && inputs.cos_smoke_run_id != '' && github.ref == 'refs/heads/dev/huangml' }}
     runs-on: ubuntu-latest
     environment: cos-test
-    timeout-minutes: 10
+    timeout-minutes: 12
     permissions:
       actions: read
       contents: read
@@ -174,7 +174,7 @@ jobs:
           run-id: ${{ inputs.cos_smoke_run_id }}
           github-token: ${{ github.token }}
           path: dist/cos-smoke
-      - name: PUT the DMG to the temporary COS URL
+      - name: Upload the verified DMG to COS in parallel
         env:
           COS_SMOKE_PUT_URL: ${{ secrets.COS_SMOKE_PUT_URL }}
         run: python3 tool/upload_macos_cos_smoke.py dist/cos-smoke
