@@ -191,6 +191,7 @@ class _WorkstationShellState extends State<WorkstationShell> {
                           ),
                           TransferPage(
                             embedded: true,
+                            visible: module == WorkModule.upload,
                             printBridge: session.printBridge,
                             onActiveChanged: session.setTransferActive,
                             onUploadingChanged: session.setTransferUploading,

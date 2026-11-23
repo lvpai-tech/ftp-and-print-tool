@@ -1,4 +1,5 @@
 import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:zxing_lib/zxing.dart';
@@ -8,13 +9,19 @@ import 'package:zxing_lib/common.dart';
 Future<String?> decodeCard(File file) async =>
     compute(decodeCardBytes, await file.readAsBytes());
 
+Future<String?> decodeEndingBarcode(File file) async =>
+    compute(_decodeEndingBarcode, await file.readAsBytes());
+
+String? _decodeEndingBarcode(Uint8List bytes) =>
+    decodeCardBytes(bytes, barcodeOnly: true);
+
 String? cardSecret(String raw) {
   final query = Uri.tryParse(raw)?.queryParameters['qrSecret'];
   final value = (query ?? raw).trim().toUpperCase();
   return RegExp(r'^[A-Z0-9]{12}$').hasMatch(value) ? value : null;
 }
 
-String? decodeCardBytes(Uint8List bytes) {
+String? decodeCardBytes(Uint8List bytes, {bool barcodeOnly = false}) {
   var image = img.decodeImage(bytes);
   if (image == null) throw StateError('照片无法解码，请检查文件是否完整');
   image = img.bakeOrientation(image);
@@ -49,7 +56,10 @@ String? decodeCardBytes(Uint8List bytes) {
           bitmap,
           DecodeHint(
             tryHarder: true,
-            possibleFormats: [BarcodeFormat.code128, BarcodeFormat.qrCode],
+            possibleFormats: [
+              BarcodeFormat.code128,
+              if (!barcodeOnly) BarcodeFormat.qrCode,
+            ],
           ),
         );
         final secret = cardSecret(result.text);

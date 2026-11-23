@@ -3,14 +3,214 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
+import 'package:lvpai_ftp_client/auto_upload/folder_access.dart';
 import 'package:lvpai_ftp_client/auto_upload/folder_uploader.dart';
+import 'package:lvpai_ftp_client/auto_upload/station_upload.dart';
+import 'package:lvpai_ftp_client/auto_upload/upload_slots.dart';
 import 'package:lvpai_ftp_client/photo_normalizer.dart';
+import 'package:lvpai_ftp_client/profile_store.dart';
 import 'package:path/path.dart' as p;
 
+import 'manual_batch_test.dart' as samples;
+
 void main() {
+  test('识别结束照后先上报，队首仍在等待入库时结束照继续排队', () async {
+    final fixture = await _QueueFixture.open();
+    final uploader = fixture.uploader();
+    await fixture.run(() async {
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+      await File(p.join(fixture.inbox.path, 'tourist.png'))
+          .writeAsBytes(await _png());
+      await _until(() => fixture.prepared.length == 1, '游客照开始上传');
+      await samples.photo(fixture.inbox, 'ending', secret: 'ABCD12345678');
+      await _until(() => fixture.notices.length == 1, '结束照提前上报');
+      expect(fixture.prepared.length, 1);
+      expect(fixture.notices.values.single, 'ABCD12345678');
+      fixture.ingested.add(fixture.prepared.first);
+      await _until(() => fixture.prepared.length == 2, '队首入库后结束照上传');
+      expect(fixture.prepared.last, fixture.notices.keys.single);
+    });
+  });
+
+  test('提前上报接口失败时仍正式上传结束照', () async {
+    final fixture = await _QueueFixture.open();
+    final uploader = fixture.uploader();
+    fixture.rejectNotices = true;
+    await fixture.run(() async {
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+      await samples.photo(fixture.inbox, 'ending', secret: 'ABCD12345678');
+      await _until(
+        () => uploader.jobs.singleOrNull?.state == 'accepted',
+        '上报失败后的正式上传',
+      );
+      expect(fixture.noticeAttempts, greaterThan(0));
+      expect(fixture.notices, isEmpty);
+      expect(fixture.uploaded, contains(uploader.jobs.single.id));
+    });
+  });
+
+  test('同一工作台两个机位分别上报结束照并恢复正式上传队列', () async {
+    final fixture = await _QueueFixture.open();
+    final peer = await fixture.addStation('20', 'c' * 64);
+    final transferSlots = UploadSlots(1);
+    final preparationSlots = UploadSlots(2);
+    final support = Directory(p.join(fixture.scratch.path, 'workstation'));
+    StationUpload create(_QueueFixture target) => StationUpload(
+      profile: target.profile,
+      store: const ProfileStore(),
+      support: support,
+      inboxRoot: Directory(p.join(support.path, 'inbox')),
+      transferSlots: transferSlots,
+      preparationSlots: preparationSlots,
+    );
+    final first = create(fixture);
+    final second = create(peer);
+    addTearDown(first.dispose);
+    addTearDown(second.dispose);
+    await fixture.run(() async {
+      // A20 在 A19 等入库期间仍能使用唯一传输名额。
+      await Future.wait([first.restore(), second.restore()]);
+      expect(first.folder, isNot(second.folder));
+      expect(first.uploader.running && second.uploader.running, isTrue);
+      final bytes = await _png();
+      Future<void> original(StationUpload station) async {
+        await File(p.join(station.folder, 'original.png')).writeAsBytes(bytes);
+      }
+
+      await original(first);
+      await _until(() => fixture.prepared.length == 1, '第一机位开始上传');
+      await original(second);
+      await _until(() => peer.prepared.length == 1, '第二机位开始上传');
+      expect(fixture.prepared.single, peer.prepared.single);
+      expect(
+        first.uploader.jobs.single.snapshot,
+        isNot(second.uploader.jobs.single.snapshot),
+      );
+
+      await Future.wait([
+        samples.photo(
+          Directory(first.folder),
+          'ending',
+          secret: 'ABCD12345678',
+        ),
+        samples.photo(
+          Directory(second.folder),
+          'ending',
+          secret: 'WXYZ87654321',
+        ),
+      ]);
+      await _until(
+        () => fixture.notices.length == 1 && peer.notices.length == 1,
+        '两个机位提前上报',
+      );
+      expect(fixture.notices.values.single, 'ABCD12345678');
+      expect(peer.notices.values.single, 'WXYZ87654321');
+      expect(fixture.prepared.length, 1);
+      expect(peer.prepared.length, 1);
+
+      await first.suspend();
+      await first.resume();
+      fixture.ingested.add(fixture.prepared.single);
+      await _until(() => fixture.prepared.length == 2, '恢复第一机位的结束照上传');
+      expect(peer.prepared.length, 1);
+      peer.ingested.add(peer.prepared.single);
+      await _until(() => peer.prepared.length == 2, '第二机位结束照上传');
+      expect(fixture.prepared.last, fixture.notices.keys.single);
+      expect(peer.prepared.last, peer.notices.keys.single);
+      expect(fixture.noticeAttempts, 1);
+      expect(peer.noticeAttempts, 1);
+      await Future.wait([first.suspend(), second.suspend()]);
+    });
+  });
+
+  test('旧机位保留原队列、存量识别基线和失败上报，传完才切换托管目录', () async {
+    final fixture = await _QueueFixture.open();
+    final support = Directory(p.join(fixture.scratch.path, 'workstation'));
+    final inboxRoot = Directory(p.join(support.path, 'inbox'));
+    const store = ProfileStore();
+    FlutterSecureStorage.setMockInitialValues({
+      'cos.auto.profile.v1': jsonEncode(fixture.profile.toJson()),
+      'ftp.watch.v1': jsonEncode({
+        'folder': fixture.inbox.path,
+        'recursive': true,
+      }),
+    });
+    final previous = FolderUploader(
+      storage: Directory(p.join(support.path, 'auto-upload')),
+    );
+    addTearDown(() async {
+      await previous.stop();
+      previous.dispose();
+    });
+    await fixture.run(() async {
+      await samples.photo(fixture.inbox, 'stock', secret: 'STCK12345678');
+      await previous.start(fixture.inbox, null, cosProfile: fixture.profile);
+      await File(p.join(fixture.inbox.path, 'original.png'))
+          .writeAsBytes(await _png());
+      await _until(
+        () => previous.jobs.singleOrNull?.state == 'accepted',
+        '旧工作台原片确认',
+      );
+      final original = previous.jobs.single;
+      fixture.rejectNotices = true;
+      await samples.photo(fixture.inbox, 'ending', secret: 'ABCD12345678');
+      await _until(() => fixture.noticeAttempts > 0, '旧工作台上报失败');
+      expect(fixture.notices, isEmpty);
+      await previous.stop();
+
+      await store.migrateUploads(fixture.profile.api);
+      final profile = (await store.loadStations(fixture.profile.api)).single;
+      final station = StationUpload(
+        profile: profile,
+        store: store,
+        support: support,
+        inboxRoot: inboxRoot,
+        transferSlots: UploadSlots(3),
+        preparationSlots: UploadSlots(2),
+        folderAccess: FolderAccess(apple: false),
+        settings: await store.loadWatch(profile),
+      );
+      addTearDown(() async {
+        await station.suspend();
+        station.dispose();
+      });
+      await station.restore();
+      expect(station.legacy, isTrue);
+      expect(station.uploader.running, isFalse);
+      fixture.rejectNotices = false;
+      await station.setEnabled(true);
+      expect(
+        station.uploader.jobs
+            .firstWhere((job) => job.id == original.id)
+            .snapshot,
+        original.snapshot,
+      );
+      await station.finishMigration();
+      expect(station.legacy, isTrue);
+      await _until(() => fixture.notices.length == 1, '失败的结束照上报恢复');
+      expect(fixture.notices.values.single, 'ABCD12345678');
+      expect(fixture.prepared, [original.id]);
+      fixture.ingested.add(original.id);
+      await _until(() => fixture.prepared.length == 2, '旧目录结束照按序上传');
+      expect(fixture.prepared.last, fixture.notices.keys.single);
+      fixture.ingested.add(fixture.prepared.last);
+      await _until(() => station.uploader.canFinishMigration, '旧队列全部入库');
+      await station.finishMigration();
+      expect(station.legacy, isFalse);
+      expect(station.uploader.running, isTrue);
+      expect(await store.loadWatch(profile), {
+        'enabled': true,
+        'recursive': true,
+      });
+      expect(await File(original.source).exists(), isTrue);
+      expect(fixture.prepared.length, 2);
+    });
+  }, timeout: const Timeout(Duration(minutes: 2)));
+
   final savedJpegSamples = Platform.environment['SAVED_JPEG_SAMPLE_DIR'];
   test('已保存的三张 JPG 按原发现顺序进入 COS 队列', () async {
     final fixture = await _QueueFixture.open();
@@ -500,19 +700,19 @@ class _QueueFixture {
   final Directory scratch, inbox;
   final transport = HttpClient();
   final prepared = <String>[];
+  final notices = <String, String>{};
   final preparedExif = <String, Object?>{};
   final uploaded = <String>{};
   final uploadedContentTypes = <String, String?>{};
   final ingested = <String>{};
   final statusQueries = <String>{};
-  final profile = CosUploadProfile(
-    'https://workstation.example',
-    '19',
-    'a' * 64,
-  );
+  final CosUploadProfile profile;
+  final stations = <String, _QueueFixture>{};
+  int noticeAttempts = 0;
+  bool rejectNotices = false;
   bool failNextUpload = false;
 
-  _QueueFixture(this.server, this.scratch, this.inbox);
+  _QueueFixture(this.server, this.scratch, this.inbox, this.profile);
 
   static Future<_QueueFixture> open() async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -520,13 +720,33 @@ class _QueueFixture {
     final createdInbox = await Directory(p.join(scratch.path, 'inbox'))
         .create();
     final inbox = Directory(await createdInbox.resolveSymbolicLinks());
-    final fixture = _QueueFixture(server, scratch, inbox);
+    final fixture = _QueueFixture(
+      server,
+      scratch,
+      inbox,
+      CosUploadProfile('https://workstation.example', '19', 'a' * 64),
+    );
+    fixture.stations['19'] = fixture;
     server.listen(fixture._handle);
     addTearDown(() async {
       fixture.transport.close(force: true);
       await server.close(force: true);
       await scratch.delete(recursive: true);
     });
+    return fixture;
+  }
+
+  Future<_QueueFixture> addStation(String id, String token) async {
+    final directory = await Directory(p.join(scratch.path, 'inbox-$id'))
+        .create();
+    final fixture = _QueueFixture(
+      server,
+      scratch,
+      directory,
+      CosUploadProfile(profile.api.origin, id, token),
+    );
+    stations[id] = fixture;
+    addTearDown(() => fixture.transport.close(force: true));
     return fixture;
   }
 
@@ -551,6 +771,14 @@ class _QueueFixture {
   }
 
   Future<void> _handle(HttpRequest request) async {
+    final segments = request.uri.pathSegments;
+    final stationId = request.method == 'PUT' ? segments.first : segments[4];
+    final station = stations[stationId];
+    expect(station, isNotNull);
+    await station!._handleStation(request);
+  }
+
+  Future<void> _handleStation(HttpRequest request) async {
     final response = request.response;
     if (request.method == 'PUT') {
       await request.drain<void>();
@@ -566,9 +794,21 @@ class _QueueFixture {
       return;
     }
 
+    expect(request.headers.value('X-Workstation-Token'), profile.token);
     final path = request.uri.path;
     final Map<String, Object> data;
-    if (path.endsWith('/sessions')) {
+    if (path.endsWith('/batch-notices')) {
+      noticeAttempts++;
+      final payload =
+          jsonDecode(await utf8.decoder.bind(request).join()) as Map;
+      if (rejectNotices) {
+        response.statusCode = 503;
+        await response.close();
+        return;
+      }
+      notices[payload['requestId'] as String] = payload['cardSecret'] as String;
+      data = {'status': 'UPLOADING'};
+    } else if (path.endsWith('/sessions')) {
       final payload =
           jsonDecode(await utf8.decoder.bind(request).join()) as Map;
       final id = payload['requestId'] as String;
@@ -576,7 +816,8 @@ class _QueueFixture {
       preparedExif[id] = payload['captureMetadata'];
       data = {
         'status': 'AWAITING_UPLOAD',
-        'uploadUrl': 'https://private.cos.ap-guangzhou.myqcloud.com/$id',
+        'uploadUrl':
+            'https://private.cos.ap-guangzhou.myqcloud.com/${profile.stationId}/$id',
         'uploadHeaders': {
           'Content-Length': '${payload['byteLength']}',
           'Content-Type': payload['contentType'],

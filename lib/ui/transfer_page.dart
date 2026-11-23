@@ -1,6 +1,14 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:material_ui/material_ui.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../auto_upload/cos_upload.dart';
+import '../auto_upload/station_upload.dart';
+import '../auto_upload/upload_slots.dart';
 import '../branding.dart';
 import '../printing/print_bridge.dart';
 import '../printing/ui/photo_batch_page.dart';
@@ -16,119 +24,316 @@ class TransferPage extends StatefulWidget {
   const TransferPage({
     super.key,
     this.embedded = false,
+    this.visible = true,
     this.onActiveChanged,
     this.onUploadingChanged,
     this.onConfiguredChanged,
     this.printBridge,
+    this.supportDirectory,
   });
 
-  /// 嵌在工作台壳内时由壳提供导航。
   final bool embedded;
+  final bool visible;
   final ValueChanged<bool>? onActiveChanged;
   final ValueChanged<bool>? onUploadingChanged;
   final ValueChanged<bool>? onConfiguredChanged;
   final PrintBridge? printBridge;
+  final Future<Directory> Function()? supportDirectory;
 
   @override
   State<TransferPage> createState() => _TransferPageState();
 }
 
-class _TransferPageState extends State<TransferPage> {
+class _TransferPageState extends State<TransferPage>
+    with WidgetsBindingObserver {
   final _store = const ProfileStore();
   final _api = CosUploadProfile.tryParseApiBase(workstationUploadApiBase);
-  CosUploadProfile? _profile;
+  final _stations = <String, StationUpload>{};
+  final _transferSlots = UploadSlots(3);
+  final _preparationSlots = UploadSlots(2);
+  Directory? _support, _inbox;
+  StationUpload? _selected;
   bool _loading = true;
-  bool _saving = false;
-  String? _loadError;
+  bool _configuring = false;
+  bool _foreground = true;
+  bool? _configuredReported;
+  bool _activeReported = false, _uploadingReported = false;
+  String? _error;
+  Future<void> _reloadTail = Future.value();
 
   @override
   void initState() {
     super.initState();
-    _load();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_load());
+  }
+
+  @override
+  void didUpdateWidget(TransferPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.visible) _selected = null;
   }
 
   Future<void> _load() async {
     try {
       final api = _api;
-      if (api == null) {
-        _loadError = '上传服务地址无效，请联系管理员';
-        return;
-      }
-      final profile = await _store.loadCos();
-      if (!mounted) return;
-      if (profile != null && profile.api.origin != api.origin) {
-        _loadError = '已保存的机位配置属于其他服务，请填写当前服务的机位凭据';
-      } else {
-        _profile = profile;
-      }
-    } catch (_) {
-      _loadError = '无法读取机位配置，请重新填写';
-    } finally {
+      if (api == null) throw StateError('上传服务地址无效，请联系管理员');
+      await _store.migrateUploads(api);
+      await _reloadStations();
+    } catch (error) {
       if (mounted) {
-        setState(() => _loading = false);
-        widget.onConfiguredChanged?.call(_profile != null);
+        setState(() {
+          _error = error is StateError ? error.message : '无法读取机位配置，请重试';
+        });
       }
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<void> _configure() async {
-    final api = _api;
-    if (_saving || api == null) return;
-    final profile = await showDialog<CosUploadProfile>(
-      context: context,
-      builder: (context) => CosUploadDialog(api: api, initial: _profile),
-    );
-    if (profile == null || !mounted) return;
-    setState(() => _saving = true);
-    try {
-      await _store.saveCos(profile);
+  Future<void> _reloadStations() {
+    final next = _reloadTail.then((_) async {
       if (!mounted) return;
-      setState(() {
-        _profile = profile;
-        _loadError = null;
-      });
-      widget.onConfiguredChanged?.call(true);
+      final profiles = await _store.loadStations(_api!);
+      if (profiles.isNotEmpty) {
+        final support = _support ??=
+            await (widget.supportDirectory ?? getApplicationSupportDirectory)();
+        _inbox ??= Directory(
+          p.join(
+            Platform.isIOS
+                ? (await getApplicationDocumentsDirectory()).path
+                : support.path,
+            Platform.isIOS ? 'CameraInbox' : 'inbox',
+          ),
+        );
+      }
+      if (!mounted) return;
+      final starts = <Future<void>>[];
+      for (final profile in profiles) {
+        final previous = _stations[profile.stationId];
+        if (previous != null) {
+          if (!mapEquals(previous.profile.toJson(), profile.toJson())) {
+            starts.add(previous.replaceProfile(profile, start: _foreground));
+          }
+          continue;
+        }
+        final settings = await _store.loadWatch(profile);
+        if (!mounted) return;
+        final station = StationUpload(
+          profile: profile,
+          store: _store,
+          support: _support!,
+          inboxRoot: _inbox!,
+          settings: settings,
+          transferSlots: _transferSlots,
+          preparationSlots: _preparationSlots,
+        )..addListener(_refresh);
+        _stations[profile.stationId] = station;
+        if (_foreground) starts.add(station.restore());
+      }
+      _error = null;
+      _loading = false;
+      _refresh();
+      await Future.wait(starts);
+    });
+    _reloadTail = next.catchError((Object _) {});
+    return next;
+  }
+
+  void _refresh() {
+    if (!mounted) return;
+    final configured = _stations.isNotEmpty;
+    final active = _stations.values.any((station) => station.active);
+    final uploading = _stations.values.any((station) => station.uploading);
+    if (_configuredReported != configured) {
+      _configuredReported = configured;
+      widget.onConfiguredChanged?.call(configured);
+    }
+    if (_activeReported != active) {
+      _activeReported = active;
+      widget.onActiveChanged?.call(active);
+    }
+    if (_uploadingReported != uploading) {
+      _uploadingReported = uploading;
+      widget.onUploadingChanged?.call(uploading);
+    }
+    setState(() {});
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!Platform.isIOS) return;
+    final foreground = state == AppLifecycleState.resumed;
+    if (_foreground == foreground) return;
+    _foreground = foreground;
+    for (final station in _stations.values) {
+      unawaited(foreground ? station.resume() : station.suspend());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    for (final station in _stations.values) {
+      station.removeListener(_refresh);
+      station.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _configure([StationUpload? station]) async {
+    final api = _api;
+    if (_configuring || api == null) return;
+    _configuring = true;
+    try {
+      final profile = await showDialog<CosUploadProfile>(
+        context: context,
+        builder: (_) => CosUploadDialog(api: api, initial: station?.profile),
+      );
+      if (profile == null || !mounted) return;
+      if (station == null && _stations.containsKey(profile.stationId)) {
+        await showAppMessage(context, message: '该机位已绑定。请在对应机位详情更新密钥。');
+        return;
+      }
+      await _store.saveCos(profile);
+      await _reloadStations();
     } catch (_) {
       if (mounted) {
-        await showAppMessage(context, message: '无法保存配置，请检查系统安全存储权限');
+        await showAppMessage(context, message: '无法保存或读取机位配置，请检查系统安全存储权限后重试。');
       }
     } finally {
-      if (mounted) setState(() => _saving = false);
+      _configuring = false;
     }
+  }
+
+  Widget _list() {
+    final stations = _stations.values.toList()
+      ..sort(
+        (a, b) => (a.profile.stationCode ?? a.profile.stationId).compareTo(
+          b.profile.stationCode ?? b.profile.stationId,
+        ),
+      );
+    final api = _api;
+    final active = stations
+        .where(
+          (station) =>
+              station.uploader.running && !station.uploader.authorizationPaused,
+        )
+        .length;
+    final uploading = stations.where((station) => station.uploading).length;
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 8),
+      children: [
+        const Text(
+          '上传机位',
+          style: TextStyle(
+            color: WorkstationStyle.ink,
+            fontSize: 24,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (_error case final String error) ...[
+          Text(error, style: const TextStyle(color: WorkstationStyle.bad)),
+          if (api != null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(onPressed: _load, child: const Text('重试读取机位')),
+            ),
+        ] else
+          Text(
+            stations.isEmpty
+                ? '这台电脑还没有绑定机位。申请通过后，工作台会为机位创建收图文件夹。'
+                : '已绑定 ${stations.length} 个机位 · $active 个监听中 · $uploading 个上传中',
+          ),
+        const SizedBox(height: 16),
+        if (api != null)
+          WorkstationEnrollmentPanel(
+            api: api,
+            store: _store,
+            onBound: _reloadStations,
+            onManual: _configure,
+          ),
+        for (final station in stations)
+          Padding(
+            key: ValueKey(station.profile.stationId),
+            padding: const EdgeInsets.only(top: 12),
+            child: Material(
+              color: WorkstationStyle.card,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(WorkstationStyle.radius),
+                side: const BorderSide(color: WorkstationStyle.line),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 6,
+                ),
+                title: Text(
+                  station.name.isEmpty
+                      ? '机位 ${station.profile.stationId}'
+                      : station.name,
+                ),
+                subtitle: Text(
+                  [
+                    if (station.profile.scenicName case final String name) name,
+                    station.status,
+                    '待传 ${station.pending} · 异常 ${station.failures}',
+                    if (station.latestIngested case final DateTime time)
+                      '最近入库 ${MaterialLocalizations.of(context).formatShortDate(time)} ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(time), alwaysUse24HourFormat: true)}',
+                  ].join('  ·  '),
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => setState(() => _selected = station),
+              ),
+            ),
+          ),
+      ],
+    );
   }
 
   Widget _body() {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    final profile = _profile;
-    if (profile == null) {
-      final api = _api;
-      return Center(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(_loadError ?? '请先配置机位连接', textAlign: TextAlign.center),
-              if (api != null) ...[
-                const SizedBox(height: 16),
-                WorkstationEnrollmentPanel(
-                  api: api,
-                  onBound: _load,
-                  onManual: _configure,
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    final station = _selected;
+    return PopScope(
+      canPop: !widget.visible || station == null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && widget.visible && station != null) {
+          setState(() => _selected = null);
+        }
+      },
+      child: IndexedStack(
+        index: station == null ? 0 : 1,
+        sizing: StackFit.expand,
+        children: [
+          _list(),
+          if (station != null)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => setState(() => _selected = null),
+                    icon: const Icon(Icons.arrow_back, size: 18),
+                    label: const Text('返回机位列表'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: AutoUploadPanel(
+                    key: ValueKey(station.profile.stationId),
+                    station: station,
+                    allowDrop: widget.visible,
+                    onConfigureCos: () => _configure(station),
+                    batchTimeline: _batchTimeline(station.profile),
+                  ),
                 ),
               ],
-            ],
-          ),
-        ),
-      );
-    }
-    return AutoUploadPanel(
-      cosProfile: profile,
-      onConfigureCos: _configure,
-      onActiveChanged: (active) => widget.onActiveChanged?.call(active),
-      onUploadingChanged: widget.onUploadingChanged,
-      batchTimeline: _batchTimeline(profile),
+            ),
+        ],
+      ),
     );
   }
 
@@ -138,18 +343,28 @@ class _TransferPageState extends State<TransferPage> {
     return ListenableBuilder(
       listenable: bridge,
       builder: (context, _) {
-        if (!bridge.connected || !bridge.configured) {
-          return const SliverToBoxAdapter(
+        final config = bridge.config;
+        final scenicIds = config['scenicIds'] as List?;
+        final wrongScenic =
+            profile.scenicId != null &&
+            scenicIds?.isNotEmpty == true &&
+            !scenicIds!.any((id) => id.toString() == profile.scenicId);
+        if (!bridge.connected || !bridge.configured || wrongScenic) {
+          return SliverToBoxAdapter(
             child: Padding(
-              padding: EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.only(bottom: 12),
               child: Text(
-                '取片批次需要打印工作台连接景区后查看。',
-                style: TextStyle(color: WorkstationStyle.muted, fontSize: 12),
+                wrongScenic
+                    ? '请切换到该机位所属景区的打印档案后查看取片批次。'
+                    : '取片批次需要打印工作台连接景区后查看。',
+                style: const TextStyle(
+                  color: WorkstationStyle.muted,
+                  fontSize: 12,
+                ),
               ),
             ),
           );
         }
-        final config = bridge.config;
         final scenicName = (config['scenicName'] as String?)?.trim();
         return PhotoBatchTimeline.inline(
           key: ValueKey((

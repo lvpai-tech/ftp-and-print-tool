@@ -1,222 +1,149 @@
-import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-import '../auto_upload/cos_upload.dart';
-import '../auto_upload/folder_access.dart';
-import '../auto_upload/folder_uploader.dart';
-import '../branding.dart';
+import '../auto_upload/station_upload.dart';
 import '../photo_normalizer.dart';
+import 'app_dialogs.dart';
 import 'card_tail_dialog.dart';
 import 'design.dart';
 import 'upload_task_list.dart';
 
 class AutoUploadPanel extends StatefulWidget {
-  final void Function(bool) onActiveChanged;
-  final ValueChanged<bool>? onUploadingChanged;
-  final CosUploadProfile cosProfile;
+  final StationUpload station;
   final VoidCallback onConfigureCos;
   final Widget? batchTimeline;
+  final bool allowDrop;
+
   const AutoUploadPanel({
     super.key,
-    required this.onActiveChanged,
-    this.onUploadingChanged,
-    required this.cosProfile,
+    required this.station,
     required this.onConfigureCos,
     this.batchTimeline,
+    this.allowDrop = true,
   });
+
   @override
   State<AutoUploadPanel> createState() => _AutoUploadPanelState();
 }
 
-class _AutoUploadPanelState extends State<AutoUploadPanel>
-    with WidgetsBindingObserver {
-  final _storage = const FlutterSecureStorage();
-  final _access = FolderAccess();
-  FolderUploader? _uploader;
-  String _folder = '', _message = '';
-  bool _recursive = true, _existing = false, _working = false, _loading = true;
-  bool _backgrounded = false;
-  bool get _active =>
-      _uploader?.running == true ||
-      _uploader?.stopping == true ||
-      _uploader?.fatalError != null;
+class _AutoUploadPanelState extends State<AutoUploadPanel> {
+  StationUpload get station => widget.station;
+  String get _folder => station.folder;
+  bool _picking = false;
+  bool _dragging = false;
+  bool _scanLegacyExisting = false;
+  bool get _canDrop =>
+      widget.allowDrop &&
+      !station.legacy &&
+      (Platform.isWindows || Platform.isMacOS || Platform.isLinux) &&
+      !_picking &&
+      !station.busy &&
+      ModalRoute.of(context)?.isCurrent != false;
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final value = await _storage.read(key: 'ftp.watch.v1');
-      if (!mounted) return;
-      if (value != null) {
-        final settings = jsonDecode(value) as Map<String, dynamic>;
-        _folder = settings['folder'] as String;
-        _recursive = settings['recursive'] as bool;
-      }
-      if (_access.apple) {
-        final restored = await _access.restore();
-        await _access.release();
-        if (!mounted) return;
-        _folder = restored ?? '';
-      }
-    } catch (_) {
-      _message = '无法读取监听设置，请重新选择文件夹';
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _choose() async {
-    setState(() => _working = true);
-    try {
-      final folder = await _access.choose();
-      if (mounted && folder != null) {
-        setState(() {
-          _folder = folder;
-          _message = '';
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _message = '文件夹选择失败，请检查访问权限');
-    } finally {
-      if (mounted) setState(() => _working = false);
-    }
-  }
-
-  Future<void> _inbox() async {
-    setState(() => _working = true);
-    try {
-      final folder = await _access.useInbox();
-      if (mounted) {
-        setState(() {
-          _folder = folder;
-          _message = '请在「文件 → 我的 iPad → $appBrandName → CameraInbox」放入照片';
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _message = '无法创建本机收图目录，请检查存储空间');
-    } finally {
-      if (mounted) setState(() => _working = false);
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!Platform.isIOS) return;
-    _backgrounded =
-        state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.detached;
-    if (_backgrounded && _active && !_working) unawaited(_toggle());
-  }
-
-  void _refresh() {
-    widget.onUploadingChanged?.call(_uploader?.running == true);
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _toggle() async {
-    if (_working) return;
-    if (_active) {
-      setState(() => _working = true);
-      try {
-        await _uploader!.stop();
-        await _access.release();
-        _uploader!.removeListener(_refresh);
-        _uploader!.dispose();
-        _uploader = null;
-        _message = Platform.isIOS ? '监听已停止，队列已保存；回到前台后点击开始监听继续' : '已停止监听，队列已保存';
-      } catch (_) {
-        _message = '队列关闭失败，请检查磁盘权限并重新启动应用';
-      } finally {
-        if (mounted) {
-          setState(() => _working = false);
-          widget.onActiveChanged(_active);
-        }
-      }
-      return;
-    }
-    final cosProfile = widget.cosProfile;
-    if (_folder.isEmpty) {
-      setState(() => _message = '请先选择接收照片的文件夹');
-      return;
-    }
+  Future<void> _dropPhotos(DropDoneDetails details) async {
+    if (!_canDrop) return;
     setState(() {
-      _working = true;
-      _message = '';
+      _dragging = false;
+      _picking = true;
     });
-    widget.onActiveChanged(true);
-    FolderUploader? uploader;
+    final bookmarks = <Uint8List>[];
+    final drop = DesktopDrop.instance;
     try {
-      _folder = await _access.acquire(_folder);
-      final directory = await getApplicationSupportDirectory();
-      await _storage.write(
-        key: 'ftp.watch.v1',
-        value: jsonEncode({'folder': _folder, 'recursive': _recursive}),
-      );
-      uploader = FolderUploader(
-        storage: Directory(p.join(directory.path, 'auto-upload')),
-      );
-      uploader.addListener(_refresh);
-      _uploader = uploader;
-      await uploader.start(
-        Directory(_folder),
-        null,
-        cosProfile: cosProfile,
-        recursive: _recursive,
-        includeExisting: _existing,
-      );
-    } catch (_) {
-      if (uploader != null) {
-        uploader.removeListener(_refresh);
-        try {
-          await uploader.stop();
-        } catch (_) {}
-        uploader.dispose();
+      final files = details.files.whereType<DropItemFile>().toList();
+      if (files.isEmpty || files.length != details.files.length) {
+        throw StateError('请拖入照片文件');
       }
-      _uploader = null;
-      _message = '无法启动：请检查文件夹、磁盘权限，或是否已有另一窗口监听相同来源和目标';
-      try {
-        await _access.release();
-      } catch (_) {
-        _message = '目录授权释放失败，请重新启动应用';
+      if (Platform.isMacOS) {
+        for (final file in files) {
+          final bookmark = file.extraAppleBookmark;
+          if (bookmark != null &&
+              bookmark.isNotEmpty &&
+              await drop.startAccessingSecurityScopedResource(
+                bookmark: bookmark,
+              )) {
+            bookmarks.add(bookmark);
+          }
+        }
+      }
+      await station.importPhotos(files.map((file) => File(file.path)).toList());
+    } catch (error) {
+      if (mounted) {
+        await showAppMessage(context, message: appErrorMessage(error));
       }
     } finally {
-      if (mounted) {
-        setState(() => _working = false);
-        widget.onActiveChanged(_active);
-        if (_backgrounded && _active && !_working) unawaited(_toggle());
+      try {
+        for (final bookmark in bookmarks) {
+          await drop.stopAccessingSecurityScopedResource(bookmark: bookmark);
+        }
+      } finally {
+        if (mounted) setState(() => _picking = false);
       }
     }
   }
 
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _uploader?.removeListener(_refresh);
-    final uploader = _uploader;
-    unawaited(
-      () async {
-        try {
-          await uploader?.stop();
-        } finally {
-          uploader?.dispose();
-          await _access.release();
-        }
-      }().catchError((Object _) {}),
+  Future<void> _importPhotos() async {
+    setState(() => _picking = true);
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: cameraPhotoExtensions,
+      );
+      if (result.isEmpty || !mounted) return;
+      if (result.any((file) => file.path == null)) {
+        await showAppMessage(context, message: '部分照片无法读取，请先下载到本机再导入。');
+        return;
+      }
+      await station.importPhotos(
+        result.map((file) => File(file.path!)).toList(),
+      );
+    } catch (_) {
+      if (mounted) await showAppMessage(context, message: '无法打开照片，请检查文件访问权限。');
+    } finally {
+      if (mounted) setState(() => _picking = false);
+    }
+  }
+
+  Future<void> _copyFolder() async {
+    await Clipboard.setData(ClipboardData(text: _folder));
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('已复制收图路径')));
+    }
+  }
+
+  Future<void> _openFolder() async {
+    try {
+      if (await launchUrl(
+        p.toUri(_folder),
+        mode: LaunchMode.externalApplication,
+      )) {
+        return;
+      }
+    } catch (_) {
+      // 系统无法打开时保留可复制路径。
+    }
+    if (mounted) {
+      await showAppMessage(
+        context,
+        message: '无法打开文件夹。请复制路径后在文件管理器中打开。\n\n$_folder',
+      );
+    }
+  }
+
+  Future<void> _finishMigration() async {
+    final confirmed = await showAppConfirm(
+      context,
+      title: '切换到托管收图目录',
+      message: '请在两个拍摄批次之间操作。先停止向旧目录投递照片，待旧队列处理完毕后切换。',
+      action: '确认切换',
     );
-    super.dispose();
+    if (confirmed && mounted) await station.finishMigration();
   }
 
   Future<void> _pickCardPhoto() async {
@@ -234,7 +161,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
         guidance: '请根据候选尾号核对卡面。归集由服务端识别结束照。',
       );
     } catch (_) {
-      if (mounted) setState(() => _message = '无法选取照片，请检查文件访问权限');
+      if (mounted) await showAppMessage(context, message: '无法选取照片，请检查文件访问权限');
     }
   }
 
@@ -245,10 +172,12 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
         Platform.isMacOS ||
         Platform.isLinux ||
         Platform.isIOS;
-    final uploader = _uploader;
-    final jobs = uploader?.jobs ?? const <AutoJob>[];
-    final orderWait = uploader?.orderWaitMessage;
-    final locked = _active || _working || _loading;
+    final uploader = station.uploader;
+    final active = uploader.running && !uploader.authorizationPaused;
+    final working = station.busy || _picking;
+    final jobs = uploader.jobs;
+    final orderWait = uploader.orderWaitMessage;
+
     final pending = jobs.where((j) => j.state == 'pending').length;
     final uploading = jobs.where((j) => j.state == 'uploading').length;
     final done = jobs
@@ -262,10 +191,10 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
         )
         .length;
     final failed = jobs.where((j) => j.state == 'failed').length;
-    final station = [
-      widget.cosProfile.scenicName,
-      widget.cosProfile.stationName,
-      widget.cosProfile.stationCode,
+    final stationLabel = [
+      station.profile.scenicName,
+      station.profile.stationName,
+      station.profile.stationCode,
     ].whereType<String>().where((name) => name.isNotEmpty).join(' · ');
 
     return DecoratedBox(
@@ -289,7 +218,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                         ),
                       ),
                     ),
-                    if (_active)
+                    if (active)
                       const StatusTag(
                         label: '监听中',
                         color: WorkstationStyle.ok,
@@ -298,9 +227,9 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                   ],
                 ),
                 const SizedBox(height: 6),
-                if (station.isNotEmpty) Text(station),
+                if (stationLabel.isNotEmpty) Text(stationLabel),
                 const Text(
-                  '相机软件把照片保存到本地文件夹，本应用自动检测并批量上传。',
+                  '把相机软件的导出目标设为这个机位的收图文件夹。',
                   style: TextStyle(
                     color: WorkstationStyle.muted,
                     fontSize: 13,
@@ -309,7 +238,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                 ),
                 const SizedBox(height: 14),
                 SelectableText(
-                  _folder.isEmpty ? '尚未选择文件夹' : _folder,
+                  _folder,
                   style: TextStyle(
                     color: _folder.isEmpty
                         ? WorkstationStyle.muted
@@ -318,54 +247,89 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                   ),
                 ),
                 const SizedBox(height: 12),
+                if ((Platform.isWindows ||
+                        Platform.isMacOS ||
+                        Platform.isLinux) &&
+                    !station.legacy) ...[
+                  DropTarget(
+                    enable: _canDrop,
+                    onDragEntered: (_) => setState(() => _dragging = true),
+                    onDragExited: (_) => setState(() => _dragging = false),
+                    onDragDone: _dropPhotos,
+                    child: InkWell(
+                      onTap: working ? null : _importPhotos,
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.all(16),
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: _dragging && _canDrop
+                              ? WorkstationStyle.accentSoft
+                              : null,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: _dragging && _canDrop
+                                ? WorkstationStyle.accent
+                                : WorkstationStyle.line,
+                          ),
+                        ),
+                        child: const Text('拖入照片到这个机位'),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    OutlinedButton.icon(
-                      onPressed: locked || !supported ? null : _choose,
-                      icon: const Icon(Icons.folder_open, size: 18),
-                      label: Text(_folder.isEmpty ? '选择监听文件夹' : '更换文件夹'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: WorkstationStyle.ink,
-                        side: const BorderSide(color: WorkstationStyle.line),
-                        minimumSize: const Size(0, 40),
+                    FilledButton.icon(
+                      onPressed: working || !supported || station.legacy
+                          ? null
+                          : _importPhotos,
+                      icon: const Icon(
+                        Icons.add_photo_alternate_outlined,
+                        size: 18,
                       ),
+                      label: Text(_picking ? '选择照片中…' : '导入照片'),
+                    ),
+                    if (!Platform.isIOS)
+                      OutlinedButton.icon(
+                        onPressed: working || !supported ? null : _openFolder,
+                        icon: const Icon(Icons.folder_open, size: 18),
+                        label: const Text('打开收图文件夹'),
+                      ),
+                    TextButton(
+                      onPressed: _copyFolder,
+                      child: const Text('复制路径'),
                     ),
                     TextButton(
-                      onPressed: locked ? null : widget.onConfigureCos,
-                      child: const Text('COS 直传设置'),
+                      onPressed: working ? null : widget.onConfigureCos,
+                      child: const Text('更新机位密钥'),
                     ),
-                    if (Platform.isIOS)
+                    if (station.legacy)
                       TextButton(
-                        onPressed: locked ? null : _inbox,
-                        child: const Text('使用本机收图文件夹'),
+                        onPressed: working || !supported
+                            ? null
+                            : _finishMigration,
+                        child: const Text('切换到托管目录'),
                       ),
-                    FilterChip(
-                      label: const Text('包含子文件夹'),
-                      selected: _recursive,
-                      onSelected: locked
-                          ? null
-                          : (value) => setState(() => _recursive = value),
-                      selectedColor: WorkstationStyle.accentSoft,
-                      checkmarkColor: WorkstationStyle.accent,
-                    ),
-                    FilterChip(
-                      label: const Text('同时扫描已有照片'),
-                      selected: _existing,
-                      onSelected: locked
-                          ? null
-                          : (value) => setState(() => _existing = value),
-                      selectedColor: WorkstationStyle.accentSoft,
-                      checkmarkColor: WorkstationStyle.accent,
-                    ),
+                    if (station.legacy && !uploader.running)
+                      FilterChip(
+                        label: const Text('补扫旧目录已有照片'),
+                        selected: _scanLegacyExisting,
+                        onSelected: working
+                            ? null
+                            : (value) =>
+                                  setState(() => _scanLegacyExisting = value),
+                      ),
                   ],
                 ),
                 if (Platform.isIOS) ...[
                   const SizedBox(height: 8),
                   const Text(
-                    'iPad 仅在前台监听。切换应用或锁屏后停止，回来点击开始监听补传。请使用已下载到本机的目录；相机软件须支持写入此授权目录。',
+                    'iPad 在前台收图，回到应用后会继续未完成任务。',
                     style: TextStyle(
                       color: WorkstationStyle.muted,
                       fontSize: 12,
@@ -404,7 +368,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                         children: [
                           _Stat(
                             label: '待准备',
-                            value: '${_uploader?.settling ?? 0}',
+                            value: '${uploader.settling}',
                             color: WorkstationStyle.muted,
                           ),
                           _Stat(
@@ -435,24 +399,29 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                         runSpacing: 8,
                         children: [
                           FilledButton.icon(
-                            onPressed: _working || _loading || !supported
+                            onPressed: working || !supported
                                 ? null
-                                : _toggle,
+                                : () => station.setEnabled(
+                                    !uploader.running,
+                                    scanLegacyExisting: _scanLegacyExisting,
+                                  ),
                             icon: Icon(
-                              _active
+                              active
                                   ? Icons.stop_circle_outlined
                                   : Icons.play_arrow,
                               size: 18,
                             ),
                             label: Text(
-                              _working
+                              working
                                   ? '处理中…'
-                                  : _active
-                                  ? '停止监听'
-                                  : '开始监听',
+                                  : uploader.running
+                                  ? '暂停监听'
+                                  : station.legacy
+                                  ? '恢复旧目录监听'
+                                  : '继续监听',
                             ),
                             style: FilledButton.styleFrom(
-                              backgroundColor: _active
+                              backgroundColor: active
                                   ? WorkstationStyle.ink
                                   : WorkstationStyle.accent,
                               minimumSize: const Size(0, 40),
@@ -460,12 +429,12 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                           ),
                           OutlinedButton(
                             onPressed:
-                                !_active ||
-                                    _working ||
-                                    _uploader?.running != true ||
+                                !active ||
+                                    working ||
+                                    !uploader.running ||
                                     failed == 0
                                 ? null
-                                : () => _uploader!.retryFailed(),
+                                : () => uploader.retryFailed(),
                             style: OutlinedButton.styleFrom(
                               minimumSize: const Size(0, 40),
                               foregroundColor: WorkstationStyle.bad,
@@ -488,19 +457,18 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                 Semantics(
                   liveRegion: true,
                   child: Text(
-                    _uploader?.fatalError ??
-                        (_message.isNotEmpty
-                            ? _message
-                            : _uploader?.message ?? '尚未开始监听'),
+                    uploader.fatalError ??
+                        station.message ??
+                        (uploader.running ? uploader.message : station.status),
                     style: const TextStyle(
                       color: WorkstationStyle.muted,
                       fontSize: 13,
                     ),
                   ),
                 ),
-                if (_uploader?.watcherNotice.isNotEmpty == true)
+                if (uploader.watcherNotice.isNotEmpty)
                   Text(
-                    _uploader!.watcherNotice,
+                    uploader.watcherNotice,
                     style: const TextStyle(
                       color: WorkstationStyle.warn,
                       fontSize: 12,
@@ -514,7 +482,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
                       fontSize: 12,
                     ),
                   ),
-                ...?_uploader?.issues.entries
+                ...{...uploader.issues, ...uploader.noticeIssues}.entries
                     .where(
                       (entry) =>
                           '${p.relative(entry.key, from: _folder)}：${entry.value}' !=
@@ -538,19 +506,15 @@ class _AutoUploadPanelState extends State<AutoUploadPanel>
             ),
             UploadTaskList(
               folder: _folder,
-              waiting: uploader?.waitingSources ?? const {},
-              needingOrder: uploader?.sourcesNeedingOrder ?? const [],
+              waiting: uploader.waitingSources,
+              needingOrder: uploader.sourcesNeedingOrder,
               jobs: jobs,
-              onDiscard: uploader != null && uploader.running
+              onDiscard: uploader.running
                   ? uploader.discardWaitingSource
                   : null,
               batchTimeline: widget.batchTimeline,
-              onConfirmNext: uploader != null && uploader.running
-                  ? (source) {
-                      if (identical(_uploader, uploader)) {
-                        uploader.confirmNextSource(source);
-                      }
-                    }
+              onConfirmNext: uploader.running
+                  ? uploader.confirmNextSource
                   : null,
               onReview: (job) => showCardTailDialog(
                 context,

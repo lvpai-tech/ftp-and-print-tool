@@ -6,16 +6,19 @@ import 'package:material_ui/material_ui.dart';
 
 import '../auto_upload/workstation_enrollment.dart';
 import '../profile_store.dart';
+import 'design.dart';
 
 class WorkstationEnrollmentPanel extends StatefulWidget {
   const WorkstationEnrollmentPanel({
     super.key,
     required this.api,
+    required this.store,
     required this.onBound,
     required this.onManual,
   });
 
   final Uri api;
+  final ProfileStore store;
   final Future<void> Function() onBound;
   final Future<void> Function() onManual;
 
@@ -25,74 +28,106 @@ class WorkstationEnrollmentPanel extends StatefulWidget {
 }
 
 class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
   final _client = http.Client();
   late final _enrollment = WorkstationEnrollment(
     widget.api,
-    const ProfileStore(),
+    widget.store,
     _client,
   );
-  EnrollmentStatus? _status;
-  Timer? _timer;
+  final _applications = <String, _Application>{};
   String? _error;
-  bool _busy = false;
+  bool _applying = false;
   bool _foreground = true;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    unawaited(_refresh());
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    try {
+      final applications = await widget.store.loadEnrollments(widget.api);
+      if (!mounted) return;
+      setState(() {
+        _error = null;
+        for (final local in applications) {
+          final draft = local['draft'] as Map<String, dynamic>;
+          _applications.putIfAbsent(
+            draft['requestId'] as String,
+            () => _Application(
+              draft['scenicName'] as String,
+              draft['location'] as String,
+            ),
+          );
+        }
+      });
+      _refreshAll();
+    } catch (_) {
+      if (mounted) setState(() => _error = '无法读取本机的申请记录');
+    }
+  }
+
+  void _refreshAll() {
+    if (!_foreground) return;
+    for (final entry in _applications.entries) {
+      if (entry.value.result?.terminal != true) {
+        unawaited(_refresh(entry.key, entry.value));
+      }
+    }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _foreground = state == AppLifecycleState.resumed;
     if (_foreground) {
-      unawaited(_refresh());
+      _refreshAll();
     } else {
-      _timer?.cancel();
+      for (final app in _applications.values) {
+        app.timer?.cancel();
+      }
     }
   }
 
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _timer?.cancel();
-    _client.close();
-    super.dispose();
-  }
-
-  Future<void> _refresh() => _run(_enrollment.refresh);
-
-  Future<void> _run(Future<EnrollmentStatus?> Function() action) async {
-    if (_busy || !mounted) return;
-    _timer?.cancel();
-    setState(() => _busy = true);
+  Future<void> _refresh(String id, _Application app) async {
+    if (app.busy || !mounted) return;
+    app.timer?.cancel();
+    setState(() => app.busy = true);
+    Duration? retry;
     try {
-      final status = await action();
+      final status = await _enrollment.refresh(
+        id,
+        onApproved: (status) {
+          if (mounted) setState(() => app.result = status);
+        },
+      );
       if (!mounted) return;
-      setState(() {
-        _status = status;
-        _error = null;
-      });
-      if (status?.status == 'BOUND') {
+      app.error = null;
+      app.result = status;
+      if (status?.status == 'BOUND' || status == null) {
         await widget.onBound();
-      } else if (_foreground && status != null && !status.terminal) {
-        _timer = Timer(const Duration(seconds: 15), _refresh);
+        if (mounted) _applications.remove(id);
+      } else if (!status.terminal) {
+        retry = const Duration(seconds: 15);
       }
     } catch (error) {
       if (!mounted) return;
-      setState(
-        () => _error = error is EnrollmentError
-            ? error.message
-            : '连接或保存机位申请失败，请重试',
-      );
-      if (_foreground && (error is! EnrollmentError || error.retryable)) {
-        _timer = Timer(const Duration(seconds: 45), _refresh);
+      app.error = error is EnrollmentError ? error.message : '连接或保存机位申请失败，请重试';
+      if (error is! EnrollmentError || error.retryable) {
+        retry = const Duration(seconds: 45);
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => app.busy = false);
+        if (_foreground && retry != null) {
+          app.timer = Timer(retry, () => _refresh(id, app));
+        }
+      }
     }
   }
 
@@ -102,32 +137,52 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
           context: context,
           builder: (_) => const _EnrollmentDialog(),
         );
-    if (draft == null || !mounted) return;
-    await _run(
-      () => _enrollment.begin(draft.scenic, draft.location, draft.code),
-    );
+    if (draft == null || !mounted || _applying) return;
+    setState(() => _applying = true);
+    try {
+      final id = await _enrollment.begin(
+        draft.scenic,
+        draft.location,
+        draft.code,
+      );
+      if (!mounted) return;
+      final app = _Application(draft.scenic, draft.location);
+      setState(() => _applications[id] = app);
+      unawaited(_refresh(id, app));
+    } catch (_) {
+      if (mounted) setState(() => _error = '无法保存新申请，请检查系统安全存储权限');
+    } finally {
+      if (mounted) setState(() => _applying = false);
+    }
   }
 
-  Future<void> _manual() async {
-    if (_busy) return;
-    _timer?.cancel();
-    setState(() => _busy = true);
+  Future<void> _dismiss(String id, _Application app) async {
+    setState(() => app.busy = true);
     try {
-      await widget.onManual();
-    } finally {
+      await widget.store.saveEnrollment(widget.api, id, null);
+      if (mounted) setState(() => _applications.remove(id));
+    } catch (_) {
       if (mounted) {
-        setState(() => _busy = false);
-        if (_foreground && _status?.terminal == false) {
-          _timer = Timer(const Duration(seconds: 15), _refresh);
-        }
+        setState(() {
+          app.busy = false;
+          app.error = '无法移除本机申请记录';
+        });
       }
     }
   }
 
   @override
-  Widget build(BuildContext context) {
-    final status = _status;
-    final error = _error;
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    for (final app in _applications.values) {
+      app.timer?.cancel();
+    }
+    _client.close();
+    super.dispose();
+  }
+
+  Widget _row(String id, _Application app) {
+    final status = app.result;
     final label = switch (status?.status) {
       'PENDING' => '待审核',
       'APPROVED' => '审核通过，等待绑定',
@@ -135,53 +190,102 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
       'REJECTED' => '已驳回',
       'CANCELLED' => '已取消',
       'EXPIRED' => '已过期',
-      _ => null,
+      _ => app.busy ? '正在提交' : '待提交',
     };
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (label != null) Text(label),
-        if (status != null)
-          TextButton(
-            onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: status.id));
-              if (context.mounted) {
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(const SnackBar(content: Text('已复制申请编号')));
-              }
-            },
-            child: Text('复制申请编号 ${status.id}', textAlign: TextAlign.center),
+    return Padding(
+      key: ValueKey(id),
+      padding: const EdgeInsets.only(top: 12),
+      child: DecoratedBox(
+        decoration: WorkstationStyle.surface(),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                [app.scenic, app.location].join(' · '),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              Text(label),
+              if (status?.reason case final String reason) Text(reason),
+              if (app.error case final String error)
+                Text(
+                  error,
+                  style: const TextStyle(color: WorkstationStyle.bad),
+                ),
+              Wrap(
+                spacing: 8,
+                children: [
+                  TextButton(
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: id));
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('已复制申请编号')),
+                        );
+                      }
+                    },
+                    child: const Text('复制申请编号'),
+                  ),
+                  if (status?.terminal == true && status?.status != 'BOUND')
+                    TextButton(
+                      onPressed: app.busy ? null : () => _dismiss(id, app),
+                      child: const Text('移除记录'),
+                    )
+                  else
+                    TextButton(
+                      onPressed: app.busy ? null : () => _refresh(id, app),
+                      child: const Text('刷新申请状态'),
+                    ),
+                ],
+              ),
+            ],
           ),
-        if (status?.reason case final String reason)
-          Text(reason, textAlign: TextAlign.center),
-        if (error != null) Text(error, textAlign: TextAlign.center),
-        if (status?.terminal == true)
-          TextButton(
-            onPressed: _busy
-                ? null
-                : () => _run(() async {
-                    await _enrollment.clearLocal();
-                    return null;
-                  }),
-            child: const Text('重新申请'),
-          )
-        else if (status != null || error != null)
-          TextButton(
-            onPressed: _busy ? null : _refresh,
-            child: const Text('刷新申请状态'),
-          )
-        else
-          FilledButton(
-            onPressed: _busy ? null : _apply,
-            child: const Text('申请机位'),
-          ),
-        TextButton(
-          onPressed: _busy ? null : _manual,
-          child: const Text('去配置机位'),
         ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FilledButton.icon(
+              onPressed: _applying ? null : _apply,
+              icon: const Icon(Icons.add),
+              label: Text(_applying ? '正在提交…' : '申请机位'),
+            ),
+            TextButton(onPressed: widget.onManual, child: const Text('手动绑定机位')),
+          ],
+        ),
+        if (_error case final String error)
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(error),
+              TextButton(onPressed: _load, child: const Text('重试')),
+            ],
+          ),
+        for (final entry in _applications.entries) _row(entry.key, entry.value),
       ],
     );
   }
+}
+
+class _Application {
+  _Application(this.scenic, this.location);
+
+  final String scenic, location;
+  EnrollmentStatus? result;
+  Timer? timer;
+  String? error;
+  bool busy = false;
 }
 
 class _EnrollmentDialog extends StatefulWidget {

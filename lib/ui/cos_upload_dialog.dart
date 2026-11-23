@@ -37,6 +37,7 @@ class _CosUploadDialogState extends State<CosUploadDialog> {
         stationName: sameStation ? initial?.stationName : null,
         stationCode: sameStation ? initial?.stationCode : null,
         scenicName: sameStation ? initial?.scenicName : null,
+        scenicId: sameStation ? initial?.scenicId : null,
       );
       Navigator.of(context).pop(profile);
     } on StateError catch (error) {
@@ -55,6 +56,7 @@ class _CosUploadDialogState extends State<CosUploadDialog> {
           children: [
             TextField(
               controller: _station,
+              readOnly: widget.initial != null,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(labelText: '机位 ID'),
             ),

@@ -18,6 +18,7 @@ class CosUploadProfile {
   final String? stationName;
   final String? stationCode;
   final String? scenicName;
+  final String? scenicId;
 
   CosUploadProfile(
     String apiBase,
@@ -26,6 +27,7 @@ class CosUploadProfile {
     this.stationName,
     this.stationCode,
     this.scenicName,
+    this.scenicId,
   }) : api = tryParseApiBase(apiBase) ?? (throw StateError('上传服务地址无效')) {
     if (!RegExp(r'^[1-9][0-9]{0,17}$').hasMatch(stationId) ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(token)) {
@@ -56,6 +58,7 @@ class CosUploadProfile {
     'stationName': ?stationName,
     'stationCode': ?stationCode,
     'scenicName': ?scenicName,
+    'scenicId': ?scenicId,
   };
 
   factory CosUploadProfile.fromJson(Map<String, dynamic> json) =>
@@ -66,6 +69,7 @@ class CosUploadProfile {
         stationName: json['stationName'] as String?,
         stationCode: json['stationCode'] as String?,
         scenicName: json['scenicName'] as String?,
+        scenicId: json['scenicId'] as String?,
       );
 }
 
@@ -166,6 +170,21 @@ class CosUpload {
     return confirmed;
   }
 
+  Future<void> reportEnding(String requestId, String cardSecret) async {
+    final data = await _request('POST', '', {
+      'requestId': requestId,
+      'cardSecret': cardSecret,
+    }, '/batch-notices');
+    if (!const {
+      'UPLOADING',
+      'READY',
+      'NEEDS_ATTENTION',
+      'ALREADY_INGESTED',
+    }.contains(data['status'])) {
+      throw StateError('服务端返回的结束照上报状态无效');
+    }
+  }
+
   Future<({String status, String error})> status(String requestId) async {
     final data = await _request('GET', '/$requestId');
     return (status: _status(data, allowFailed: true), error: _error(data));
@@ -200,11 +219,12 @@ class CosUpload {
     String method,
     String suffix, [
     Map<String, Object>? body,
+    String route = '/sessions',
   ]) async {
     final uri = profile.api.replace(
       path:
           '/api/operation/workstation-upload/stations/'
-          '${profile.stationId}/sessions$suffix',
+          '${profile.stationId}$route$suffix',
     );
     final request = await _http.openUrl(method, uri);
     request.followRedirects = false;

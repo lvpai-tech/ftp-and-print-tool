@@ -76,7 +76,7 @@ void main() {
       expect(keyed('open-print'), findsOneWidget);
       await open(tester, 'open-upload');
       expect(find.byType(TransferPage), findsOneWidget);
-      expect(find.text('请先配置机位连接'), findsOneWidget);
+      expect(find.text('申请机位'), findsOneWidget);
       final transferState = tester.state(find.byType(TransferPage));
       await tester.tap(find.byTooltip('返回工作台'));
       await tester.pumpAndSettle();
@@ -185,7 +185,7 @@ void main() {
     await tester.pumpWidget(PhotoFtpApp(session: session));
     await tester.pumpAndSettle();
     await open(tester, 'open-upload');
-    expect(find.text('请先配置机位连接'), findsOneWidget);
+    expect(find.text('申请机位'), findsOneWidget);
 
     session.setTransferActive(true);
     session.setTransferUploading(true);
@@ -372,7 +372,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<Text>(keyed('status-print')).data, '暂不可用');
     await open(tester, 'open-upload');
-    await tester.tap(find.text('去配置机位'));
+    await tester.tap(find.text('手动绑定机位'));
     await tester.pumpAndSettle();
     expect(find.text('COS 自动直传'), findsOneWidget);
     await tester.tap(find.text('保存配置'));

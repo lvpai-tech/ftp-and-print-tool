@@ -8,10 +8,12 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../transfer.dart';
+import '../manual_batch/card_decoder.dart';
 import '../camera_metadata.dart';
 import '../photo_normalizer.dart';
 import 'cos_upload.dart';
 import 'journal.dart';
+import 'upload_slots.dart';
 
 class AutoJob {
   final String id, source, relative, signature, digest, snapshot;
@@ -22,6 +24,7 @@ class AutoJob {
   String error;
   int attempts;
   DateTime nextAttempt;
+  DateTime? ingestedAt;
   double progress = 0;
   AutoJob({
     required this.id,
@@ -36,6 +39,7 @@ class AutoJob {
     this.state = 'pending',
     this.error = '',
     this.attempts = 0,
+    this.ingestedAt,
     DateTime? nextAttempt,
   }) : nextAttempt = nextAttempt ?? DateTime.fromMillisecondsSinceEpoch(0);
   Map<String, dynamic> toJson() => {
@@ -53,6 +57,7 @@ class AutoJob {
     'error': error,
     'attempts': attempts,
     'nextAttempt': nextAttempt.millisecondsSinceEpoch,
+    if (ingestedAt != null) 'ingestedAt': ingestedAt!.millisecondsSinceEpoch,
   };
   factory AutoJob.fromJson(Map<String, dynamic> v) => AutoJob(
     id: v['id'] as String,
@@ -70,6 +75,10 @@ class AutoJob {
     error: v['error'] as String,
     attempts: v['attempts'] as int,
     nextAttempt: DateTime.fromMillisecondsSinceEpoch(v['nextAttempt'] as int),
+    ingestedAt: switch (v['ingestedAt']) {
+      final int value => DateTime.fromMillisecondsSinceEpoch(value),
+      _ => null,
+    },
   );
 
   Future<Uint8List> readPhotoForReview() async {
@@ -146,6 +155,8 @@ class FolderUploader extends ChangeNotifier {
   final Directory storage;
   final Duration scanInterval, stableFor, retryDelay;
   final Future<bool> Function(File) validateImage;
+  final UploadSlots? transferSlots;
+  final UploadSlots? preparationSlots;
   final Map<String, AutoJob> _jobs = {};
   final Map<String, String> _seen = {}, _ignored = {};
   final Map<String, _Observation> _observations = {};
@@ -162,12 +173,46 @@ class FolderUploader extends ChangeNotifier {
   CosUpload? _cos;
   bool _authorizationPaused = false;
   Directory? _root;
-  Future<void>? _scanTask, _pumpTask;
+  Future<void>? _scanTask, _pumpTask, _noticeTask;
+  final Map<String, String> _noticeBaseline = {},
+      _noticeChecked = {},
+      _noticePending = {};
+  final Map<String, DateTime> _noticeRetryAt = {};
+  final Map<String, String> noticeIssues = {};
+  bool _noticeInitialized = false;
   bool running = false, stopping = false, _initialized = false, _closed = false;
   bool _recursive = true, _includeExisting = false;
   String message = '选择接收相机照片的文件夹，点击开始监听';
   String watcherNotice = '';
   String? fatalError;
+  bool get authorizationPaused => _authorizationPaused;
+  bool get requiresStop => running || stopping || _journal != null;
+  bool _directoryReadable = false;
+  bool get canFinishMigration =>
+      running &&
+      _directoryReadable &&
+      _waiting.isEmpty &&
+      _noticePending.isEmpty &&
+      issues.isEmpty &&
+      !_jobs.values.any(
+        (job) => const {
+          'pending',
+          'uploading',
+          'accepted',
+          'failed',
+        }.contains(job.state),
+      );
+  DateTime? get latestIngested {
+    DateTime? latest;
+    for (final job in _jobs.values) {
+      final time = job.ingestedAt;
+      if (time != null && (latest == null || time.isAfter(latest))) {
+        latest = time;
+      }
+    }
+    return latest;
+  }
+
   List<AutoJob> get jobs => _jobs.values.toList().reversed.toList();
   int get settling => _cos == null
       ? _observations.length
@@ -206,6 +251,8 @@ class FolderUploader extends ChangeNotifier {
 
   FolderUploader({
     required this.storage,
+    this.transferSlots,
+    this.preparationSlots,
     this.scanInterval = const Duration(seconds: 2),
     this.stableFor = const Duration(seconds: 3),
     this.retryDelay = const Duration(seconds: 5),
@@ -385,6 +432,7 @@ class FolderUploader extends ChangeNotifier {
     _root = absolute;
     _profile = profile;
     _authorizationPaused = false;
+    _directoryReadable = false;
     _cos = cosProfile == null ? null : CosUpload(cosProfile);
     _recursive = recursive;
     _includeExisting = includeExisting;
@@ -392,6 +440,12 @@ class FolderUploader extends ChangeNotifier {
     _seen.clear();
     _ignored.clear();
     _observations.clear();
+    _noticeBaseline.clear();
+    _noticeChecked.clear();
+    _noticePending.clear();
+    _noticeRetryAt.clear();
+    noticeIssues.clear();
+    _noticeInitialized = false;
     _waiting.clear();
     _fileEvents.clear();
     _confirmedSource = null;
@@ -417,6 +471,18 @@ class FolderUploader extends ChangeNotifier {
                 Map<String, String>.from(event['ignored'] as Map),
               );
             }
+          case 'noticeBaseline':
+            _noticeInitialized = true;
+            _noticeBaseline.addAll(
+              Map<String, String>.from(event['files'] as Map),
+            );
+          case 'noticePending':
+            _noticePending[event['source'] as String] =
+                event['signature'] as String;
+          case 'noticeChecked':
+            _noticePending.remove(event['source']);
+            _noticeChecked[event['source'] as String] =
+                event['signature'] as String;
           case 'ignore':
             _ignored[event['source'] as String] = event['signature'] as String;
           case 'arrival':
@@ -543,11 +609,13 @@ class FolderUploader extends ChangeNotifier {
         }
       }
     } on FileSystemException {
+      _directoryReadable = false;
       message = '无法读取监听目录，等待恢复；请检查磁盘、目录和权限';
       _notify();
       return;
     }
     if (!running) return;
+    _directoryReadable = true;
     message = '正在监听 · 文件稳定后自动上传';
     if (!_initialized) {
       // 首次快照先固定忽略集合，防止初始化途中新增照片被当作历史图。
@@ -569,6 +637,17 @@ class FolderUploader extends ChangeNotifier {
     _observations.removeWhere((path, _) => !present.contains(path));
     issues.removeWhere((path, _) => !present.contains(path));
     if (_cos != null) {
+      if (!_noticeInitialized) {
+        for (final file in files) {
+          final stat = await file.stat();
+          if (stat.type == FileSystemEntityType.file &&
+              !_fileEvents.contains(p.canonicalize(file.path))) {
+            _noticeBaseline[file.path] = _signature(stat);
+          }
+        }
+        await _append({'type': 'noticeBaseline', 'files': _noticeBaseline});
+        _noticeInitialized = true;
+      }
       await _scanInOrder(files);
     } else {
       for (final file in files) {
@@ -640,6 +719,25 @@ class FolderUploader extends ChangeNotifier {
       await _append({'type': 'nextSource', 'source': confirmed});
       _prioritizeSource(confirmed);
     }
+    if (_noticeTask == null) {
+      final noticeFiles = Map<String, FileStat>.of(ready);
+      for (final source in _noticePending.keys.toList()) {
+        if (!present.contains(source) || noticeFiles.containsKey(source)) {
+          continue;
+        }
+        final stat = await File(source).stat();
+        if (stat.type == FileSystemEntityType.file &&
+            _noticePending[source] == _signature(stat)) {
+          noticeFiles[source] = stat;
+        }
+      }
+      _noticeTask = _scanNotices(noticeFiles)
+          .catchError((Object error) => _fail())
+          .whenComplete(() {
+            _noticeTask = null;
+            _notify();
+          });
+    }
     while (running && _waiting.isNotEmpty && _waiting.first.length == 1) {
       final source = _waiting.first.single;
       if (!present.contains(source)) {
@@ -647,9 +745,116 @@ class FolderUploader extends ChangeNotifier {
         break;
       }
       final stat = ready[source];
-      if (stat == null || !await _enqueue(File(source), stat)) break;
+      if (stat == null) break;
+      final signature = _signature(stat);
+      if (_noticeBaseline[source] != signature &&
+          _noticeChecked[source] != signature &&
+          !(noticeIssues.containsKey(source) &&
+              _noticePending[source] == signature)) {
+        break;
+      }
+      final slots = preparationSlots;
+      final prepared = slots == null
+          ? await _enqueue(File(source), stat)
+          : await slots.run(
+              () async => running && await _enqueue(File(source), stat),
+            );
+      if (!prepared) break;
     }
   }
+
+  Future<void> _scanNotices(Map<String, FileStat> ready) async {
+    final cos = _cos!;
+    final noticeDir = Directory(p.join(_journal!.file.parent.path, 'notices'));
+    for (final entry in ready.entries) {
+      if (!running) return;
+      final source = entry.key;
+      final signature = _signature(entry.value);
+      if (_noticeBaseline[source] == signature ||
+          _noticeChecked[source] == signature ||
+          (_noticeRetryAt[source]?.isAfter(DateTime.now()) ?? false)) {
+        continue;
+      }
+      final file = File(source);
+      await noticeDir.create(recursive: true);
+      final snapshot = File(
+        p.join(noticeDir.path, 'ending${photoUploadExtension(source)}'),
+      );
+      String? requestId;
+      String? secret;
+      var copied = false;
+      try {
+        Future<void> recognize() async {
+          if (!running) return;
+          await file.copy(snapshot.path);
+          if (_signature(await file.stat()) != signature ||
+              await snapshot.length() != entry.value.size) {
+            return;
+          }
+          copied = true;
+          await normalizePhotoSnapshot(snapshot, sourcePath: source);
+          secret = await decodeEndingBarcode(snapshot);
+          if (secret != null) {
+            final digest = (await sha256.bind(snapshot.openRead()).first)
+                .toString();
+            requestId = _photoRequestId(source, digest);
+          }
+        }
+
+        final slots = preparationSlots;
+        if (slots == null) {
+          await recognize();
+        } else {
+          await slots.run(recognize);
+        }
+        if (!running) return;
+        if (!copied || _signature(await file.stat()) != signature) continue;
+      } catch (_) {
+        // 解码失败的照片仍交原上传准备流程统一校验。
+        if (_signature(await file.stat()) != signature) continue;
+      } finally {
+        if (await snapshot.exists()) await snapshot.delete();
+      }
+      if (requestId != null && secret != null) {
+        if (_noticePending[source] != signature) {
+          await _append({
+            'type': 'noticePending',
+            'source': source,
+            'signature': signature,
+          });
+          _noticePending[source] = signature;
+        }
+        try {
+          await cos.reportEnding(requestId!, secret!);
+        } catch (_) {
+          noticeIssues[source] = '结束照上传状态上报失败，稍后重试';
+          _noticeRetryAt[source] = DateTime.now().add(retryDelay);
+          continue;
+        }
+      }
+      noticeIssues.remove(source);
+      _noticeRetryAt.remove(source);
+      await _append({
+        'type': 'noticeChecked',
+        'source': source,
+        'signature': signature,
+      });
+      _noticeChecked[source] = signature;
+      _noticePending.remove(source);
+    }
+  }
+
+  String _uploadRelative(String source) => p.posix.joinAll(
+    p.split(
+      p.setExtension(
+        p.relative(source, from: _root!.path),
+        photoUploadExtension(source),
+      ),
+    ),
+  );
+
+  String _photoRequestId(String source, String digest) =>
+      _hash('${_uploadRelative(source)}\u0000$digest');
 
   Future<bool> _enqueue(File file, FileStat stat) async {
     final signature = _signature(stat);
@@ -692,10 +897,7 @@ class FolderUploader extends ChangeNotifier {
         throw StateError('照片无法解码');
       }
       final digest = (await sha256.bind(snapshot.openRead()).first).toString();
-      final name = p.relative(file.path, from: _root!.path);
-      final relative = p.posix.joinAll(
-        p.split(p.setExtension(name, photoUploadExtension(file.path))),
-      );
+      final relative = _uploadRelative(file.path);
       final captureTime = _cos != null && (raw || isJpegCameraPhoto(file.path))
           ? await readJpegCaptureTime(snapshot)
           : null;
@@ -703,7 +905,7 @@ class FolderUploader extends ChangeNotifier {
         _observations.remove(file.path);
         return false;
       }
-      final id = _hash('$relative\u0000$digest');
+      final id = _photoRequestId(file.path, digest);
       final paired =
           captureTime != null &&
           _jobs.values.any(
@@ -818,7 +1020,7 @@ class FolderUploader extends ChangeNotifier {
           );
           job.state = 'done';
         } else {
-          final status = await _cos!.upload(
+          Future<String> upload() => _cos!.upload(
             file,
             job.id,
             job.digest,
@@ -826,15 +1028,31 @@ class FolderUploader extends ChangeNotifier {
             recover: job.attempts > 1,
             captureMetadata: job.captureMetadata,
           );
-          job.state = switch (status) {
-            'GROUPED' => 'grouped',
-            'INGESTED' => 'ingested',
-            _ => 'accepted',
-          };
-          job.nextAttempt = DateTime.now();
+          final slots = transferSlots;
+          final status = slots == null
+              ? await upload()
+              : await slots.run<String?>(
+                  () async => running ? await upload() : null,
+                );
+          if (status == null) {
+            job.state = 'pending';
+            job.attempts--;
+          } else {
+            job.state = switch (status) {
+              'GROUPED' => 'grouped',
+              'INGESTED' => 'ingested',
+              _ => 'accepted',
+            };
+            if (job.state == 'ingested' || job.state == 'grouped') {
+              job.ingestedAt ??= DateTime.now();
+            }
+            job.nextAttempt = DateTime.now();
+          }
         }
-        job.progress = 1;
-        job.error = '';
+        if (job.state != 'pending') {
+          job.progress = 1;
+          job.error = '';
+        }
       } on CosUploadAuthorizationError catch (error) {
         _authorizationPaused = true;
         message = error.message;
@@ -926,8 +1144,10 @@ class FolderUploader extends ChangeNotifier {
       } else {
         continue;
       }
+      final ingested = job.state == 'grouped' || job.state == 'ingested';
+      if (ingested) job.ingestedAt ??= DateTime.now();
       await _append(job.toJson());
-      if (job.state == 'grouped' || job.state == 'ingested') {
+      if (ingested) {
         await _removeSnapshot(job);
       }
       _notify();
@@ -964,6 +1184,7 @@ class FolderUploader extends ChangeNotifier {
     try {
       await _scanTask;
       await _pumpTask;
+      await _noticeTask;
     } finally {
       try {
         _cos?.close();

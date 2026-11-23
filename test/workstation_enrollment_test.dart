@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
 import 'package:lvpai_ftp_client/auto_upload/workstation_enrollment.dart';
 import 'package:lvpai_ftp_client/profile_store.dart';
 
@@ -34,13 +35,11 @@ void main() {
     addTearDown(client.close);
 
     final first = WorkstationEnrollment(gateway, store, client);
-    await expectLater(
-      first.begin('测试景区', '观景台', null),
-      throwsA(isA<http.ClientException>()),
-    );
+    final id = await first.begin('测试景区', '观景台', null);
+    await expectLater(first.refresh(id), throwsA(isA<http.ClientException>()));
     final restarted = WorkstationEnrollment(gateway, store, client);
-    expect((await restarted.refresh())?.status, 'PENDING');
-    expect(await store.loadCos(), isNull);
+    expect((await restarted.refresh(id))?.status, 'PENDING');
+    expect(await store.loadStations(gateway), isEmpty);
   });
 
   test('保存待激活密钥后才切换，激活响应丢失后复用本机密钥', () async {
@@ -68,9 +67,9 @@ void main() {
       }
       if (request.url.path.endsWith('/activate')) {
         expect(request.headers['x-workstation-token'], token);
-        final local = await store.loadEnrollment();
+        final local = await store.loadEnrollment(gateway, id);
         expect(local?['pending']['token'], token);
-        expect(await store.loadCos(), isNull);
+        expect((await store.loadStations(gateway)).single.stationId, '18');
         if (++activations == 1) {
           throw http.ClientException('activation response dropped');
         }
@@ -89,16 +88,31 @@ void main() {
     addTearDown(client.close);
 
     final first = WorkstationEnrollment(gateway, store, client);
-    await first.begin('测试景区', '观景台', 'A01');
+    final existing = CosUploadProfile(gateway.origin, '18', 'a' * 64);
+    await store.saveCos(existing);
+    final application = await first.begin('测试景区', '观景台', 'A01');
+    final other = await first.begin('测试景区', '另一个点位', 'A02');
+    await first.refresh(application);
     approved = true;
-    await expectLater(first.refresh(), throwsA(isA<http.ClientException>()));
+    await expectLater(
+      first.refresh(application),
+      throwsA(isA<http.ClientException>()),
+    );
     final restarted = WorkstationEnrollment(gateway, store, client);
-    expect((await restarted.refresh())?.status, 'BOUND');
+    expect((await restarted.refresh(application))?.status, 'BOUND');
     expect(claims, 1);
     expect(activations, 2);
-    expect((await store.loadCos())?.scenicName, '测试景区');
-    expect((await store.loadCos())?.stationId, '19');
-    expect(await store.loadEnrollment(), isNull);
+    final stations = await store.loadStations(gateway);
+    expect(
+      stations.map((profile) => profile.stationId),
+      unorderedEquals(['18', '19']),
+    );
+    expect(
+      stations.singleWhere((profile) => profile.stationId == '19').scenicName,
+      '测试景区',
+    );
+    expect(await store.loadEnrollment(gateway, application), isNull);
+    expect(await store.loadEnrollment(gateway, other), isNotNull);
   });
 }
 

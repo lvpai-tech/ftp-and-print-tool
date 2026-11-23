@@ -32,12 +32,7 @@ class WorkstationEnrollment {
   final ProfileStore store;
   final http.Client client;
 
-  Future<EnrollmentStatus> begin(
-    String scenicName,
-    String location,
-    String? code,
-  ) async {
-    if (await _load() != null) return (await refresh())!;
+  Future<String> begin(String scenicName, String location, String? code) async {
     final random = Random.secure();
     final idBytes = List.generate(16, (_) => random.nextInt(256));
     idBytes[6] = (idBytes[6] & 0x0f) | 0x40;
@@ -46,7 +41,7 @@ class WorkstationEnrollment {
     final requestId =
         '${id.substring(0, 8)}-${id.substring(8, 12)}-'
         '${id.substring(12, 16)}-${id.substring(16, 20)}-${id.substring(20)}';
-    await store.saveEnrollment({
+    await store.saveEnrollment(api, requestId, {
       'api': api.origin,
       'secret': _hex(List.generate(32, (_) => random.nextInt(256))),
       'draft': {
@@ -56,14 +51,16 @@ class WorkstationEnrollment {
         'stationCode': ?code,
       },
     });
-    return (await refresh())!;
+    return requestId;
   }
 
-  Future<EnrollmentStatus?> refresh() async {
-    final local = await _load();
+  Future<EnrollmentStatus?> refresh(
+    String id, {
+    void Function(EnrollmentStatus)? onApproved,
+  }) async {
+    final local = await store.loadEnrollment(api, id);
     if (local == null) return null;
     final draft = local['draft'] as Map<String, dynamic>;
-    final id = draft['requestId'] as String;
     final secret = local['secret'] as String;
     final path = '/applications/$id';
     final snapshot = local['submitted'] == true
@@ -72,9 +69,10 @@ class WorkstationEnrollment {
     final status = _status(snapshot, id);
     if (local['submitted'] != true) {
       local['submitted'] = true;
-      await store.saveEnrollment(local);
+      await store.saveEnrollment(api, id, local);
     }
     if (status.status != 'APPROVED' && status.status != 'BOUND') return status;
+    if (status.status == 'APPROVED') onApproved?.call(status);
 
     var pending = local['pending'] as Map<String, dynamic>?;
     if (pending == null) {
@@ -97,9 +95,10 @@ class WorkstationEnrollment {
         stationName: binding?['stationName'] as String?,
         stationCode: binding?['stationCode'] as String?,
         scenicName: binding?['scenicName'] as String?,
+        scenicId: binding?['scenicId'] as String?,
       ).toJson();
       local['pending'] = pending;
-      await store.saveEnrollment(local);
+      await store.saveEnrollment(api, id, local);
     }
 
     final profile = CosUploadProfile.fromJson(pending);
@@ -121,17 +120,8 @@ class WorkstationEnrollment {
       throw const EnrollmentError('服务端未确认机位激活');
     }
     await store.saveCos(profile);
-    await store.saveEnrollment(null);
+    await store.saveEnrollment(api, id, null);
     return activated;
-  }
-
-  Future<void> clearLocal() async {
-    if (await _load() != null) await store.saveEnrollment(null);
-  }
-
-  Future<Map<String, dynamic>?> _load() async {
-    final value = await store.loadEnrollment();
-    return value?['api'] == api.origin ? value : null;
   }
 
   static String _hex(List<int> bytes) =>
