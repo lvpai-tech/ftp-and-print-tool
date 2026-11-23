@@ -2,12 +2,17 @@ name: Build macOS
 
 on:
   workflow_dispatch:
+    inputs:
+      cos_smoke_run_id:
+        description: 'Optional Actions run ID for a COS upload test using its existing DMG'
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   macos:
+    if: inputs.cos_smoke_run_id == ''
     runs-on: macos-latest
     timeout-minutes: 60
     env:
@@ -72,3 +77,25 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+  cos-smoke:
+    if: inputs.cos_smoke_run_id != '' && github.ref == 'refs/heads/dev/huangml'
+    runs-on: ubuntu-latest
+    environment: cos-test
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the verified DMG artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lvpai-ftp-macos-personal-dmg
+          run-id: ${{ inputs.cos_smoke_run_id }}
+          github-token: ${{ github.token }}
+          path: dist/cos-smoke
+      - name: PUT the DMG to the temporary COS URL
+        env:
+          COS_SMOKE_PUT_URL: ${{ secrets.COS_SMOKE_PUT_URL }}
+        run: python3 tool/upload_macos_cos_smoke.py dist/cos-smoke
