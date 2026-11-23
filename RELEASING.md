@@ -72,6 +72,7 @@ workflow 文件进入默认分支后，在 GitHub Actions 里选择对应的构�
 | `Build Windows` | `lvpai-ftp-<版本>-<构建号>-windows-x64.zip` | 未签名的完整 x64 Release，含 Node 打印内核；SHA-256 见随包的 `release-info.json` |
 | `Build Windows` | `lvpai-ftp-<版本>-<构建号>-windows-x64-setup.exe` | 未签名的每用户 x64 测试安装器，附独立 SHA-256 文件 |
 | `Build macOS` | `lvpai-ftp-macos-personal.zip` | 个人跨机包：临时签名 `.app` + 随包打印内核 +「打开旅派客户端.command」；其他 Mac 首次需右键打开。不是公证正式包 |
+| `Build macOS` | `lvpai-ftp-<版本>-<构建号>-macos-<架构>-personal.dmg` | 选择 `lvpai-ftp-macos-personal-dmg` 产物并解压，挂载 DMG 后将工作台拖入「应用程序」。使用 ad hoc 签名，首次打开可能需在「隐私与安全性」选择「仍要打开」。附 SHA-256 文件 |
 
 正式 iOS 分发沿用下文的 Xcode、App Store Connect 和 TestFlight 流程。
 
