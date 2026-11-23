@@ -11,7 +11,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     env:
-      PUB_HOSTED_URL: https://pub.flutter-io.cn
+      PUB_HOSTED_URL: https://pub.dev
     steps:
       - name: Checkout
         uses: actions/checkout@v4

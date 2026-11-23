@@ -34,7 +34,7 @@ iOS 清单用 `storeUrl` 替代文件地址、大小及校验值，不通过本�
 需要 Python 3.11+、Flutter、Windows C++ 工具链和 x64 Node 20 或更高版本（CI 使用 Node 22），在 Flutter 仓库根目录执行：
 
 ```powershell
-$env:PUB_HOSTED_URL='https://pub.flutter-io.cn'
+$env:PUB_HOSTED_URL='https://pub.dev'
 $env:FLUTTER_STORAGE_BASE_URL='https://storage.flutter-io.cn'
 flutter pub get --enforce-lockfile
 flutter analyze
