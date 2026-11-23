@@ -63,7 +63,7 @@ jobs:
           node --test 'print-runtime/test/*.test.cjs'
 
       - name: Build and package Windows x64 release
-        run: python tool/package_release.py --platform windows-x64 --channel test --iscc "$env:INNO_ISCC"
+        run: python -X utf8 tool/package_release.py --platform windows-x64 --channel test --iscc "$env:INNO_ISCC"
 
       - name: Verify installer and data retention
         run: |
