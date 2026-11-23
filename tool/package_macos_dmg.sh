@@ -44,8 +44,8 @@ app="$mount/$app_name"
 node="$app/Contents/Resources/print-runtime/node"
 codesign --verify --deep --strict "$app"
 codesign --verify --strict "$node"
-lipo -verify_arch "$arch" "$app/Contents/MacOS/$executable"
-lipo -verify_arch "$arch" "$node"
+lipo "$app/Contents/MacOS/$executable" -verify_arch "$arch"
+lipo "$node" -verify_arch "$arch"
 "$node" --version
 hdiutil detach "$mount"
 mounted=false

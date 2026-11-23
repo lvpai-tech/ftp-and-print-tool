@@ -49,9 +49,6 @@ jobs:
           test -f dist/lvpai-ftp-macos-personal.zip
           test -f dist/lvpai-ftp-macos-personal.sha256
 
-      - name: Package and verify personal DMG
-        run: bash tool/package_macos_dmg.sh dist/lvpai-ftp-macos-personal.zip
-
       - name: Upload personal ZIP
         uses: actions/upload-artifact@v4
         with:
@@ -61,6 +58,9 @@ jobs:
             dist/lvpai-ftp-macos-personal.sha256
           if-no-files-found: error
           retention-days: 14
+
+      - name: Package and verify personal DMG
+        run: bash tool/package_macos_dmg.sh dist/lvpai-ftp-macos-personal.zip
 
       - name: Upload personal DMG
         uses: actions/upload-artifact@v4
