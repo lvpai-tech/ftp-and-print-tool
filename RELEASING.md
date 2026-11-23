@@ -44,6 +44,9 @@ python tool/package_release.py --platform windows-x64 --channel test
 
 也可通过 `--flutter`、`--node` 指定本机工具。Node 发行包若将 `LICENSE` 放在其它目录，使用 `--node-license` 指定该版本的许可证。
 脚本重新构建指定通道，打包 EXE、DLL、data 和从本仓生成的 `print-runtime`，排除 PDB，输出到 `build/releases/test/windows-x64/`。
+如果需要每用户一键安装器，安装 Inno Setup 6.7 后加 `--iscc` 传入 `ISCC.exe` 的完整路径。同一次构建额外生成 `*-setup.exe` 和 `*.exe.sha256`，安装器会带上构建所用 Visual Studio 的 x64 VC++ 可再分发 DLL。
+安装器默认使用 `%LOCALAPPDATA%\Programs\Lvpai\ZhenjiWorkstation`，提供桌面与开始菜单快捷方式，并在 Windows「已安装的应用」登记卸载。先从系统托盘退出工作台，再安装或卸载。相同 Windows 账户继续使用 `%APPDATA%\ai.lvpai\lvpai_ftp_client` 中的现有配置及队列。
+当前下载站及「检查更新」仍使用 ZIP 清单。测试安装器通过 Windows Actions 的 `lvpai-ftp-windows-x64-setup` 产物单独领取。
 若 MSBuild 报路径过长，从较短的源码路径构建。使用 `subst` 时，将项目放在映射盘的子目录。
 `release-info.json` 仅用于核对管理表单，不是已经发布的线上清单。同版本输出已存在时脚本明确失败，
 应提升版本号，或先明确归档自己的旧产物，避免误覆盖。
@@ -67,6 +70,7 @@ workflow 文件进入默认分支后，在 GitHub Actions 里选择对应的构�
 | `Build Android APK` | `lvpai-ftp-android-debug.apk` | Android 调试签名包，可安装测试手动上传 |
 | `Build iOS` | `lvpai-ftp-ios-unsigned.zip` | iPhone/iPad 设备 Release 构建，内含未签名 `Runner.app`，真机安装需另行签名 |
 | `Build Windows` | `lvpai-ftp-<版本>-<构建号>-windows-x64.zip` | 未签名的完整 x64 Release，含 Node 打印内核；SHA-256 见随包的 `release-info.json` |
+| `Build Windows` | `lvpai-ftp-<版本>-<构建号>-windows-x64-setup.exe` | 未签名的每用户 x64 测试安装器，附独立 SHA-256 文件 |
 | `Build macOS` | `lvpai-ftp-macos-personal.zip` | 个人跨机包：临时签名 `.app` + 随包打印内核 +「打开旅派客户端.command」；其他 Mac 首次需右键打开。不是公证正式包 |
 
 正式 iOS 分发沿用下文的 Xcode、App Store Connect 和 TestFlight 流程。

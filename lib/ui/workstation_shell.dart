@@ -53,9 +53,10 @@ class _WorkstationShellState extends State<WorkstationShell> {
       context,
       title: '卸载客户端',
       message:
-          '当前为 ZIP 便携版。先打开程序文件夹，'
           '等上传、打印完成并停止监听后，从托盘选择「退出客户端」。\n\n'
-          '退出后删除本客户端解压出来的程序文件。请保留收图文件夹和照片。',
+          '安装版可在 Windows「设置 → 应用 → 已安装的应用」中卸载。'
+          'ZIP 便携版可先打开程序文件夹，退出后删除解压出来的程序文件。'
+          '请保留收图文件夹和照片。',
       action: '打开程序文件夹',
     );
     if (!openFolder || !mounted) return;

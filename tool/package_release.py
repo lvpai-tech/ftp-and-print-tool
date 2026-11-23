@@ -22,6 +22,38 @@ def run(*args):
                           capture_output=False)
 
 
+def windows_payload(release, payload, node, node_license):
+    if not (release / 'lvpai_ftp_client.exe').is_file():
+        raise RuntimeError('release EXE is missing')
+    for path in sorted(release.rglob('*')):
+        relative = path.relative_to(release)
+        if relative.parts[0].casefold() == 'print-runtime':
+            continue
+        if path.is_symlink():
+            raise RuntimeError('unexpected symlink in Windows release')
+        if path.is_file() and path.suffix.lower() != '.pdb':
+            target = payload / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+    bundle(payload / 'print-runtime', node, node_license)
+
+
+def add_msvc_runtime(release, payload):
+    # Use the redistributable DLLs from the same Visual Studio instance as the build.
+    cache = release.parents[1] / 'CMakeCache.txt'
+    instance = re.search(r'^CMAKE_GENERATOR_INSTANCE:[^=]+=([^\r\n,]+)',
+                         cache.read_text(encoding='utf-8'), re.M)
+    if not instance:
+        raise RuntimeError('Visual Studio installation path is missing from CMakeCache.txt')
+    redist = pathlib.Path(instance.group(1)) / 'VC/Redist/MSVC'
+    runtimes = list(redist.glob('*/x64/Microsoft.VC*.CRT/vcruntime140.dll'))
+    if not runtimes:
+        raise RuntimeError(f'No redistributable x64 Visual C++ runtime found under {redist}')
+    runtime = max(runtimes, key=lambda file: tuple(map(int, file.parents[2].name.split('.'))))
+    for dll in runtime.parent.glob('*.dll'):
+        shutil.copy2(dll, payload / dll.name)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--platform', required=True,
@@ -30,6 +62,7 @@ def main():
     parser.add_argument('--flutter', default='flutter')
     parser.add_argument('--node', help='Windows: path to x64 Node executable (defaults to PATH)')
     parser.add_argument('--node-license', help='Windows: path to the corresponding Node LICENSE')
+    parser.add_argument('--iscc', type=pathlib.Path, help='Windows: Inno Setup ISCC.exe, also emit Setup.exe')
     parser.add_argument('--app', type=pathlib.Path, help='Mac: signed release .app, matching current pubspec version')
     parser.add_argument('--notary-profile', help='Mac: existing notarytool Keychain profile, no credentials in repo')
     parser.add_argument('--sign-identity', help='Mac: Developer ID Application identity for signing the DMG')
@@ -42,12 +75,15 @@ def main():
     if not 1 <= int(code) <= 2_000_000_000:
         parser.error('build number must be 1..2000000000')
     windows = args.platform == 'windows-x64'
+    if args.iscc and (not windows or not args.iscc.is_file()):
+        parser.error('--iscc must point to Inno Setup ISCC.exe for a Windows release')
     extension = '.zip' if windows else '.dmg'
     name = f'lvpai-ftp-{version}-{code}-{args.platform}{extension}'
     directory = APP / 'build' / 'releases' / args.channel / args.platform
     directory.mkdir(parents=True, exist_ok=True)
     destination = directory / name
-    if destination.exists():
+    setup = directory / f'{destination.stem}-setup.exe' if args.iscc else None
+    if destination.exists() or (setup and setup.exists()):
         parser.error('release file already exists; increment version/build or explicitly archive your previous output')
     with tempfile.TemporaryDirectory(prefix='ftp-package-', dir=directory) as temporary:
         staging = pathlib.Path(temporary)
@@ -62,22 +98,20 @@ def main():
             run(executable, '--no-version-check', 'build', 'windows', '--release',
                 f'--dart-define=LVPAI_UPDATE_ENV={args.channel}')
             release = APP / 'build/windows/x64/runner/Release'
-            if not (release / 'lvpai_ftp_client.exe').is_file():
-                raise RuntimeError('release EXE is missing')
-            runtime = staging / 'print-runtime'
-            bundle(runtime, args.node, args.node_license)
+            payload = staging / 'payload'
+            windows_payload(release, payload, args.node, args.node_license)
             with zipfile.ZipFile(package, 'w', zipfile.ZIP_DEFLATED) as archive:
-                for path in sorted(release.rglob('*')):
-                    relative = path.relative_to(release)
-                    if relative.parts[0].casefold() == 'print-runtime':
-                        continue
-                    if path.is_symlink():
-                        raise RuntimeError('unexpected symlink in Windows release')
-                    if path.is_file() and path.suffix.lower() != '.pdb':
-                        archive.write(path, relative.as_posix())
-                for path in sorted(runtime.rglob('*')):
+                for path in sorted(payload.rglob('*')):
                     if path.is_file():
-                        archive.write(path, path.relative_to(staging).as_posix())
+                        archive.write(path, path.relative_to(payload).as_posix())
+            if setup:
+                add_msvc_runtime(release, payload)
+                run(args.iscc.resolve(), f'/O{staging}', f'/F{setup.stem}',
+                    f'/DPayloadDir={payload}', f'/DAppVersion={version}+{code}',
+                    APP / 'windows/installer/workstation.iss')
+                staged_setup = staging / setup.name
+                with staged_setup.open('rb') as source:
+                    setup_digest = hashlib.file_digest(source, 'sha256').hexdigest()
         else:
             if sys.platform != 'darwin' or not args.app or not args.notary_profile or not args.sign_identity:
                 parser.error('Mac requires macOS, --app, --notary-profile and --sign-identity')
@@ -112,6 +146,11 @@ def main():
             run('xcrun', 'stapler', 'validate', package)
             run('spctl', '--assess', '--type', 'open', '--context', 'context:primary-signature', package)
         package.replace(destination)
+        if setup:
+            staged_setup.replace(setup)
+            setup.with_suffix('.exe.sha256').write_text(
+                f'{setup_digest}  {setup.name}\n', encoding='ascii')
+            print(f'Local installer: {setup}')
     with destination.open('rb') as source:
         digest = hashlib.file_digest(source, 'sha256').hexdigest()
     manifest = {'versionCode': int(code), 'versionName': version, 'platform': args.platform,

@@ -34,6 +34,22 @@ jobs:
           node-version: "22"
           architecture: x64
 
+      - name: Setup Inno Setup compiler
+        run: |
+          $download = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
+          $compiler = Join-Path $env:RUNNER_TEMP 'inno-setup-6.7.3'
+          Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $download
+          $hash = (Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash
+          if ($hash -ne '9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732') {
+            throw 'Inno Setup compiler installer checksum mismatch'
+          }
+          $install = Start-Process -FilePath $download -ArgumentList @('/PORTABLE=1', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$compiler`"") -WindowStyle Hidden -Wait -PassThru
+          $iscc = Join-Path $compiler 'ISCC.exe'
+          if ($install.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
+            throw "Inno Setup compiler installation failed ($($install.ExitCode))"
+          }
+          "INNO_ISCC=$iscc" >> $env:GITHUB_ENV
+
       - name: Resolve dependencies
         run: flutter pub get --enforce-lockfile
 
@@ -47,7 +63,31 @@ jobs:
           node --test 'print-runtime/test/*.test.cjs'
 
       - name: Build and package Windows x64 release
-        run: python tool/package_release.py --platform windows-x64 --channel test
+        run: python tool/package_release.py --platform windows-x64 --channel test --iscc "$env:INNO_ISCC"
+
+      - name: Verify installer and data retention
+        run: |
+          $setup = Get-Item -Path 'build/releases/test/windows-x64/*-setup.exe'
+          $app = Join-Path $env:LOCALAPPDATA 'Programs/Lvpai/ZhenjiWorkstation'
+          $data = Join-Path $env:APPDATA 'ai.lvpai/lvpai_ftp_client'
+          New-Item -ItemType Directory -Path $data -Force | Out-Null
+          $fixture = Join-Path $data ('installer-smoke-' + [guid]::NewGuid().ToString('N') + '.txt')
+          Set-Content -LiteralPath $fixture -Value 'existing workstation data' -Encoding utf8
+          $fixtureHash = (Get-FileHash -LiteralPath $fixture).Hash
+          foreach ($pass in 1,2) {
+            $install = Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RESTARTEXITCODE=3010' -WindowStyle Hidden -Wait -PassThru
+            if ($install.ExitCode -ne 0) { throw "Setup failed on pass $pass ($($install.ExitCode))" }
+            foreach ($file in 'lvpai_ftp_client.exe', 'data/app.so', 'flutter_windows.dll', 'vcruntime140.dll', 'print-runtime/node.exe', 'print-runtime/src/flutter-bridge.cjs') {
+              if (-not (Test-Path -LiteralPath (Join-Path $app $file) -PathType Leaf)) {
+                throw "Installation is missing $file"
+              }
+            }
+            if ((Get-FileHash -LiteralPath $fixture).Hash -ne $fixtureHash) { throw 'Setup changed user data' }
+          }
+          $uninstaller = Get-Item -Path (Join-Path $app 'unins*.exe')
+          $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -WindowStyle Hidden -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0 -or (Test-Path -LiteralPath (Join-Path $app 'lvpai_ftp_client.exe'))) { throw 'Uninstall failed' }
+          if ((Get-FileHash -LiteralPath $fixture).Hash -ne $fixtureHash) { throw 'Uninstall changed user data' }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -56,5 +96,15 @@ jobs:
           path: |
             build/releases/test/windows-x64/*.zip
             build/releases/test/windows-x64/release-info.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload one-click installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: lvpai-ftp-windows-x64-setup
+          path: |
+            build/releases/test/windows-x64/*-setup.exe
+            build/releases/test/windows-x64/*-setup.exe.sha256
           if-no-files-found: error
           retention-days: 14
