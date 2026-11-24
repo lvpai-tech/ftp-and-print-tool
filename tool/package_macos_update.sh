@@ -5,7 +5,9 @@ archive="$1"
 channel="${2:?Update channel required (local, test or prd)}"
 case "$channel" in local|test|prd) ;; *) echo 'Invalid update channel' >&2; exit 2 ;; esac
 : "${MACOS_SIGN_IDENTITY:?Developer ID Application identity required}"
-: "${SPARKLE_PUBLIC_KEY:?Sparkle public key required}"
+if [[ "$channel" != prd ]]; then
+  : "${SPARKLE_PUBLIC_KEY:?Sparkle public key required}"
+fi
 : "${MACOS_NOTARY_PROFILE:?notarytool keychain profile required}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 stage="$(mktemp -d)"
@@ -28,12 +30,13 @@ file = Path(sys.argv[1])
 info = plistlib.loads(file.read_bytes())
 if info.get("LvpaiUpdateChannel") != sys.argv[2]:
     raise ValueError("The macOS app was packaged for a different update channel")
-key = os.environ["SPARKLE_PUBLIC_KEY"]
-if len(base64.b64decode(key, validate=True)) != 32:
-    raise ValueError("Invalid Sparkle public key")
-info["SUPublicEDKey"] = key
-info["SURequireSignedFeed"] = True
-info["SUVerifyUpdateBeforeExtraction"] = True
+if channel != "prd":
+    key = os.environ["SPARKLE_PUBLIC_KEY"]
+    if len(base64.b64decode(key, validate=True)) != 32:
+        raise ValueError("Invalid Sparkle public key")
+    info["SUPublicEDKey"] = key
+    info["SURequireSignedFeed"] = True
+    info["SUVerifyUpdateBeforeExtraction"] = True
 file.write_bytes(plistlib.dumps(info))
 PY
 

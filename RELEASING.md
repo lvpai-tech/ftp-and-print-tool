@@ -157,12 +157,14 @@ FTP二进制的contentType为`application/octet-stream`。接口返回沿用项�
 
 当前 `prd` 用于内测分发。Windows 使用未做 Authenticode 签名的 Setup.exe，Apple 芯片 Mac 使用临时签名的个人 DMG，所需 GitHub 环境只配置 COS 凭据。客户端「检查更新」可以发现、下载并校验新包，测试人员自行打开安装包，关闭旧工作台后覆盖安装。`test`、`local` 的签名更新开关使用下表的正式签名和公证材料。
 
+正式分发的 macOS 包在 `dev/huangml` 选择 `prd` 并开启 `sign_prd_dmg`。在 `cos-prd` 配置 Apple Developer ID 和公证材料后，可从工作流下载 `lvpai-ftp-macos-prd-update` 签名制品。开启 `publish_update` 后，签名 DMG 发布到现有 `latest.json`，旧版工作台仍可通过「检查更新」下载。此路径不需要 Sparkle 密钥。
+
 运营人员只需选择通道和发布开关。版本名称及构建号来自仓库 `pubspec.yaml`，例如 `0.4.5+9` 对应版本 `0.4.5`、构建号 `9`。每个平台、通道的新版构建号须高于该清单已发布版本。工作流核对打包元数据、安装包 SHA-256 和发布通道，分块上传并在 CDN 读回包大小后写清单，再读回核对清单。版本化对象禁止覆盖。重试已上传的同名安装包时使用与前次完全一致的制品。
 
 | 构建 | 更新入口 | 发布产物 |
 | --- | --- | --- |
 | Windows x64 `prd` | `ftp-client/prd/windows-x64/setup/latest.json` | 内测 `*-windows-x64-setup.exe` |
-| macOS Apple 芯片 `prd` | `ftp-client/prd/macos-arm64/latest.json` | 内测 `*-macos-arm64.dmg` |
+| macOS Apple 芯片 `prd` | `ftp-client/prd/macos-arm64/latest.json` | `*-macos-arm64.dmg`，可选 Developer ID 签名并公证 |
 | Windows x64 `test` / `local` | `ftp-client/{channel}/windows-x64/setup/latest.json` | Authenticode 签名的 `*-windows-x64-setup.exe` |
 | macOS Apple 芯片 `test` / `local` | `ftp-client/{channel}/macos-arm64/appcast.xml` | Developer ID 签名、公证、Sparkle EdDSA 签名的 `*-macos-arm64.dmg` |
 

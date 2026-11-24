@@ -7,12 +7,18 @@ import 'printing/print_bridge.dart';
 
 /// 统一工作台退出门禁；导航切换不停止上传或打印。
 class WorkstationSession extends ChangeNotifier {
-  WorkstationSession(this.printBridge, {this.crashJournal});
+  WorkstationSession(
+    this.printBridge, {
+    this.crashJournal,
+    this.checkUploadStorage,
+  });
   final PrintBridge printBridge;
   final CrashJournal? crashJournal;
+  final Future<void> Function()? checkUploadStorage;
   bool transferActive = false;
   bool transferUploading = false;
   bool? transferConfigured;
+  String? transferIssue;
   String? notice;
   bool updating = false;
   Future<void> Function(bool paused)? updateUploads;
@@ -43,6 +49,12 @@ class WorkstationSession extends ChangeNotifier {
   void setTransferConfigured(bool configured) {
     if (transferConfigured == configured) return;
     transferConfigured = configured;
+    notifyListeners();
+  }
+
+  void setTransferIssue(String? issue) {
+    if (transferIssue == issue) return;
+    transferIssue = issue;
     notifyListeners();
   }
 

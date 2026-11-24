@@ -25,6 +25,7 @@ class _WorkstationShellState extends State<WorkstationShell> {
 
   String get _uploadStatus {
     final session = widget.session;
+    if (session.transferIssue case final issue?) return issue;
     if (session.transferUploading) return '上传中';
     if (session.transferActive) return '上传任务运行中';
     return switch (session.transferConfigured) {
@@ -36,8 +37,10 @@ class _WorkstationShellState extends State<WorkstationShell> {
 
   String get _printStatus {
     final bridge = widget.session.printBridge;
+    if (bridge.storageUnavailable) return '打印存储需要处理';
     if (!bridge.connected) return bridge.error == null ? '连接中' : '暂不可用';
     if (bridge.printing) return '打印中';
+    if (bridge.systemPrinterIssue != null) return '系统打印机需要检查';
     if (bridge.state['autoPrint'] == true) return '自动打印已开启';
     if (bridge.busy) return '正在处理';
     return bridge.configured ? '自动打印已关闭' : '景区待配置';

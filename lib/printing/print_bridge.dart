@@ -3,9 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../workstation_storage.dart';
 import 'print_enrollment.dart';
 
 typedef Json = Map<String, dynamic>;
@@ -23,6 +25,10 @@ class PrintBridge extends ChangeNotifier {
   int _sequence = 0;
   Json snapshot = {};
   String? error;
+  String? systemPrinterIssue;
+  bool storageUnavailable = false;
+  Future<void>? _starting;
+  Future<void>? _checkingPrinters;
   bool connected = false;
   bool working = false;
   bool get configured => snapshot['configured'] == true;
@@ -40,8 +46,15 @@ class PrintBridge extends ChangeNotifier {
   }
 
   /// 发布包只使用随包内核；开发通过显式环境变量指定仓库内核。
-  Future<void> start() async {
+  Future<void> start() {
+    if (connected) return Future.value();
+    return _starting ??= _start().whenComplete(() => _starting = null);
+  }
+
+  Future<void> _start() async {
     error = null;
+    storageUnavailable = false;
+    notifyListeners();
     try {
       final runtime = resolvePrintRuntime();
       final node =
@@ -51,11 +64,35 @@ class PrintBridge extends ChangeNotifier {
       if (!File(node).existsSync() || !File(script).existsSync()) {
         throw StateError('打印内核未打包，请使用构建脚本生成完整客户端');
       }
-      final support = await getApplicationSupportDirectory();
-      final configPath =
-          Platform.environment['PRINT_AGENT_CONFIG'] ??
-          p.join(support.path, 'printing', 'config.json');
-      final credentials = await PrintEnrollment.credentials();
+      final String configPath;
+      try {
+        configPath =
+            Platform.environment['PRINT_AGENT_CONFIG'] ??
+            p.join(
+              (await getApplicationSupportDirectory()).path,
+              'printing',
+              'config.json',
+            );
+        if (Platform.isMacOS) {
+          final configDirectory = await File(configPath).parent
+              .create(recursive: true);
+          await checkWritableDirectory(configDirectory);
+        }
+      } on FileSystemException {
+        if (!Platform.isMacOS) rethrow;
+        throw WorkstationStorageError('无法读写打印数据目录，请检查目录权限和可用空间后重试。');
+      } on MissingPlatformDirectoryException {
+        if (!Platform.isMacOS) rethrow;
+        throw WorkstationStorageError('找不到打印数据目录，请恢复当前用户的数据目录后重试。');
+      }
+      await checkMacWorkstationCredentials();
+      final Map<String, String> credentials;
+      try {
+        credentials = await PrintEnrollment.credentials();
+      } on PlatformException catch (error) {
+        if (!Platform.isMacOS) rethrow;
+        throw macWorkstationStorageError(error);
+      }
       _process = await Process.start(
         node,
         [script],
@@ -84,12 +121,33 @@ class PrintBridge extends ChangeNotifier {
       await call('initialize', [credentials]);
       connected = true;
       notifyListeners();
+      if (Platform.isMacOS) unawaited(checkSystemPrinters());
     } catch (e) {
+      storageUnavailable = e is WorkstationStorageError;
       error ??= e is StateError
           ? e.message
           : '$e'.replaceFirst(RegExp(r'^Bad state:\s*'), '');
       notifyListeners();
     }
+  }
+
+  Future<void> checkSystemPrinters() {
+    if (!connected) return Future.value();
+    return _checkingPrinters ??= _checkSystemPrinters().whenComplete(
+      () => _checkingPrinters = null,
+    );
+  }
+
+  Future<void> _checkSystemPrinters() async {
+    try {
+      final printers = await call('listPrinters') as List<dynamic>;
+      systemPrinterIssue = printers.isEmpty
+          ? 'macOS 未找到打印机。请在「系统设置 → 打印机与扫描仪」添加后重新检查。'
+          : null;
+    } catch (_) {
+      systemPrinterIssue = '无法读取 macOS 打印机列表。请检查系统打印服务和打印机连接后重试。';
+    }
+    notifyListeners();
   }
 
   void _receive(String line) {
@@ -182,6 +240,7 @@ class PrintBridge extends ChangeNotifier {
     await process.stdin.close();
     await process.exitCode.timeout(const Duration(seconds: 30));
     _process = null;
+    connected = false;
   }
 
   /// 环境变量优先；否则可执行文件旁，再尝试 macOS `Contents/Resources/print-runtime`。

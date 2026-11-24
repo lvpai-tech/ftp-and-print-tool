@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
 import '../photo_normalizer.dart';
 import '../profile_store.dart';
+import '../workstation_storage.dart';
 import 'cos_upload.dart';
 import 'folder_access.dart';
 import 'folder_uploader.dart';
@@ -70,6 +72,8 @@ class StationUpload extends ChangeNotifier {
   bool _folderRequired;
   String? _legacyFolder;
   bool _folderAcquired = false;
+  bool _folderAccessFailed = false;
+  bool _importWritable = true;
   bool enabled;
   bool _closed = false;
   Future<void>? _work;
@@ -79,12 +83,25 @@ class StationUpload extends ChangeNotifier {
   bool get hasFolder => folder.isNotEmpty;
   bool get custom => _customFolder != null;
   bool get scanExisting => _scanExisting;
-  bool get canImport => hasFolder && !legacy && (!custom || running);
+  bool get canImport =>
+      hasFolder &&
+      !legacy &&
+      !folderUnavailable &&
+      _importWritable &&
+      (!custom || running);
+  bool get folderUnavailable =>
+      enabled &&
+      (_folderAccessFailed ||
+          (uploader.running && !uploader.directoryReadable));
+  String? get importUnavailable => running && !_importWritable
+      ? '当前无法写入此收图文件夹。自动收图可用，导入照片需恢复写入后重新监听。'
+      : null;
   String get folder =>
       _customFolder ?? _legacyFolder ?? (_folderRequired ? '' : _managed.path);
   bool get busy => _work != null;
   bool get active => busy || uploader.requiresStop;
-  bool get running => uploader.running && !uploader.authorizationPaused;
+  bool get running =>
+      uploader.directoryReadable && !uploader.authorizationPaused;
   bool get uploading => uploader.jobs.any((job) => job.state == 'uploading');
   int get pending =>
       uploader.settling +
@@ -125,6 +142,7 @@ class StationUpload extends ChangeNotifier {
   String get status {
     if (busy) return '处理中';
     if (uploader.authorizationPaused) return '授权失效';
+    if (folderUnavailable) return '收图目录不可用';
     if (uploader.fatalError != null || message != null) return '需要处理';
     if (uploader.sourcesNeedingOrder.isNotEmpty) return '待确认顺序';
     if (failures > 0 || uploader.issues.isNotEmpty) return '有异常';
@@ -163,6 +181,7 @@ class StationUpload extends ChangeNotifier {
       await _start();
     } else {
       await _stop();
+      _folderAccessFailed = false;
     }
   });
 
@@ -253,7 +272,7 @@ class StationUpload extends ChangeNotifier {
           _scanExisting = false;
           enabled = false;
           uploader.clearView();
-        } else if (restart) {
+        } else if (enabled) {
           await _start();
         }
       } finally {
@@ -267,9 +286,12 @@ class StationUpload extends ChangeNotifier {
     if (uploader.fatalError != null) await _stop();
     if (!hasFolder) return;
     final managed = !legacy && !custom;
-    if (managed) await _ensureManaged();
+    _folderAccessFailed = false;
+    _importWritable = true;
     try {
+      if (managed) await _ensureManaged();
       if (!managed && _access.apple && !_folderAcquired) {
+        _folderAccessFailed = true;
         final authorized = await _access.acquire(
           folder,
           scope: ProfileStore.uploadKey(profile),
@@ -282,13 +304,22 @@ class StationUpload extends ChangeNotifier {
         )) {
           throw StateError('目录授权与原队列不一致，请重新选择原目录');
         }
+        _folderAccessFailed = false;
       }
       final resolved = await Directory(folder).resolveSymbolicLinks();
       if (_folderIdentity != null &&
           !UploadFolders.same(_folderIdentity!, resolved)) {
+        _folderAccessFailed = true;
         throw StateError('收图目录指向已变化，请恢复原目录后再监听');
       }
       await _folders.validate(profile, folder, resolved, managed: managed);
+      if (Platform.isMacOS && custom) {
+        try {
+          await checkWritableDirectory(Directory(resolved));
+        } on FileSystemException {
+          _importWritable = false;
+        }
+      }
       await uploader.start(
         Directory(folder),
         null,
@@ -296,6 +327,15 @@ class StationUpload extends ChangeNotifier {
         recursive: !legacy || _legacyRecursive,
         includeExisting: managed || _scanExisting,
       );
+    } on PlatformException catch (error) {
+      await _releaseFolder();
+      if (error.code != 'FOLDER_ACCESS') rethrow;
+      _folderAccessFailed = true;
+      throw StateError('无法访问收图文件夹。请重新选择原文件夹，或在「系统设置 → 隐私与安全性 → 文件与文件夹」恢复访问。');
+    } on FileSystemException {
+      await _releaseFolder();
+      _folderAccessFailed = true;
+      throw StateError('无法访问收图文件夹或待传目录，请检查目录和磁盘连接后重试。');
     } catch (_) {
       await _releaseFolder();
       rethrow;

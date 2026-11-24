@@ -74,12 +74,14 @@ private final class DesktopUpdater: NSObject, SPUUpdaterDelegate {
   }
 }
 
-/// 持有用户选择目录的只读作用域，重启后通过书签重新授权。
+/// 使用 Finder 选择的目录，沙箱构建保留其安全作用域。
 private final class PhotoFolderAccess {
   private let channel: FlutterMethodChannel
   private let bookmarkKey = "ftp.watch.bookmark.v1"
   private var activeURL: URL?
   private var scopes: [String: URL] = [:]
+  private let unsandboxed = Bundle.main.object(forInfoDictionaryKey: "LvpaiUnsandboxedDistribution") as? Bool == true
+  private let localBookmarkPrefix = "local:"
 
   init(messenger: FlutterBinaryMessenger) {
     channel = FlutterMethodChannel(name: "ai.lvpai.ftp/folder-access", binaryMessenger: messenger)
@@ -94,6 +96,12 @@ private final class PhotoFolderAccess {
           panel.canChooseFiles = false
           panel.allowsMultipleSelection = false
           guard panel.runModal() == .OK, let url = panel.url else { result(nil); return }
+          if self.unsandboxed && call.method == "chooseScoped" {
+            try self.checkReadable(url)
+            let data = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+            result(["path": url.path, "bookmark": self.localBookmarkPrefix + data.base64EncodedString()])
+            return
+          }
           if call.method == "chooseScoped" {
             let granted = url.startAccessingSecurityScopedResource()
             defer { if granted { url.stopAccessingSecurityScopedResource() } }
@@ -109,6 +117,10 @@ private final class PhotoFolderAccess {
           guard let args = call.arguments as? [String: String],
                 let scope = args["scope"] else {
             result(FlutterMethodNotImplemented); return
+          }
+          if self.unsandboxed {
+            result(try self.restoreLocalFolder(args)?.path)
+            return
           }
           let data: Data?
           if let bookmark = args["bookmark"] {
@@ -152,13 +164,37 @@ private final class PhotoFolderAccess {
     }
   }
 
+  private func restoreLocalFolder(_ args: [String: String]) throws -> URL? {
+    let bookmark = args["bookmark"]
+    let url: URL
+    if let bookmark = bookmark, bookmark.hasPrefix(localBookmarkPrefix) {
+      guard let data = Data(base64Encoded: String(bookmark.dropFirst(localBookmarkPrefix.count))) else {
+        throw CocoaError(.fileReadCorruptFile)
+      }
+      var stale = false
+      url = try URL(resolvingBookmarkData: data, options: [.withoutUI, .withoutMounting],
+                    relativeTo: nil, bookmarkDataIsStale: &stale)
+    } else {
+      // 旧签名的安全作用域书签可能无法解析。对已有设置重新验证实际路径。
+      guard bookmark != nil || UserDefaults.standard.data(forKey: bookmarkKey) != nil,
+            let path = args["path"], path.hasPrefix("/") else { return nil }
+      url = URL(fileURLWithPath: path, isDirectory: true)
+    }
+    try checkReadable(url)
+    return url
+  }
+
+  private func checkReadable(_ url: URL) throws {
+    _ = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
+  }
+
   private func activate(_ url: URL) throws {
     release()
     guard url.startAccessingSecurityScopedResource() else {
       throw NSError(domain: "PhotoFolderAccess", code: 1)
     }
     activeURL = url
-    _ = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
+    try checkReadable(url)
   }
 
   private func save(_ url: URL) throws {

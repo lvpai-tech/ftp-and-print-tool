@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'auto_upload/cos_upload.dart';
 import 'transfer.dart';
+import 'workstation_storage.dart';
 
 /// 仅保存本机配置；Windows 和 Apple 平台使用各自的系统安全存储。
 class ProfileStore {
@@ -17,7 +18,7 @@ class ProfileStore {
   static const _applicationPrefix = 'cos.application.v2.';
   final FlutterSecureStorage _storage;
 
-  const ProfileStore({this._storage = const FlutterSecureStorage()});
+  const ProfileStore({this._storage = workstationCredentials});
 
   static String uploadScope(Uri api) =>
       sha256.convert(utf8.encode(api.origin)).toString();

@@ -2,19 +2,19 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 import '../auto_upload/cos_upload.dart' show workstationUploadApiBase;
 import '../auto_upload/workstation_enrollment.dart';
 import '../profile_store.dart';
+import '../workstation_storage.dart';
 
 /// Owns the request and device credentials in the operating system's secure storage.
 class PrintEnrollment {
   PrintEnrollment(this.client);
 
   final http.Client client;
-  static const storage = FlutterSecureStorage();
+  static const storage = workstationCredentials;
   static final origin = _origin();
   static final prefix =
       'printing.enrollment.${ProfileStore.uploadScope(origin)}.';

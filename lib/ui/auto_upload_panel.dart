@@ -184,7 +184,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
     final desktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
     final supported = desktop || Platform.isIOS;
     final uploader = station.uploader;
-    final active = station.running;
+    final active = uploader.running && !uploader.authorizationPaused;
     final working = station.busy || _picking;
     final jobs = uploader.jobs;
     final orderWait = uploader.orderWaitMessage;
@@ -368,7 +368,13 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
         style: secondaryAction.copyWith(
           backgroundColor: const WidgetStatePropertyAll(WorkstationStyle.card),
         ),
-        child: Text(station.hasFolder ? '更换收图文件夹' : '选择收图文件夹'),
+        child: Text(
+          station.folderUnavailable
+              ? '重新授权收图文件夹'
+              : station.hasFolder
+              ? '更换收图文件夹'
+              : '选择收图文件夹',
+        ),
       ),
       if (!Platform.isIOS && station.hasFolder)
         IconButton(
@@ -566,6 +572,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                       ],
                       if ((uploader.fatalError ??
                               station.message ??
+                              station.importUnavailable ??
                               (uploader.running ? uploader.message : null))
                           case final message?
                           when message.isNotEmpty && message != station.status)

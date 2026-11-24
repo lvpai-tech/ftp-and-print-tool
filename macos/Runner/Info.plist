@@ -36,5 +36,15 @@
 	<false/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>连接您配置的局域网 FTP 服务器并上传照片。</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>读取您在桌面上选取的照片，或监听您指定的收图文件夹。</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>读取您在文稿中选取的照片，或监听您指定的收图文件夹。</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>读取您在下载目录中选取的照片，或监听您指定的收图文件夹。</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>读取您在存储卡或外置磁盘上选取的照片及收图文件夹。</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>读取您在共享磁盘上选取的照片及收图文件夹。</string>
 </dict>
 </plist>

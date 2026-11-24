@@ -186,6 +186,16 @@ class _WorkstationState extends State<Workstation> {
             style: const TextStyle(color: Color(0xff923f20)),
           ),
         ),
+      if (bridge.systemPrinterIssue case final issue?)
+        MaterialBanner(
+          content: Text(issue),
+          actions: [
+            TextButton(
+              onPressed: bridge.checkSystemPrinters,
+              child: const Text('重新检查打印机'),
+            ),
+          ],
+        ),
       if (bridge.configured && bridge.config['statusCommand'] == null)
         const Padding(
           padding: EdgeInsets.all(12),
@@ -197,7 +207,12 @@ class _WorkstationState extends State<Workstation> {
       Expanded(
         child: !bridge.connected
             ? Center(
-                child: Text(bridge.error == null ? '正在连接打印内核…' : '暂时无法使用打印'),
+                child: bridge.storageUnavailable
+                    ? TextButton(
+                        onPressed: bridge.start,
+                        child: const Text('重新检查打印存储'),
+                      )
+                    : Text(bridge.error == null ? '正在连接打印内核…' : '暂时无法使用打印'),
               )
             : IndexedStack(
                 sizing: StackFit.expand,

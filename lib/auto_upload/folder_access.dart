@@ -45,6 +45,7 @@ class FolderAccess {
         ? await restore()
         : await channel.invokeMethod<String>('acquireScoped', {
             'scope': scope,
+            'path': path,
             'bookmark': ?bookmark,
           });
     if (restored == null || restored.isEmpty) {

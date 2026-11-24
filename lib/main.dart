@@ -9,6 +9,7 @@ import 'diagnostics/crash_reporting.dart';
 import 'printing/print_bridge.dart';
 import 'release/desktop_update.dart';
 import 'workstation_session.dart';
+import 'workstation_storage.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,7 +22,11 @@ Future<void> main(List<String> args) async {
     compatibility: args.contains('--graphics-compatibility'),
     bridge: bridge,
   );
-  final session = WorkstationSession(bridge, crashJournal: journal);
+  final session = WorkstationSession(
+    bridge,
+    crashJournal: journal,
+    checkUploadStorage: Platform.isMacOS ? checkMacUploadStorage : null,
+  );
   if (Platform.isMacOS) connectMacUpdater(session);
   final navigatorKey = GlobalKey<NavigatorState>();
   runApp(PhotoFtpApp(session: session, navigatorKey: navigatorKey));

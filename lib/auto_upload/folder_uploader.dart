@@ -189,7 +189,8 @@ class FolderUploader extends ChangeNotifier {
   bool get authorizationPaused => _authorizationPaused;
   bool get requiresStop => running || stopping || _journal != null;
   bool _directoryReadable = false;
-  bool get canFinishMigration => running && _directoryReadable && queueDrained;
+  bool get directoryReadable => running && _directoryReadable;
+  bool get canFinishMigration => directoryReadable && queueDrained;
   bool get queueDrained =>
       _waiting.isEmpty &&
       _noticePending.isEmpty &&

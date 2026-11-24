@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
@@ -32,7 +33,10 @@ void main() {
     );
   });
 
-  Future<StationUpload> station(CosUploadProfile profile) async {
+  Future<StationUpload> station(
+    CosUploadProfile profile, {
+    FolderAccess? access,
+  }) async {
     final value = StationUpload(
       profile: profile,
       store: store,
@@ -42,7 +46,7 @@ void main() {
       settings: await store.loadWatch(profile),
       transferSlots: UploadSlots(3),
       preparationSlots: UploadSlots(2),
-      folderAccess: FolderAccess(apple: false),
+      folderAccess: access ?? FolderAccess(apple: false),
     );
     addTearDown(() async {
       await value.suspend();
@@ -144,5 +148,55 @@ void main() {
     await store.removeCos(selected.profile);
     await blocked.changeFolder(selection);
     expect(blocked.message, contains('机位 ${selected.profile.stationId}'));
+  });
+
+  test('收图目录离线时报告不可用，目录恢复后继续同一队列', () async {
+    final photos = await Directory(p.join(root.path, 'camera')).create();
+    await store.saveCos(first);
+    final selected = await station(first);
+    await selected.changeFolder((path: photos.path, bookmark: null));
+    await selected.setEnabled(true);
+    expect(selected.running, isTrue);
+    final moved = await photos.rename(p.join(root.path, 'offline'));
+    await selected.uploader.scanNow();
+    expect(selected.status, '收图目录不可用');
+    expect(selected.canImport, isFalse);
+    await moved.rename(photos.path);
+    await selected.uploader.scanNow();
+    expect(selected.status, '监听中');
+    expect(selected.canImport, isTrue);
+  });
+
+  test('重选授权失效的原目录后恢复已启用机位', () async {
+    final photos = await Directory(p.join(root.path, 'camera')).create();
+    await store.saveCos(first);
+    await store.saveWatch(first, {
+      'folder': photos.path,
+      'folderIdentity': await photos.resolveSymbolicLinks(),
+      'folderBookmark': 'old',
+      'enabled': true,
+    });
+    const channel = MethodChannel('test/station-folder-access');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method != 'acquireScoped') return null;
+      final args = call.arguments as Map;
+      if (args['bookmark'] == 'old') {
+        throw PlatformException(code: 'FOLDER_ACCESS');
+      }
+      return photos.path;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final selected = await station(
+      first,
+      access: FolderAccess(channel: channel, apple: true),
+    );
+    await selected.restore();
+    expect(selected.status, '收图目录不可用');
+    expect(selected.enabled, isTrue);
+    await selected.changeFolder((path: photos.path, bookmark: 'new'));
+    expect(selected.running, isTrue);
+    expect((await store.loadWatch(first))?['folderBookmark'], 'new');
   });
 }

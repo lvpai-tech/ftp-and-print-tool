@@ -8,6 +8,7 @@ import 'package:lvpai_ftp_client/desktop_lifecycle.dart';
 import 'package:lvpai_ftp_client/ui/dropdown_field.dart';
 import 'package:lvpai_ftp_client/ui/transfer_page.dart';
 import 'package:lvpai_ftp_client/workstation_session.dart';
+import 'package:lvpai_ftp_client/workstation_storage.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:tray_manager/tray_manager.dart';
 
@@ -53,6 +54,29 @@ class WorkstationBridge extends ControlledBridge {
 
 void main() {
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+
+  testWidgets('上传存储检查失败时首页提示，重试通过后开放机位申请', (tester) async {
+    var accessible = false;
+    final bridge = WorkstationBridge();
+    final session = WorkstationSession(
+      bridge,
+      checkUploadStorage: () async {
+        if (!accessible) throw WorkstationStorageError('钥匙串需要解锁');
+      },
+    );
+    await tester.pumpWidget(PhotoFtpApp(session: session));
+    await tester.pumpAndSettle();
+    expect(tester.widget<Text>(keyed('status-upload')).data, '上传配置需要处理');
+    expect(tester.widget<Text>(keyed('status-print')).data, '自动打印已关闭');
+
+    await open(tester, 'open-upload');
+    expect(find.text('钥匙串需要解锁'), findsOneWidget);
+    expect(find.text('申请机位'), findsNothing);
+    accessible = true;
+    await tester.tap(find.text('重试读取机位'));
+    await tester.pumpAndSettle();
+    expect(find.text('申请机位'), findsOneWidget);
+  });
 
   for (final width in [420.0, 820.0, 1280.0, 1600.0]) {
     testWidgets('工作台 ${width.toInt()}：首页进出并保留上传页', (tester) async {

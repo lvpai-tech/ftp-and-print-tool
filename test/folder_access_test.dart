@@ -79,6 +79,7 @@ void main() {
     ]);
     expect(calls[1].arguments, {
       'scope': '20.selection',
+      'path': '/相机',
       'bookmark': 'c2NvcGU=',
     });
     expect(calls[2].arguments, {'scope': '20.selection'});

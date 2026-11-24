@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show mapEquals;
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -15,6 +16,7 @@ import '../printing/print_bridge.dart';
 import '../printing/ui/photo_batch_page.dart';
 import '../profile_store.dart';
 import '../workstation_session.dart';
+import '../workstation_storage.dart';
 import 'app_dialogs.dart';
 import 'auto_upload_panel.dart';
 import 'cos_upload_dialog.dart';
@@ -86,7 +88,9 @@ class _TransferPageState extends State<TransferPage>
   }
 
   Future<void> _load() async {
+    if (!_loading) setState(() => _loading = true);
     try {
+      await widget.session?.checkUploadStorage?.call();
       final api = _api;
       if (api == null) throw StateError('上传服务地址无效，请联系管理员');
       await _store.migrateUploads(api);
@@ -94,8 +98,14 @@ class _TransferPageState extends State<TransferPage>
     } catch (error) {
       if (mounted) {
         setState(() {
-          _error = error is StateError ? error.message : '无法读取机位配置，请重试';
+          _error = switch (error) {
+            StateError(:final message) => message,
+            PlatformException() when Platform.isMacOS =>
+              macWorkstationStorageError(error).message,
+            _ => '无法读取机位配置，请重试',
+          };
         });
+        widget.session?.setTransferIssue('上传配置需要处理');
       }
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -182,6 +192,13 @@ class _TransferPageState extends State<TransferPage>
     final configured = _stations.isNotEmpty;
     final active = _stations.values.any((station) => station.active);
     final uploading = _stations.values.any((station) => station.uploading);
+    widget.session?.setTransferIssue(
+      _error != null
+          ? '上传配置需要处理'
+          : _stations.values.any((station) => station.folderUnavailable)
+          ? '收图目录需要处理'
+          : null,
+    );
     if (_configuredReported != configured) {
       _configuredReported = configured;
       widget.onConfiguredChanged?.call(configured);
@@ -222,7 +239,7 @@ class _TransferPageState extends State<TransferPage>
 
   Future<void> _configure([StationUpload? station]) async {
     final api = _api;
-    if (_configuring || api == null) return;
+    if (_configuring || _loading || _error != null || api == null) return;
     _configuring = true;
     try {
       final profile = await showDialog<CosUploadProfile>(
@@ -362,7 +379,7 @@ class _TransferPageState extends State<TransferPage>
                 : '已绑定 ${stations.length} 个机位 · $active 个监听中 · $uploading 个上传中',
           ),
         const SizedBox(height: 16),
-        if (api != null)
+        if (api != null && _error == null)
           WorkstationEnrollmentPanel(
             api: api,
             store: _store,
