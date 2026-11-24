@@ -84,7 +84,9 @@ class CosUpload {
     ..connectionTimeout = const Duration(seconds: 15)
     ..idleTimeout = const Duration(seconds: 20);
 
-  CosUpload(this.profile);
+  CosUpload(this.profile, {this.personnelToken});
+
+  final String? Function()? personnelToken;
 
   Future<String> upload(
     File file,
@@ -269,6 +271,14 @@ class CosUpload {
     final request = await _http.openUrl(method, uri);
     request.followRedirects = false;
     request.headers.set('X-Workstation-Token', profile.token);
+    if (method == 'POST' && suffix.isEmpty && personnelToken != null) {
+      final token = personnelToken!();
+      if (token == null) {
+        request.abort();
+        throw CosUploadAuthorizationError('请重新登录后继续接收照片');
+      }
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+    }
     if (body != null) {
       request.headers.contentType = ContentType.json;
       request.write(jsonEncode(body));
@@ -283,7 +293,11 @@ class CosUpload {
     if (response.statusCode != 200) {
       await response.drain<void>().timeout(const Duration(seconds: 10));
       if (response.statusCode == 401 || response.statusCode == 403) {
-        throw CosUploadAuthorizationError('机位收图授权已失效或停用，请联系运营');
+        throw CosUploadAuthorizationError(
+          personnelToken == null
+              ? '机位收图授权已失效或停用，请联系运营'
+              : '当前账号或机位的收图授权无法使用，请返回工作台核对',
+        );
       }
       throw StateError('工作台上传服务请求失败（HTTP ${response.statusCode}）');
     }
@@ -293,7 +307,11 @@ class CosUpload {
         .timeout(const Duration(seconds: 10));
     final result = jsonDecode(text);
     if (result is Map && const {40101, 40102, 40301}.contains(result['code'])) {
-      throw CosUploadAuthorizationError('机位收图授权已失效或停用，请联系运营');
+      throw CosUploadAuthorizationError(
+        personnelToken == null
+            ? '机位收图授权已失效或停用，请联系运营'
+            : '当前账号或机位的收图授权无法使用，请返回工作台核对',
+      );
     }
     if (result is! Map || result['code'] != 200 || result['data'] is! Map) {
       throw StateError('工作台上传服务拒绝请求，请检查机位权限和服务配置');

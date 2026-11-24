@@ -26,6 +26,7 @@ class StationUpload extends ChangeNotifier {
     FolderAccess? folderAccess,
     UploadFolders? folders,
     Map<String, dynamic>? settings,
+    this.personnelToken,
   }) : _managed = Directory(
          p.join(
            inboxRoot.path,
@@ -63,6 +64,7 @@ class StationUpload extends ChangeNotifier {
   CosUploadProfile profile;
   final ProfileStore store;
   final FolderUploader uploader;
+  final String? Function()? personnelToken;
   final Directory _managed;
   final UploadFolders _folders;
   final bool _legacyRecursive;
@@ -324,6 +326,7 @@ class StationUpload extends ChangeNotifier {
         Directory(folder),
         null,
         cosProfile: profile,
+        personnelToken: personnelToken,
         recursive: !legacy || _legacyRecursive,
         includeExisting: managed || _scanExisting,
       );

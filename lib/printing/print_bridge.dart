@@ -31,6 +31,7 @@ class PrintBridge extends ChangeNotifier {
   Future<void>? _checkingPrinters;
   bool connected = false;
   bool working = false;
+  bool starting = false;
   bool get configured => snapshot['configured'] == true;
   Json get state => Map<String, dynamic>.from(snapshot['state'] ?? {});
   Json get config => Map<String, dynamic>.from(snapshot['config'] ?? {});
@@ -46,16 +47,38 @@ class PrintBridge extends ChangeNotifier {
   }
 
   /// 发布包只使用随包内核；开发通过显式环境变量指定仓库内核。
-  Future<void> start() {
+  Future<void> start({
+    String? personnelToken,
+    Uri? personnelOrigin,
+    String? scenicId,
+  }) {
     if (connected) return Future.value();
-    return _starting ??= _start().whenComplete(() => _starting = null);
+    return _starting ??= _start(
+      personnelToken: personnelToken,
+      personnelOrigin: personnelOrigin,
+      scenicId: scenicId,
+    ).whenComplete(() => _starting = null);
   }
 
-  Future<void> _start() async {
+  Future<void> _start({
+    required String? personnelToken,
+    required Uri? personnelOrigin,
+    required String? scenicId,
+  }) async {
+    starting = true;
     error = null;
     storageUnavailable = false;
     notifyListeners();
     try {
+      final printOrigin = PrintEnrollment.origin;
+      if (personnelOrigin != null &&
+          personnelOrigin.origin != printOrigin.origin) {
+        throw StateError('打印服务须与工作台登录使用同一网关地址');
+      }
+      if (personnelOrigin != null &&
+          (personnelToken == null || scenicId == null)) {
+        throw StateError('请先登录并选择工作景区');
+      }
       final runtime = resolvePrintRuntime();
       final node =
           Platform.environment['LVPAI_PRINT_NODE'] ??
@@ -100,7 +123,7 @@ class PrintBridge extends ChangeNotifier {
         environment: {
           'PRINT_AGENT_CONFIG': configPath,
           'LVPAI_PRINT_APP_ROOT': runtime,
-          'PRINT_AGENT_BASE': PrintEnrollment.origin
+          'PRINT_AGENT_BASE': printOrigin
               .replace(path: '/api/operation')
               .toString(),
         },
@@ -118,7 +141,11 @@ class PrintBridge extends ChangeNotifier {
         error = text.trim();
         notifyListeners();
       });
-      await call('initialize', [credentials]);
+      await call('initialize', [
+        credentials,
+        if (personnelToken != null)
+          {'token': personnelToken, 'scenicId': scenicId},
+      ]);
       connected = true;
       notifyListeners();
       if (Platform.isMacOS) unawaited(checkSystemPrinters());
@@ -127,6 +154,14 @@ class PrintBridge extends ChangeNotifier {
       error ??= e is StateError
           ? e.message
           : '$e'.replaceFirst(RegExp(r'^Bad state:\s*'), '');
+      final process = _process;
+      if (process != null) {
+        await process.stdin.close();
+        await process.exitCode;
+        _process = null;
+      }
+    } finally {
+      starting = false;
       notifyListeners();
     }
   }
@@ -217,7 +252,11 @@ class PrintBridge extends ChangeNotifier {
   }
 
   Future<dynamic> run(String method, [List<dynamic> args = const []]) async {
-    if (busy) throw StateError('请等待当前操作完成');
+    if (busy &&
+        !(method == 'autoPrint' && args.length == 1 && args[0] == false)) {
+      throw StateError('请等待当前操作完成');
+    }
+    if (busy) return call(method, args);
     working = true;
     error = null;
     notifyListeners();
@@ -232,6 +271,26 @@ class PrintBridge extends ChangeNotifier {
     }
   }
 
+  Future<void> blockNewWork() async {
+    if (starting) await waitUntilIdle();
+    if (connected) await call('lockPersonnel');
+  }
+
+  Future<void> waitUntilIdle() async {
+    final idle = Completer<void>();
+    void check() {
+      if (!starting && !busy && !idle.isCompleted) idle.complete();
+    }
+
+    addListener(check);
+    try {
+      check();
+      await idle.future.timeout(const Duration(minutes: 20));
+    } finally {
+      removeListener(check);
+    }
+  }
+
   Future<void> shutdown() async {
     if (busy) throw StateError('打印处理中，请等待完成后退出');
     final process = _process;
@@ -241,6 +300,11 @@ class PrintBridge extends ChangeNotifier {
     await process.exitCode.timeout(const Duration(seconds: 30));
     _process = null;
     connected = false;
+    snapshot = {};
+    error = null;
+    systemPrinterIssue = null;
+    storageUnavailable = false;
+    notifyListeners();
   }
 
   /// 环境变量优先；否则可执行文件旁，再尝试 macOS `Contents/Resources/print-runtime`。

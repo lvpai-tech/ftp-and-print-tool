@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../auto_upload/workstation_enrollment.dart';
 import '../profile_store.dart';
+import '../workstation_session.dart';
 import 'design.dart';
 import 'dropdown_field.dart';
 import 'workstation_form_dialog.dart';
@@ -17,9 +18,11 @@ class WorkstationEnrollmentPanel extends StatefulWidget {
     required this.store,
     required this.onBound,
     required this.onManual,
+    this.session,
   });
 
   final Uri api;
+  final WorkstationSession? session;
   final ProfileStore store;
   final Future<void> Function() onBound;
   final Future<void> Function() onManual;
@@ -39,6 +42,7 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
     widget.api,
     widget.store,
     _client,
+    session: widget.session,
   );
   final _applications = <String, _Application>{};
   String? _error;
@@ -59,6 +63,13 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
         _error = null;
         for (final local in applications) {
           final draft = local['draft'] as Map<String, dynamic>;
+          final scenic = widget.session?.scenic;
+          if (scenic != null &&
+              (draft['scenicId'] != null
+                  ? draft['scenicId'] != scenic.id
+                  : draft['scenicName'] != scenic.name)) {
+            continue;
+          }
           final id = draft['requestId'] as String;
           _applications.putIfAbsent(
             id,
@@ -121,17 +132,23 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
   }
 
   Future<void> _apply() async {
-    final draft = await showDialog<({String scenic, String location})>(
-      context: context,
-      builder: (_) => _EnrollmentDialog(loadScenics: _enrollment.loadScenics),
-    );
+    final draft =
+        await showDialog<({EnrollmentScenic scenic, String location})>(
+          context: context,
+          builder: (_) =>
+              _EnrollmentDialog(loadScenics: _enrollment.loadScenics),
+        );
     if (draft == null || !mounted || _applying) return;
     setState(() => _applying = true);
     try {
-      final id = await _enrollment.begin(draft.scenic, draft.location);
+      final id = await _enrollment.begin(
+        draft.scenic.name,
+        draft.location,
+        scenicId: draft.scenic.id,
+      );
       if (!mounted) return;
       final app = _Application(
-        draft.scenic,
+        draft.scenic.name,
         draft.location,
         createdAt: DateTime.now(),
       );
@@ -346,7 +363,7 @@ class _EnrollmentDialogState extends State<_EnrollmentDialog> {
     if (location.isEmpty) {
       setState(() => _missingLocation = true);
     } else {
-      Navigator.of(context).pop((scenic: scenic.name, location: location));
+      Navigator.of(context).pop((scenic: scenic, location: location));
     }
   }
 

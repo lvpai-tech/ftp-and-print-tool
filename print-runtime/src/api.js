@@ -6,10 +6,12 @@
  */
 
 async function call(config, method, route, body, signal, { redirect } = {}) {
+  const personnel = config.authorizeRequest?.(route, config.token);
   const response = await fetch(config.base + route, {
     method,
     headers: {
       'X-Print-Agent-Token': config.token,
+      ...(personnel ? { Authorization: 'Bearer ' + personnel } : {}),
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -31,7 +33,8 @@ async function callJson(config, method, route, body, signal, options) {
     error.httpStatus = response.status;
     if (response.status === 401 || payload?.code === 40101 || payload?.code === 40102) {
       error.authorizationLost = true;
-      error.message = '打印设备授权无效或已撤销，请联系运营';
+      error.message = config.authorizeRequest ? '人员会话或打印设备授权无法使用，请返回工作台核对'
+        : '打印设备授权无效或已撤销，请联系运营';
     }
     throw error;
   }

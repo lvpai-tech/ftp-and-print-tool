@@ -209,7 +209,9 @@ class _WorkstationState extends State<Workstation> {
             ? Center(
                 child: bridge.storageUnavailable
                     ? TextButton(
-                        onPressed: bridge.start,
+                        onPressed:
+                            widget.session?.startPrinting ??
+                            () => bridge.start(),
                         child: const Text('重新检查打印存储'),
                       )
                     : Text(bridge.error == null ? '正在连接打印内核…' : '暂时无法使用打印'),
@@ -226,6 +228,7 @@ class _WorkstationState extends State<Workstation> {
                     bridge: bridge,
                     perform: perform,
                     embedded: false,
+                    session: widget.session,
                   ),
                   bridge.configured
                       ? jobsView()
@@ -308,6 +311,7 @@ class _WorkstationState extends State<Workstation> {
               bridge: bridge,
               perform: perform,
               embedded: true,
+              session: widget.session,
             ),
           ),
         ),
@@ -441,13 +445,18 @@ class _WorkstationState extends State<Workstation> {
           '自动打印 ${enabled ? '开启' : '关闭'}',
           style: const TextStyle(color: WorkstationStyle.ink, fontSize: 13),
         ),
+        if (bridge.printing && !enabled)
+          TextButton(
+            onPressed: () => perform('autoPrint', [false]),
+            child: const Text('当前单结束后停止'),
+          ),
         const SizedBox(width: 4),
         Semantics(
           label: '自动打印',
           child: Switch(
             value: enabled,
             activeTrackColor: WorkstationStyle.accent,
-            onChanged: bridge.configured && !bridge.busy
+            onChanged: bridge.configured && (!bridge.busy || enabled)
                 ? (value) async {
                     if (!value ||
                         await confirm(
@@ -516,7 +525,7 @@ class _WorkstationState extends State<Workstation> {
                 ),
               ),
               const SizedBox(height: 24),
-              PrintEnrollmentPanel(bridge: bridge),
+              PrintEnrollmentPanel(bridge: bridge, session: widget.session),
             ],
           ),
         ),

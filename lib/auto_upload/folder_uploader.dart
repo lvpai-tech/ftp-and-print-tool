@@ -418,6 +418,7 @@ class FolderUploader extends ChangeNotifier {
     Directory root,
     ServerProfile? profile, {
     CosUploadProfile? cosProfile,
+    String? Function()? personnelToken,
     bool recursive = true,
     bool includeExisting = false,
   }) async {
@@ -440,7 +441,9 @@ class FolderUploader extends ChangeNotifier {
     _profile = profile;
     _authorizationPaused = false;
     _directoryReadable = false;
-    _cos = cosProfile == null ? null : CosUpload(cosProfile);
+    _cos = cosProfile == null
+        ? null
+        : CosUpload(cosProfile, personnelToken: personnelToken);
     _recursive = recursive;
     _includeExisting = includeExisting;
     _resetQueue();

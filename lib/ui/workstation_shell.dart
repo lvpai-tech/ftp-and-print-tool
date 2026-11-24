@@ -13,8 +13,14 @@ import 'update_button.dart';
 import 'workstation_home.dart';
 
 class WorkstationShell extends StatefulWidget {
-  const WorkstationShell({super.key, required this.session});
+  const WorkstationShell({
+    super.key,
+    required this.session,
+    this.onLogout,
+    this.onChangeScenic,
+  });
   final WorkstationSession session;
+  final Future<void> Function()? onLogout, onChangeScenic;
 
   @override
   State<WorkstationShell> createState() => _WorkstationShellState();
@@ -49,6 +55,51 @@ class _WorkstationShellState extends State<WorkstationShell> {
   void _open(WorkModule module) {
     FocusScope.of(context).unfocus();
     setState(() => _module = module);
+  }
+
+  Future<void> _accountAction(String action) async {
+    final blockers = widget.session.signOutBlockers;
+    if (blockers.isNotEmpty) {
+      final goUpload = widget.session.activeStations.isNotEmpty;
+      final goPrint =
+          widget.session.printBridge.busy ||
+          widget.session.printBridge.state['autoPrint'] == true;
+      await showDialog<void>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+          title: Text('当前无法$action'),
+          content: Text(blockers.join('\n')),
+          actions: [
+            if (goUpload)
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(dialog);
+                  _open(WorkModule.upload);
+                },
+                child: const Text('去上传'),
+              ),
+            if (goPrint)
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(dialog);
+                  _open(WorkModule.print);
+                },
+                child: const Text('去打印'),
+              ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialog),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    if (action == '切换景区') {
+      await widget.onChangeScenic?.call();
+    } else {
+      await widget.onLogout?.call();
+    }
   }
 
   Future<void> _showUninstallHelp() async {
@@ -149,6 +200,45 @@ class _WorkstationShellState extends State<WorkstationShell> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 UpdateButton(session: session),
+                                if (session.identity case final identity?)
+                                  PopupMenuButton<String>(
+                                    tooltip: '工作台账号',
+                                    onSelected: _accountAction,
+                                    itemBuilder: (_) => [
+                                      if (identity.scenics.length > 1)
+                                        const PopupMenuItem(
+                                          value: '切换景区',
+                                          child: Text('切换景区'),
+                                        ),
+                                      const PopupMenuItem(
+                                        value: '切换账号',
+                                        child: Text('切换账号'),
+                                      ),
+                                      const PopupMenuItem(
+                                        value: '退出登录',
+                                        child: Text('退出登录'),
+                                      ),
+                                    ],
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 10,
+                                      ),
+                                      child: ConstrainedBox(
+                                        constraints: BoxConstraints(
+                                          maxWidth: width < 500 ? 112 : 200,
+                                        ),
+                                        child: Text(
+                                          '${identity.name} · ${session.scenic?.name ?? ''}',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                                 if (Platform.isWindows) ...[
                                   const SizedBox(width: 8),
                                   TextButton(
@@ -214,7 +304,10 @@ class _WorkstationShellState extends State<WorkstationShell> {
                 ),
               ),
             ),
-            if (session.updating) const ModalBarrier(dismissible: false),
+            if (session.updating ||
+                session.closingWorkspace ||
+                session.workspaceLocked)
+              const ModalBarrier(dismissible: false),
           ],
         );
       },

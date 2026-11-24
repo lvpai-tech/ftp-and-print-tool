@@ -41,9 +41,19 @@ async function serve({ input = process.stdin, send, configPath, root }) {
   let bridge;
   let mutating = false;
   let closing = false;
-  const snapshot = () => bridge ? { ...bridge.snapshot(), configured: true } : {
-    configured: false, config: {}, state: {}, logs: [], history: [],
-  };
+  const empty = () => ({ configured: false, config: {}, state: {}, logs: [], history: [] });
+  let personnel;
+  let personnelLocked = false;
+  function snapshot() {
+    if (!bridge) return empty();
+    const current = bridge.snapshot();
+    if (!personnel) return { ...current, configured: true };
+    const profiles = current.config.scenicProfiles.filter(profile => profile.scenicIds.includes(personnel.scenicId));
+    if (!profiles.some(profile => profile.id === current.config.activeScenicProfileId)) {
+      return { ...empty(), state: { printBusy: current.state.printBusy, autoPrint: current.state.autoPrint } };
+    }
+    return { ...current, configured: true, config: { ...current.config, scenicProfiles: profiles } };
+  }
   const emit = () => send({ event: 'snapshot', data: snapshot() });
   const credentials = new Map();
   const authorizedBase = process.env.PRINT_AGENT_BASE || DEFAULT_OPERATION_BASE;
@@ -56,13 +66,24 @@ async function serve({ input = process.stdin, send, configPath, root }) {
   const authorizedProfiles = raw => (raw.scenicProfiles || [])
     .filter(profile => credentials.has(profile.id))
     .map(profile => ({ ...profile, token: credentials.get(profile.id) }));
+  function authorizeRequest(route, token) {
+    if (!personnel || /^\/print-agents\/(?:crash-reports$|jobs\/[^/]+\/(?:result$|recover$|files\/))/.test(route)) return null;
+    if (personnelLocked) throw new Error('工作台人员会话已锁定');
+    const profile = bridge?.runtime.getConfig().scenicProfiles.find(entry => entry.token === token);
+    if (profile && !profile.scenicIds.includes(personnel.scenicId)) throw new Error('打印档案不属于当前工作景区');
+    return personnel.token;
+  }
   async function boot() {
     bridge = await createRuntime({ configPath,
       lockDir: path.join(path.dirname(configPath), '.runtime'), skipLock: true,
       transformSavedConfig: stripCredentials,
+      authorizeRequest: personnel ? authorizeRequest : undefined,
+      canTakeWork: () => !personnelLocked,
       transformRaw(raw) {
         const profiles = authorizedProfiles(raw);
-        return { ...raw, base: authorizedBase, token: profiles[0].token, scenicProfiles: profiles };
+        const selected = personnel && profiles.find(profile => (profile.scenicIds || []).includes(personnel.scenicId));
+        return { ...raw, base: authorizedBase, token: profiles[0].token, scenicProfiles: profiles,
+          ...(selected ? { activeScenicProfileId: selected.id } : {}) };
       },
       forceManualStart: true, includePrintIssues: true, onStateChange: emit });
     bridge.start();
@@ -75,6 +96,7 @@ async function serve({ input = process.stdin, send, configPath, root }) {
   function batchConfig(scope) {
     const config = bridge.runtime.getConfig();
     if (scope === undefined) return config;
+    if (personnel && scope?.scenicId !== personnel.scenicId) throw new Error('机位不属于当前工作景区');
     const profile = config.scenicProfiles.find((entry) => entry.id === scope?.profileId);
     if (!profile || (scope.scenicId && !profile.scenicIds.includes(scope.scenicId))) {
       throw new Error('机位所属景区的打印档案已变更，请重新打开取片批次');
@@ -87,12 +109,34 @@ async function serve({ input = process.stdin, send, configPath, root }) {
     if (method === 'listPrinters') return listPrinters();
     if (method === 'initialize') {
       if (initialized) return snapshot();
+      if (args[1]) {
+        if (typeof args[1].token !== 'string' || !/^[1-9]\d*$/.test(args[1].scenicId)) {
+          throw new Error('工作台人员会话或景区无效');
+        }
+        personnel = args[1];
+      }
       for (const [id, token] of Object.entries(args[0] || {})) {
         if (/^[a-f0-9-]{36}$/.test(id) && /^[a-f0-9]{64}$/.test(token)) credentials.set(id, token);
       }
       if (authorizedProfiles(stored()).length) await boot();
       initialized = true;
       return snapshot();
+    }
+    if (method === 'lockPersonnel') {
+      personnelLocked = true;
+      if (bridge) bridge.scheduler.stop();
+      return { locked: true };
+    }
+    if (method === 'resumePersonnel') {
+      personnelLocked = false;
+      if (bridge) {
+        bridge.scheduler.setAutoPrint(false);
+        bridge.start();
+      }
+      return snapshot();
+    }
+    if (personnelLocked && method !== 'shutdown' && !(method === 'autoPrint' && args[0] === false)) {
+      throw new Error('工作台人员会话已锁定');
     }
     if (method === 'printerStatus') {
       if (!bridge) throw new Error('请先连接景区');
@@ -121,14 +165,15 @@ async function serve({ input = process.stdin, send, configPath, root }) {
       if (!/^[a-f0-9-]{36}$/.test(id) || !/^[a-f0-9]{64}$/.test(token)) {
         throw new Error('打印设备凭据无效');
       }
+      if (personnel && scenicId !== personnel.scenicId) throw new Error('打印授权不属于当前工作景区');
       if (bridge) {
-        const result = await bridge.addScenicProfile({ id, token, scenicId });
+        const result = await bridge.addScenicProfile({ id, token, scenicId, activate: Boolean(personnel) });
         credentials.set(id, token);
         return result;
       }
       const defaults = JSON.parse(fs.readFileSync(path.join(root,
         process.platform === 'darwin' ? 'config.mac.example.json' : 'config.example.json'), 'utf8'));
-      const me = await fetchMe({ base: authorizedBase, token });
+      const me = await fetchMe({ base: authorizedBase, token, authorizeRequest: personnel ? authorizeRequest : undefined });
       if (!me?.scenicId || String(me.scenicId) !== scenicId) throw new Error('打印授权景区不一致');
       const profile = { id, token, scenicIds: [scenicId], scenicName: me.scenicName, scenicCode: me.scenicCode };
       const config = normalizeConfig({
@@ -142,6 +187,9 @@ async function serve({ input = process.stdin, send, configPath, root }) {
       return snapshot();
     }
     if (!bridge) throw new Error('请先申请打印权限');
+    if (personnel && !snapshot().configured && method !== 'sendCrashReport') {
+      throw new Error('当前工作景区尚未开通打印');
+    }
     if (method === 'recoveryDetails') return bridge.scheduler.recoveryDetails(args[0]);
     if (method === 'recoverPrintJob') {
       await bridge.scheduler.recoverPrintJob(args[0], args[1]);
@@ -171,6 +219,10 @@ async function serve({ input = process.stdin, send, configPath, root }) {
           && !config.allowDefaultPrinter) {
         throw new Error('请先在打印设置中选择并保存本机打印机');
       }
+      if (!enabled && bridge.scheduler.getState().printBusy) {
+        bridge.scheduler.setAutoPrint(false);
+        return snapshot();
+      }
       return bridge.setAutoPrint(enabled);
     }
     const methods = new Set(['printJobs', 'continueJobs', 'markUnprinted', 'confirmPrinted', 'queryJobs',
@@ -186,7 +238,8 @@ async function serve({ input = process.stdin, send, configPath, root }) {
       if (!Number.isSafeInteger(request.id) || typeof request.method !== 'string'
           || !Array.isArray(request.args)) throw new Error('请求格式无效');
       if (closing) throw new Error('代理正在退出');
-      const mutation = mutations.has(request.method) || request.method === 'shutdown';
+      const stop = request.method === 'autoPrint' && request.args[0] === false;
+      const mutation = !stop && (mutations.has(request.method) || request.method === 'shutdown');
       if (mutation && (mutating || bridge?.scheduler.getState().printBusy)) {
         throw new Error('任务处理中，请等待完成；不能中断或重复送打');
       }

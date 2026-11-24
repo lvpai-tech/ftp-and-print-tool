@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import 'branding.dart';
 import 'ui/design.dart';
 import 'ui/transfer_page.dart';
+import 'ui/workstation_entry.dart';
 import 'ui/workstation_shell.dart';
 import 'workstation_session.dart';
 
@@ -69,6 +70,8 @@ class PhotoFtpApp extends StatelessWidget {
     ),
     home: session == null
         ? const TransferPage()
-        : WorkstationShell(session: session!),
+        : session!.account == null
+        ? WorkstationShell(session: session!)
+        : WorkstationEntry(session: session!),
   );
 }

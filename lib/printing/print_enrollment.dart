@@ -7,11 +7,13 @@ import 'package:http/http.dart' as http;
 import '../auto_upload/cos_upload.dart' show workstationUploadApiBase;
 import '../auto_upload/workstation_enrollment.dart';
 import '../profile_store.dart';
+import '../workstation_session.dart';
 import '../workstation_storage.dart';
 
 /// Owns the request and device credentials in the operating system's secure storage.
 class PrintEnrollment {
-  PrintEnrollment(this.client);
+  PrintEnrollment(this.client, {this.session});
+  final WorkstationSession? session;
 
   final http.Client client;
   static const storage = workstationCredentials;
@@ -48,8 +50,12 @@ class PrintEnrollment {
         '-8${hex.substring(17, 20)}-${hex.substring(20)}';
   }
 
-  Future<List<EnrollmentScenic>> loadScenics() =>
-      WorkstationEnrollment(origin, const ProfileStore(), client).loadScenics();
+  Future<List<EnrollmentScenic>> loadScenics() => WorkstationEnrollment(
+    origin,
+    const ProfileStore(),
+    client,
+    session: session,
+  ).loadScenics();
 
   Future<Map<String, dynamic>> begin(
     EnrollmentScenic scenic,
@@ -157,6 +163,15 @@ class PrintEnrollment {
     );
     final request = http.Request(method, uri)..followRedirects = false;
     request.headers['X-Print-Enrollment-Token'] = row['requestToken'] as String;
+    if (session?.account != null) {
+      final token = session?.personnelToken;
+      if (token == null ||
+          session?.account?.origin?.origin != origin.origin ||
+          row['scenicId'] != session?.scenic?.id) {
+        throw const EnrollmentError('请登录当前环境并选择该申请所属景区');
+      }
+      request.headers['Authorization'] = 'Bearer $token';
+    }
     if (deviceToken != null) {
       request.headers['X-Print-Agent-Token'] = deviceToken;
     }

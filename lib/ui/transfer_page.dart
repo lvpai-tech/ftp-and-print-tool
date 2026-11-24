@@ -15,6 +15,7 @@ import '../branding.dart';
 import '../printing/print_bridge.dart';
 import '../printing/ui/photo_batch_page.dart';
 import '../profile_store.dart';
+import '../workstation_account.dart';
 import '../workstation_session.dart';
 import '../workstation_storage.dart';
 import 'app_dialogs.dart';
@@ -100,12 +101,13 @@ class _TransferPageState extends State<TransferPage>
         setState(() {
           _error = switch (error) {
             StateError(:final message) => message,
+            WorkstationAccountError(:final message) => message,
             PlatformException() when Platform.isMacOS =>
               macWorkstationStorageError(error).message,
             _ => '无法读取机位配置，请重试',
           };
         });
-        widget.session?.setTransferIssue('上传配置需要处理');
+        _refresh();
       }
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -127,9 +129,44 @@ class _TransferPageState extends State<TransferPage>
     );
   });
 
+  Future<void> _stopOtherStations() => _changeStations(() async {
+    final scenicId = widget.session?.scenic?.id;
+    await Future.wait(
+      _stations.values
+          .where(
+            (station) =>
+                station.profile.scenicId != scenicId &&
+                (station.active || station.enabled),
+          )
+          .map((station) => station.setEnabled(false)),
+    );
+  });
+
   Future<void> _reloadStations() => _changeStations(() async {
     if (!mounted) return;
-    final profiles = await _store.loadStations(_api!);
+    final saved = await _store.loadStations(_api!);
+    final account = widget.session?.account;
+    final profiles = account == null
+        ? saved
+        : (await Future.wait(
+            saved.map((profile) async {
+              try {
+                final scenic = await account.stationScenic(profile);
+                return CosUploadProfile(
+                  profile.api.origin,
+                  profile.stationId,
+                  profile.token,
+                  stationName: profile.stationName,
+                  stationCode: profile.stationCode,
+                  scenicId: scenic.id,
+                  scenicName: scenic.name,
+                );
+              } on WorkstationAccountError catch (error) {
+                if (!error.deniedDevice) rethrow;
+                return null;
+              }
+            }),
+          )).whereType<CosUploadProfile>().toList();
     if (profiles.isNotEmpty) {
       final support = _support ??=
           await (widget.supportDirectory ?? getApplicationSupportDirectory)();
@@ -177,6 +214,9 @@ class _TransferPageState extends State<TransferPage>
         folders: _folders,
         transferSlots: _transferSlots,
         preparationSlots: _preparationSlots,
+        personnelToken: account == null
+            ? null
+            : () => widget.session?.personnelToken,
       )..addListener(_refresh);
       _stations[profile.stationId] = station;
       if (_foreground && !_pausedForUpdate) starts.add(station.restore());
@@ -192,6 +232,10 @@ class _TransferPageState extends State<TransferPage>
     final configured = _stations.isNotEmpty;
     final active = _stations.values.any((station) => station.active);
     final uploading = _stations.values.any((station) => station.uploading);
+    widget.session?.activeStations = _stations.values
+        .where((station) => station.active || station.uploading || station.busy)
+        .map(_stationLabel)
+        .toList();
     widget.session?.setTransferIssue(
       _error != null
           ? '上传配置需要处理'
@@ -238,6 +282,7 @@ class _TransferPageState extends State<TransferPage>
   }
 
   Future<void> _configure([StationUpload? station]) async {
+    if (widget.session?.closingWorkspace == true) return;
     final api = _api;
     if (_configuring || _loading || _error != null || api == null) return;
     _configuring = true;
@@ -251,8 +296,17 @@ class _TransferPageState extends State<TransferPage>
         await showAppMessage(context, message: '该机位已绑定。请在对应机位详情更新密钥。');
         return;
       }
+      final account = widget.session?.account;
+      if (account != null) {
+        final scenic = await account.stationScenic(profile);
+        if (scenic.id != widget.session?.scenic?.id) {
+          throw const WorkstationAccountError('机位不属于当前工作景区');
+        }
+      }
       await _store.saveCos(profile);
       await _reloadStations();
+    } on WorkstationAccountError catch (error) {
+      if (mounted) await showAppMessage(context, message: error.message);
     } catch (_) {
       if (mounted) {
         await showAppMessage(context, message: '无法保存或读取机位配置，请检查系统安全存储权限后重试。');
@@ -333,12 +387,19 @@ class _TransferPageState extends State<TransferPage>
   }
 
   Widget _list() {
-    final stations = _stations.values.toList()
-      ..sort(
-        (a, b) => (a.profile.stationCode ?? a.profile.stationId).compareTo(
-          b.profile.stationCode ?? b.profile.stationId,
-        ),
-      );
+    final scenicId = widget.session?.scenic?.id;
+    final stations =
+        _stations.values
+            .where(
+              (station) =>
+                  scenicId == null || station.profile.scenicId == scenicId,
+            )
+            .toList()
+          ..sort(
+            (a, b) => (a.profile.stationCode ?? a.profile.stationId).compareTo(
+              b.profile.stationCode ?? b.profile.stationId,
+            ),
+          );
     final api = _api;
     final active = stations.where((station) => station.running).length;
     final uploading = stations.where((station) => station.uploading).length;
@@ -384,7 +445,28 @@ class _TransferPageState extends State<TransferPage>
             api: api,
             store: _store,
             onBound: _reloadStations,
+            session: widget.session,
             onManual: _configure,
+          ),
+        if (scenicId != null &&
+            _stations.values.any(
+              (station) =>
+                  station.active && station.profile.scenicId != scenicId,
+            ))
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () async {
+                try {
+                  await _stopOtherStations();
+                } catch (_) {
+                  if (mounted) {
+                    await showAppMessage(context, message: '无法停止其他景区的监听，请重试。');
+                  }
+                }
+              },
+              child: const Text('停止其他景区监听'),
+            ),
           ),
         for (final station in stations)
           Padding(

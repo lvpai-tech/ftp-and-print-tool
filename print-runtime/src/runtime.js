@@ -19,7 +19,9 @@ const { acquireLock } = require('./single-instance');
 async function createRuntime(options = {}) {
   const configPathArg = options.configPath;
   const saveConfig = next => writeConfig(next, next.configPath, options.transformSavedConfig);
-  let config = loadConfig({ configPath: configPathArg, lockDir: options.lockDir, transformRaw: options.transformRaw });
+  const withAuthorization = config => options.authorizeRequest
+    ? { ...config, authorizeRequest: options.authorizeRequest } : config;
+  let config = withAuthorization(loadConfig({ configPath: configPathArg, lockDir: options.lockDir, transformRaw: options.transformRaw }));
   if (options.forceManualStart) config.autoPrint = false;
   let lock = null;
   if (!options.skipLock) {
@@ -44,8 +46,8 @@ async function createRuntime(options = {}) {
     logs,
     scheduler: null,
     setConfig(next) {
-      runtime.config = next;
-      if (runtime.scheduler) runtime.scheduler.setConfig(next);
+      runtime.config = withAuthorization(next);
+      if (runtime.scheduler) runtime.scheduler.setConfig(runtime.config);
     },
     getConfig() {
       return runtime.config;
@@ -61,6 +63,7 @@ async function createRuntime(options = {}) {
   const scheduler = createScheduler({
     config: runtime.config,
     includePrintIssues: options.includePrintIssues,
+    canTakeWork: options.canTakeWork,
     history,
     autoPrint: Boolean(runtime.config.autoPrint),
     log: (msg) => logLine(msg, 'info'),
@@ -364,7 +367,7 @@ async function createRuntime(options = {}) {
 
   async function bindToken(token) {
     const { fetchMe } = require('./api');
-    const me = await fetchMe({ base: runtime.getConfig().base, token });
+    const me = await fetchMe({ base: runtime.getConfig().base, token, authorizeRequest: options.authorizeRequest });
     if (!me || !me.scenicId) throw new Error('密钥校验失败：未返回景区信息');
     const ids = Array.isArray(me.scenicIds) && me.scenicIds.length
       ? me.scenicIds.map((id) => String(id))

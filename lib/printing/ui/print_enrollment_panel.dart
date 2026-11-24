@@ -7,9 +7,11 @@ import '../../ui/dropdown_field.dart';
 import '../../ui/workstation_form_dialog.dart';
 import '../print_bridge.dart';
 import '../print_enrollment.dart';
+import '../../workstation_session.dart';
 
 class PrintEnrollmentPanel extends StatefulWidget {
-  const PrintEnrollmentPanel({super.key, required this.bridge});
+  const PrintEnrollmentPanel({super.key, required this.bridge, this.session});
+  final WorkstationSession? session;
   final PrintBridge bridge;
 
   @override
@@ -18,7 +20,7 @@ class PrintEnrollmentPanel extends StatefulWidget {
 
 class _PrintEnrollmentPanelState extends State<PrintEnrollmentPanel> {
   final _client = http.Client();
-  late final _enrollment = PrintEnrollment(_client);
+  late final _enrollment = PrintEnrollment(_client, session: widget.session);
   List<Map<String, dynamic>> _records = [];
   bool _busy = false;
   bool _showRecords = false;
@@ -39,7 +41,14 @@ class _PrintEnrollmentPanelState extends State<PrintEnrollmentPanel> {
   Future<void> _load() async {
     try {
       final rows = await PrintEnrollment.records();
-      if (mounted) setState(() => _records = rows);
+      final scenicId = widget.session?.scenic?.id;
+      if (mounted) {
+        setState(
+          () => _records = scenicId == null
+              ? rows
+              : rows.where((row) => row['scenicId'] == scenicId).toList(),
+        );
+      }
     } catch (_) {
       if (mounted) setState(() => _error = '无法读取本机打印申请记录');
     }

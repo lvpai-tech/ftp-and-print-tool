@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:http/http.dart' as http;
 
 import '../profile_store.dart';
+import '../workstation_session.dart';
 import 'cos_upload.dart';
 
 class EnrollmentError implements Exception {
@@ -32,13 +33,19 @@ class EnrollmentScenic {
 
 /// Owns the persisted request and claim so retries use the original credentials.
 class WorkstationEnrollment {
-  WorkstationEnrollment(this.api, this.store, this.client);
+  WorkstationEnrollment(this.api, this.store, this.client, {this.session});
+
+  final WorkstationSession? session;
 
   final Uri api;
   final ProfileStore store;
   final http.Client client;
 
   Future<List<EnrollmentScenic>> loadScenics() async {
+    if (session?.account != null) {
+      final scenic = session?.scenic;
+      return scenic == null ? [] : [EnrollmentScenic(scenic.id, scenic.name)];
+    }
     final uri = api.replace(path: '/api/miniprogram/scenics');
     final request = http.Request('GET', uri)..followRedirects = false;
     final response = await client
@@ -67,7 +74,11 @@ class WorkstationEnrollment {
     throw const EnrollmentError('景区列表响应无效');
   }
 
-  Future<String> begin(String scenicName, String location) async {
+  Future<String> begin(
+    String scenicName,
+    String location, {
+    String? scenicId,
+  }) async {
     final random = Random.secure();
     final idBytes = List.generate(16, (_) => random.nextInt(256));
     idBytes[6] = (idBytes[6] & 0x0f) | 0x40;
@@ -83,6 +94,7 @@ class WorkstationEnrollment {
       'draft': {
         'requestId': requestId,
         'scenicName': scenicName,
+        if (session?.account != null) 'scenicId': scenicId,
         'location': location,
       },
     });
@@ -218,6 +230,20 @@ class WorkstationEnrollment {
     final uri = api.replace(path: '/api/operation/workstation-enrollment$path');
     final request = http.Request(method, uri)..followRedirects = false;
     request.headers['X-Workstation-Enrollment-Token'] = secret;
+    if (session?.account != null) {
+      final token = session?.personnelToken;
+      if (token == null || session?.account?.origin?.origin != api.origin) {
+        throw const EnrollmentError('请登录当前环境的工作台后重试');
+      }
+      request.headers['Authorization'] = 'Bearer $token';
+      if (body != null && body['scenicId'] == null) {
+        final scenic = session?.scenic;
+        if (scenic == null || scenic.name != body['scenicName']) {
+          throw const EnrollmentError('该申请不属于当前工作景区');
+        }
+        body = {...body, 'scenicId': scenic.id};
+      }
+    }
     if (stationToken != null) {
       request.headers['X-Workstation-Token'] = stationToken;
     }

@@ -19,6 +19,7 @@ const {
  */
 function createScheduler(options = {}) {
   let config = options.config;
+  let stopBatchGeneration = 0;
   let autoPrint = options.autoPrint !== undefined ? Boolean(options.autoPrint) : false;
   let running = false;
   let printBusy = false;
@@ -123,6 +124,7 @@ function createScheduler(options = {}) {
   }
 
   function setAutoPrint(enabled) {
+    if (!enabled) stopBatchGeneration += 1;
     autoPrint = Boolean(enabled);
     log(`[${new Date().toISOString()}] 自动打印已${autoPrint ? '开启' : '关闭'}`);
     emit();
@@ -464,6 +466,9 @@ function createScheduler(options = {}) {
   }
 
   async function runPrintPipeline(ids, mode, printOptions = {}, queueRows = jobPage.list) {
+    const generation = stopBatchGeneration;
+    const canTakeWork = () => (options.canTakeWork?.() ?? true) && generation === stopBatchGeneration;
+    if (!canTakeWork()) return [];
     const list = (ids || []).map((id) => String(id)).filter(Boolean);
     if (!list.length) {
       throw new Error(mode === 'continue' ? '请先勾选要继续打印的任务' : '请先勾选要打印的任务');
@@ -538,6 +543,7 @@ function createScheduler(options = {}) {
     const results = [];
     try {
       for (const id of list) {
+        if (!canTakeWork()) break;
         currentJob = { id, items: [] };
         emit();
         const job = mode === 'continue' ? await continueJob(config, id) : await beginJob(config, id);
@@ -670,7 +676,7 @@ function createScheduler(options = {}) {
   }
 
   async function runAutoPrintCycle() {
-    if (!running || !autoPrint || printBusy) return;
+    if (!running || !autoPrint || printBusy || options.canTakeWork?.() === false) return;
     const selectedConfig = config;
     try {
       const page = await listJobs(config, {

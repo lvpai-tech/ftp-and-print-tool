@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import 'diagnostics/crash_journal.dart';
 import 'printing/print_bridge.dart';
+import 'workstation_account.dart';
 
 /// 统一工作台退出门禁；导航切换不停止上传或打印。
 class WorkstationSession extends ChangeNotifier {
@@ -11,7 +12,14 @@ class WorkstationSession extends ChangeNotifier {
     this.printBridge, {
     this.crashJournal,
     this.checkUploadStorage,
+    this.account,
   });
+  final WorkstationAccount? account;
+  WorkstationIdentity? identity;
+  WorkstationScenic? scenic;
+  bool closingWorkspace = false;
+  bool workspaceLocked = false;
+  List<String> activeStations = const [];
   final PrintBridge printBridge;
   final CrashJournal? crashJournal;
   final Future<void> Function()? checkUploadStorage;
@@ -63,7 +71,67 @@ class WorkstationSession extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool canExit() => !transferActive && !printBridge.busy;
+  bool canExit() => !closingWorkspace && !transferActive && !printBridge.busy;
+
+  List<String> get signOutBlockers => [
+    if (transferActive || transferUploading || activeStations.isNotEmpty)
+      activeStations.isEmpty
+          ? '请停止所有机位的收图监听并等待上传结束。'
+          : '请停止以下机位的收图监听并等待上传结束：${activeStations.join('、')}',
+    if (printBridge.state['autoPrint'] == true) '请关闭自动打印。',
+    if (printBridge.busy) '请等待当前打印操作结束。',
+    if (printBridge.starting || updating || transferConfigured == null)
+      '工作台正在初始化或更新，请稍后重试。',
+  ];
+
+  String? get personnelToken =>
+      closingWorkspace || workspaceLocked ? null : account?.token;
+
+  Future<void> startPrinting() {
+    if (closingWorkspace ||
+        (account != null && (scenic == null || account!.token == null))) {
+      return Future.value();
+    }
+    return printBridge.start(
+      personnelToken: account?.token,
+      personnelOrigin: account?.origin,
+      scenicId: scenic?.id,
+    );
+  }
+
+  Future<void> closeWorkspace() async {
+    closingWorkspace = true;
+    workspaceLocked = true;
+    notifyListeners();
+    try {
+      await printBridge.blockNewWork();
+      await updateUploads?.call(true);
+      await printBridge.waitUntilIdle();
+      await printBridge.shutdown();
+      transferActive = transferUploading = false;
+      transferConfigured = null;
+      transferIssue = null;
+      activeStations = const [];
+      notice = null;
+      scenic = null;
+    } finally {
+      closingWorkspace = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> resumeWorkspace() async {
+    if (printBridge.connected) await printBridge.call('resumePersonnel');
+    await startPrinting();
+    workspaceLocked = false;
+    try {
+      await updateUploads?.call(false);
+    } catch (_) {
+      workspaceLocked = true;
+      await printBridge.blockNewWork();
+      rethrow;
+    }
+  }
 
   Future<void> prepareForUpdate() async {
     if (updating) throw StateError('正在准备更新');
@@ -97,7 +165,7 @@ class WorkstationSession extends ChangeNotifier {
 
   Future<void> recoverAfterUpdateFailure({bool restartPrinting = false}) async {
     try {
-      if (restartPrinting) await printBridge.start();
+      if (restartPrinting) await startPrinting();
       await updateUploads?.call(false);
     } finally {
       updating = false;

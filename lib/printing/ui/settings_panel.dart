@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../ui/app_dialogs.dart';
 import '../../ui/dropdown_field.dart';
+import '../../workstation_session.dart';
 import '../print_bridge.dart';
 import 'design.dart';
 import 'print_enrollment_panel.dart';
@@ -13,10 +14,12 @@ class SettingsPanel extends StatefulWidget {
     required this.perform,
     this.embedded = false,
     this.showChecks = false,
+    this.session,
   });
   final PrintBridge bridge;
   final Perform perform;
   final bool embedded, showChecks;
+  final WorkstationSession? session;
   @override
   State<SettingsPanel> createState() => _SettingsPanelState();
 }
@@ -255,7 +258,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
                     ),
                     const SizedBox(height: 16),
                     if (widget.bridge.configured) _profileList(),
-                    PrintEnrollmentPanel(bridge: widget.bridge),
+                    PrintEnrollmentPanel(
+                      bridge: widget.bridge,
+                      session: widget.session,
+                    ),
                     if (widget.bridge.configured) ...[
                       const SizedBox(height: 28),
                       Row(

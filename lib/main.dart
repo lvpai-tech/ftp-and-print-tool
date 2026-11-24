@@ -8,6 +8,7 @@ import 'diagnostics/crash_journal.dart';
 import 'diagnostics/crash_reporting.dart';
 import 'printing/print_bridge.dart';
 import 'release/desktop_update.dart';
+import 'workstation_account.dart';
 import 'workstation_session.dart';
 import 'workstation_storage.dart';
 
@@ -26,6 +27,7 @@ Future<void> main(List<String> args) async {
     bridge,
     crashJournal: journal,
     checkUploadStorage: Platform.isMacOS ? checkMacUploadStorage : null,
+    account: WorkstationAccount.configured(),
   );
   if (Platform.isMacOS) connectMacUpdater(session);
   final navigatorKey = GlobalKey<NavigatorState>();
@@ -37,6 +39,4 @@ Future<void> main(List<String> args) async {
     journal?.record(CrashEvent.desktopInitFailed);
     session.report('桌面托盘或窗口初始化失败：$error');
   }
-  // 打印内核失败只在打印页面显式报错，不阻塞原有 FTP 工作。
-  await bridge.start();
 }
