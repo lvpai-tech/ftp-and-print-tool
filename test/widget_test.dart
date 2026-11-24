@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
 import 'package:lvpai_ftp_client/printing/print_bridge.dart';
+import 'package:lvpai_ftp_client/printing/ui/photo_batch_page.dart';
 import 'package:lvpai_ftp_client/profile_store.dart';
 import 'package:lvpai_ftp_client/ui/transfer_page.dart';
 import 'package:material_ui/material_ui.dart';
@@ -69,11 +70,14 @@ void main() {
     bridge.setMatchingScenic(true);
     await tester.pumpAndSettle();
     expect(find.text('上传队列'), findsOneWidget);
-    expect(find.text('照片归属'), findsOneWidget);
-    expect(
-      tester.getCenter(find.text('照片归属')).dx,
-      lessThan(tester.getCenter(find.byTooltip('选择收图日期')).dx),
+    final timeline = find.byType(PhotoBatchTimeline);
+    expect(timeline, findsOneWidget);
+    expect(tester.widget<PhotoBatchTimeline>(timeline).inline, isTrue);
+    final date = find.descendant(
+      of: timeline,
+      matching: find.byTooltip('选择收图日期'),
     );
+    expect(date, findsOneWidget);
     expect(find.text('取片卡 6969'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('photo-actions-209')));
     await tester.pumpAndSettle();
@@ -85,14 +89,8 @@ void main() {
     await tester.pumpAndSettle();
     tester.view.physicalSize = const Size(375, 812);
     await tester.pumpAndSettle();
-    final heading = find.text('照片归属');
-    final date = find.byTooltip('选择收图日期');
     await tester.ensureVisible(date);
     await tester.pumpAndSettle();
-    expect(
-      tester.getBottomLeft(heading).dy,
-      lessThan(tester.getTopLeft(date).dy),
-    );
     await tester.tap(date);
     await tester.pumpAndSettle();
     expect(find.textContaining(' · 今天'), findsOneWidget);

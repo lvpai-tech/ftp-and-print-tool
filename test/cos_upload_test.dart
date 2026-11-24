@@ -199,7 +199,13 @@ void main() {
       expect(stat.size, bytes.length);
       expect(stat.modified.toUtc(), modified);
       await _until(() => fixture.uploaded.length == 2, '同名不同内容上传');
-      expect(uploader.jobs.first.source, replayed.path);
+      expect(
+        await FileSystemEntity.identical(
+          uploader.jobs.first.source,
+          replayed.path,
+        ),
+        isTrue,
+      );
       expect(uploader.jobs.first.id, isNot(id));
     });
   });
