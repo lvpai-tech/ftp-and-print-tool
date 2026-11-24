@@ -724,9 +724,11 @@ class FolderUploader extends ChangeNotifier {
       if (!_noticeInitialized) {
         for (final file in files) {
           final stat = await file.stat();
-          if (stat.type == FileSystemEntityType.file &&
+          if (stat.type != FileSystemEntityType.file) continue;
+          final signature = _signature(stat);
+          if (_ignored[file.path] == signature ||
               !_fileEvents.contains(p.canonicalize(file.path))) {
-            _noticeBaseline[file.path] = _signature(stat);
+            _noticeBaseline[file.path] = signature;
           }
         }
         await _append({'type': 'noticeBaseline', 'files': _noticeBaseline});
@@ -778,7 +780,9 @@ class FolderUploader extends ChangeNotifier {
       final stat = await file.stat();
       if (stat.type != FileSystemEntityType.file) continue;
       present.add(file.path);
-      if (changed) {
+      // A watcher can report a startup file after the initial scan on macOS.
+      // Keep the baseline when the observed file still has its startup signature.
+      if (changed && _ignored[file.path] != _signature(stat)) {
         _seen.remove(file.path);
         _ignored.remove(file.path);
         _noticeBaseline.remove(file.path);
