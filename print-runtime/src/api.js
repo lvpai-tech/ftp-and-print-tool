@@ -80,6 +80,12 @@ function movePhotoBatchPhoto(config, { stationId, from, to }, move) {
     AbortSignal.timeout(30000));
 }
 
+function removePhotoBatch(config, { stationId, from, to }, request) {
+  const params = new URLSearchParams({ from, to });
+  return callJson(config, 'POST', `${batchStationRoute(stationId)}/removals?${params}`, request,
+    AbortSignal.timeout(120000));
+}
+
 function batchPhotoRoute(stationId, photoId) {
   if (typeof photoId !== 'string' || !/^[1-9]\d*$/.test(photoId)) throw new Error('照片编号无效');
   return `${batchStationRoute(stationId)}/photos/${photoId}`;
@@ -246,6 +252,7 @@ module.exports = {
   savePhotoBatchSplit,
   movePhotoBatchPhoto,
   removeBatchPhoto,
+  removePhotoBatch,
   getBatchPhotoCapture,
   generatingThumbnailPath,
   beginJob,

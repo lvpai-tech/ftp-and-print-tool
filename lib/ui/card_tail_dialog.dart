@@ -8,6 +8,7 @@ Future<String?> showCardTailDialog(
   required Future<Uint8List> Function() readPhoto,
   required String guidance,
   String? sourcePath,
+  Future<void> Function(int byteLength, String tail)? onRecognized,
   bool allowUse = false,
   String useLabel = '核对后用于补录',
 }) => showDialog<String>(
@@ -16,6 +17,7 @@ Future<String?> showCardTailDialog(
     readPhoto: readPhoto,
     guidance: guidance,
     sourcePath: sourcePath,
+    onRecognized: onRecognized,
     allowUse: allowUse,
     useLabel: useLabel,
   ),
@@ -26,6 +28,7 @@ class _CardTailDialog extends StatefulWidget {
     required this.readPhoto,
     required this.guidance,
     required this.sourcePath,
+    required this.onRecognized,
     required this.allowUse,
     required this.useLabel,
   });
@@ -33,6 +36,7 @@ class _CardTailDialog extends StatefulWidget {
   final Future<Uint8List> Function() readPhoto;
   final String guidance;
   final String? sourcePath;
+  final Future<void> Function(int byteLength, String tail)? onRecognized;
   final bool allowUse;
   final String useLabel;
 
@@ -76,6 +80,15 @@ class _CardTailDialogState extends State<_CardTailDialog> {
         sourcePath: widget.sourcePath,
       );
       result = tail == null ? '未能确认尾号，请调整选区后重试' : '候选尾号 $tail';
+      final report = widget.onRecognized;
+      if (tail != null && report != null) {
+        try {
+          await report(bytes.length, tail);
+          result = '候选尾号 $tail · 已上报后台';
+        } catch (_) {
+          result = '候选尾号 $tail · 后台未确认，请重试识别以上报';
+        }
+      }
     } on StateError catch (error) {
       result = error.message;
     } catch (_) {

@@ -21,6 +21,47 @@ import 'manual_batch_test.dart' as samples;
 void main() {
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
+  test('六位 OCR 使用原照片会话，服务端回显候选后才算上报成功', () async {
+    final fixture = await _QueueFixture.open();
+    final requestId = 'b' * 64;
+    final digest = 'c' * 64;
+    await fixture.run(() async {
+      final client = CosUpload(fixture.profile);
+      addTearDown(client.close);
+      fixture.ingested.add(requestId);
+      fixture.echoCardTail = false;
+      await expectLater(
+        client.reportCardTail(
+          'photo.png',
+          requestId,
+          123,
+          digest,
+          null,
+          '012345',
+        ),
+        throwsStateError,
+      );
+      fixture.echoCardTail = true;
+      await client.reportCardTail(
+        'photo.png',
+        requestId,
+        123,
+        digest,
+        null,
+        '012345',
+      );
+    });
+    expect(fixture.lastPrepare, {
+      'requestId': requestId,
+      'byteLength': 123,
+      'sha256': digest,
+      'contentType': 'image/png',
+      'cardTailHint': '012345',
+    });
+    expect(fixture.uploaded, isEmpty);
+    expect(fixture.notices, isEmpty);
+  });
+
   test('识别结束照后先上报，队首仍在等待入库时结束照继续排队', () async {
     final fixture = await _QueueFixture.open();
     final uploader = fixture.uploader();
@@ -742,7 +783,9 @@ class _QueueFixture {
   final stations = <String, _QueueFixture>{};
   int noticeAttempts = 0;
   bool rejectNotices = false;
+  bool echoCardTail = true;
   bool failNextUpload = false;
+  Map<dynamic, dynamic>? lastPrepare;
 
   _QueueFixture(this.server, this.scratch, this.inbox, this.profile);
 
@@ -844,17 +887,24 @@ class _QueueFixture {
       final payload =
           jsonDecode(await utf8.decoder.bind(request).join()) as Map;
       final id = payload['requestId'] as String;
+      lastPrepare = payload;
       prepared.add(id);
       preparedExif[id] = payload['captureMetadata'];
+      final hint = payload['cardTailHint'];
       data = {
-        'status': 'AWAITING_UPLOAD',
-        'uploadUrl':
-            'https://private.cos.ap-guangzhou.myqcloud.com/${profile.stationId}/$id',
-        'uploadHeaders': {
-          'Content-Length': '${payload['byteLength']}',
-          'Content-Type': payload['contentType'],
-          'x-cos-forbid-overwrite': 'true',
-          'x-cos-acl': 'private',
+        if (hint is String && echoCardTail) 'cardTailHint': hint,
+        if (hint is String && ingested.contains(id))
+          'status': 'INGESTED'
+        else ...{
+          'status': 'AWAITING_UPLOAD',
+          'uploadUrl':
+              'https://private.cos.ap-guangzhou.myqcloud.com/${profile.stationId}/$id',
+          'uploadHeaders': {
+            'Content-Length': '${payload['byteLength']}',
+            'Content-Type': payload['contentType'],
+            'x-cos-forbid-overwrite': 'true',
+            'x-cos-acl': 'private',
+          },
         },
       };
     } else if (request.method == 'GET') {

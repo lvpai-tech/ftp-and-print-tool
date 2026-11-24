@@ -29,6 +29,7 @@ void main() {
       final writes = <Map<String, dynamic>>[];
       final moved = <Map<String, dynamic>>[];
       final removals = <Map<String, dynamic>>[];
+      final groupRemovals = <Map<String, dynamic>>[];
       final batches = <Map<String, dynamic>>[
         {
           'id': 'pending-1',
@@ -146,6 +147,13 @@ void main() {
               final request = args.last as Map<String, dynamic>;
               removals.add(request);
               return {'requestId': request['requestId'], 'photoId': '1'};
+            }(),
+            'removePhotoBatch' => () {
+              expect(args.first, containsPair('stationId', '17'));
+              final request = args.last as Map<String, dynamic>;
+              groupRemovals.add(request);
+              batches.removeWhere((batch) => batch['id'] == 'pending-1');
+              return {'requestId': request['requestId'], 'removedCount': 2};
             }(),
             'getBatchPhotoCapture' => () {
               expect(args, ['17', '1']);
@@ -401,6 +409,23 @@ void main() {
       await tester.tap(find.text('确认删除'));
       await tester.pumpAndSettle();
       expect(removals.single['revision'], 0);
+      final deleteGroup = find.widgetWithText(TextButton, '整批删除').last;
+      await tester.tap(deleteGroup);
+      await tester.pumpAndSettle();
+      expect(find.text('整批删除？'), findsOneWidget);
+      expect(find.textContaining('共 2 张照片'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(groupRemovals, isEmpty);
+      await tester.tap(deleteGroup);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认删除'));
+      await tester.pumpAndSettle();
+      expect(groupRemovals.single['photos'], [
+        {'photoId': '1', 'revision': 0},
+        {'photoId': '3', 'revision': 0},
+      ]);
+      expect(find.widgetWithText(TextButton, '整批删除'), findsOneWidget);
     });
   }
 

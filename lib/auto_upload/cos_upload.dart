@@ -98,16 +98,14 @@ class CosUpload {
     if (size < 1 || size > 60 * 1024 * 1024) {
       throw StateError('照片大小不合法，请使用 60 MiB 以内的照片');
     }
-    final contentType = p.extension(file.path).toLowerCase() == '.png'
-        ? 'image/png'
-        : 'image/jpeg';
-    final prepared = await _request('POST', '', {
-      'requestId': requestId,
-      'byteLength': size,
-      'sha256': sha256,
-      'contentType': contentType,
-      if (captureMetadata != null) 'captureMetadata': captureMetadata.toJson(),
-    });
+    final contentType = _contentType(file.path);
+    final prepared = await _prepare(
+      file.path,
+      requestId,
+      size,
+      sha256,
+      captureMetadata,
+    );
     final preparedStatus = _status(prepared, allowFailed: true);
     if (preparedStatus == 'FAILED' &&
         prepared['errorCode'] == 'INGEST_FAILED') {
@@ -182,6 +180,48 @@ class CosUpload {
       'ALREADY_INGESTED',
     }.contains(data['status'])) {
       throw StateError('服务端返回的结束照上报状态无效');
+    }
+  }
+
+  Future<Map<String, dynamic>> _prepare(
+    String path,
+    String requestId,
+    int byteLength,
+    String digest,
+    CameraMetadata? captureMetadata, {
+    String? cardTailHint,
+  }) => _request('POST', '', {
+    'requestId': requestId,
+    'byteLength': byteLength,
+    'sha256': digest,
+    'contentType': _contentType(path),
+    if (captureMetadata != null) 'captureMetadata': captureMetadata.toJson(),
+    'cardTailHint': ?cardTailHint,
+  });
+
+  String _contentType(String path) =>
+      p.extension(path).toLowerCase() == '.png' ? 'image/png' : 'image/jpeg';
+
+  /// Attach the OCR candidate to the same upload session, even after ingest.
+  Future<void> reportCardTail(
+    String path,
+    String requestId,
+    int byteLength,
+    String digest,
+    CameraMetadata? captureMetadata,
+    String tail,
+  ) async {
+    final data = await _prepare(
+      path,
+      requestId,
+      byteLength,
+      digest,
+      captureMetadata,
+      cardTailHint: tail,
+    );
+    _status(data, allowFailed: true);
+    if (data['cardTailHint'] != tail) {
+      throw StateError('服务端未确认收到 OCR 候选尾号');
     }
   }
 

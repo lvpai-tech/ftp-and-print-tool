@@ -60,6 +60,19 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
         });
         return;
       }
+      else if (req.url.startsWith('/print-agents/photo-batches/stations/27/removals?')) {
+        assert.equal(req.method, 'POST');
+        assert.equal(new URL(req.url, 'http://localhost').searchParams.get('to'), '2026-11-24T16:00:00Z');
+        let body = '';
+        req.setEncoding('utf8');
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+          const { requestId, photos } = JSON.parse(body);
+          assert.deepEqual(photos.map(photo => photo.photoId), ['31', '32']);
+          res.end(JSON.stringify({ code: 200, data: { requestId, removedCount: photos.length } }));
+        });
+        return;
+      }
       else if (req.url === '/print-agents/photo-batches/stations/27/photos/31/capture') {
         assert.equal(req.method, 'GET');
         data = { collected: true, cameraMake: 'Canon' };
@@ -153,6 +166,11 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   assert.deepEqual((await call('removeBatchPhoto', '27', '31', removal, scope)).data,
     { requestId: removal.requestId, photoId: '31' });
   assert.deepEqual(scopedRemovals, [removal]);
+  const group = { requestId: 'local-group-removal-test', photos: [{ photoId: '31', revision: 0 },
+    { photoId: '32', revision: 2 }] };
+  assert.match((await call('removePhotoBatch', range, group, { ...scope, scenicId: '1' })).error, /档案已变更/);
+  assert.deepEqual((await call('removePhotoBatch', range, group, scope)).data,
+    { requestId: group.requestId, removedCount: 2 });
   assert.equal((await call('snapshot')).data.config.activeScenicProfileId, firstId);
   assert.equal(wire.includes(other), false);
   assert.match((await call('__proto__')).error, /不支持/);

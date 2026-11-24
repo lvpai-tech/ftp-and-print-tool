@@ -9,7 +9,8 @@ const { promisify } = require('node:util');
 const { createRuntime } = require('./runtime');
 const { normalizeConfig, saveConfig, DEFAULT_OPERATION_BASE } = require('./config');
 const { fetchMe, listBatchStations, listPhotoBatches, correctPhotoBatch, removeBatchPhoto,
-  getBatchPhotoCapture, sendCrashReport, previewPhotoBatchSplit, savePhotoBatchSplit, movePhotoBatchPhoto } = require('./api');
+  getBatchPhotoCapture, sendCrashReport, previewPhotoBatchSplit, savePhotoBatchSplit, movePhotoBatchPhoto,
+  removePhotoBatch } = require('./api');
 const { CUPS_SOCKET } = require('./mac-printer');
 
 const execute = promisify(execFile);
@@ -70,7 +71,7 @@ async function serve({ input = process.stdin, send, configPath, root }) {
   const mutations = new Set(['initialize', 'installPrintAuthorization', 'saveConfig', 'autoPrint', 'printJobs', 'continueJobs',
     'markUnprinted', 'confirmPrinted', 'recoverPrintJob', 'queryJobs', 'refreshJobs', 'trialPrintItem', 'downloadJobZip',
     'activateScenicProfile', 'deleteScenicProfile',
-    'correctPhotoBatch', 'removeBatchPhoto', 'savePhotoBatchSplit', 'movePhotoBatchPhoto']);
+    'correctPhotoBatch', 'removeBatchPhoto', 'savePhotoBatchSplit', 'movePhotoBatchPhoto', 'removePhotoBatch']);
   function batchConfig(scope) {
     const config = bridge.runtime.getConfig();
     if (scope === undefined) return config;
@@ -154,6 +155,7 @@ async function serve({ input = process.stdin, send, configPath, root }) {
     if (method === 'savePhotoBatchSplit') return savePhotoBatchSplit(batchConfig(args[2]), args[0], args[1]);
     if (method === 'movePhotoBatchPhoto') return movePhotoBatchPhoto(batchConfig(args[2]), args[0], args[1]);
     if (method === 'removeBatchPhoto') return removeBatchPhoto(batchConfig(args[3]), args[0], args[1], args[2]);
+    if (method === 'removePhotoBatch') return removePhotoBatch(batchConfig(args[2]), args[0], args[1]);
     if (method === 'getBatchPhotoCapture') return getBatchPhotoCapture(batchConfig(args[2]), args[0], args[1]);
     if (method === 'saveConfig') {
       const { printers, printDpi } = args[0] || {};

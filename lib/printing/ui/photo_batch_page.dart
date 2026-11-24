@@ -423,19 +423,27 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     ).join();
   });
 
-  Future<void> _removePhoto(Json photo) async {
+  Future<void> _removePhotos(List<Json> photos, {String? batchLabel}) async {
     if (_loading || _working) return;
     setState(() => _working = true);
+    final wholeBatch = batchLabel != null;
     try {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => WorkstationFormDialog(
-          title: '删除这张照片？',
+          title: wholeBatch ? '整批删除？' : '删除这张照片？',
           content: Column(
             mainAxisSize: MainAxisSize.min,
             spacing: 12,
             children: [
-              SizedBox(width: 120, height: 96, child: _thumbnail(photo)),
+              if (wholeBatch)
+                Text('$batchLabel · 共 ${photos.length} 张照片')
+              else
+                SizedBox(
+                  width: 120,
+                  height: 96,
+                  child: _thumbnail(photos.single),
+                ),
               const Text('照片将从照片管理移除。系统会保留原图、分批依据和已有的游客权益。'),
             ],
           ),
@@ -455,23 +463,42 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
         ),
       );
       if (confirmed != true || !mounted) return;
-      final photoId = photo['id'] as String;
-      final revision = photo['revision'];
-      final key = jsonEncode(['remove', _station, photoId, revision]);
+      final selections = [
+        for (final photo in photos)
+          {'photoId': photo['id'] as String, 'revision': photo['revision']},
+      ];
+      final key = jsonEncode([
+        wholeBatch ? 'removeBatch' : 'remove',
+        _range,
+        selections,
+      ]);
       final requestId = _requestId(key);
       setState(() => _submitting = true);
-      final result = await widget.call('removeBatchPhoto', [
-        _station!,
-        photoId,
-        {'requestId': requestId, 'revision': revision},
-      ]) as Json;
-      if (result['requestId'] != requestId || result['photoId'] != photoId) {
+      final result =
+          (wholeBatch
+                  ? await widget.call('removePhotoBatch', [
+                      _range,
+                      {'requestId': requestId, 'photos': selections},
+                    ])
+                  : await widget.call('removeBatchPhoto', [
+                      _station!,
+                      selections.single['photoId'],
+                      {
+                        'requestId': requestId,
+                        'revision': selections.single['revision'],
+                      },
+                    ]))
+              as Json;
+      final acknowledged = wholeBatch
+          ? result['removedCount'] == photos.length
+          : result['photoId'] == selections.single['photoId'];
+      if (result['requestId'] != requestId || !acknowledged) {
         throw StateError('删除结果未确认，请刷新核对。');
       }
       _requests.remove(key);
       if (!mounted) return;
       ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('已删除 1 张照片')));
+          .showSnackBar(SnackBar(content: Text('已删除 ${photos.length} 张照片')));
       await _load();
     } catch (error) {
       if (mounted) {
@@ -989,72 +1016,93 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            spacing: 16,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          Row(
+            spacing: 8,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text(
-                    _label(batch),
-                    style: const TextStyle(
-                      color: WorkstationStyle.ink,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      fontFeatures: [FontFeature.tabularFigures()],
-                    ),
-                  ),
-                  StatusTag(
-                    label: label,
-                    color: statusColor,
-                    soft: statusBackground,
-                  ),
-                  Text(
-                    '$count 张游客照',
-                    style: const TextStyle(
-                      color: WorkstationStyle.muted,
-                      fontSize: 12,
-                      fontFeatures: [FontFeature.tabularFigures()],
-                    ),
-                  ),
-                ],
-              ),
-              if (canSelectGroup || canReceive || status == 'CARD')
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 6,
+              Expanded(
+                child: Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  spacing: 16,
+                  runSpacing: 8,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    if (canSelectGroup)
-                      FilledButton.tonal(
-                        onPressed: _loading || _working
-                            ? null
-                            : () => _selectGroup(photos),
-                        style: FilledButton.styleFrom(
-                          foregroundColor: WorkstationStyle.accent,
-                          backgroundColor: WorkstationStyle.accentSoft,
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          _label(batch),
+                          style: const TextStyle(
+                            color: WorkstationStyle.ink,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
                         ),
-                        child: const Text('选中本组可处理照片'),
-                      ),
-                    if (canReceive)
-                      _BatchCardNote(
-                        icon: Icons.move_to_inbox_outlined,
-                        label: hovering ? '松开后确认移动' : '可接收游客照',
-                        color: WorkstationStyle.accent,
-                      )
-                    else if (status == 'CARD')
-                      _BatchCardNote(
-                        icon: Icons.lock_outline,
-                        label: batch['targetBlockedReason'] as String,
-                        color: WorkstationStyle.muted,
+                        StatusTag(
+                          label: label,
+                          color: statusColor,
+                          soft: statusBackground,
+                        ),
+                        Text(
+                          '$count 张游客照',
+                          style: const TextStyle(
+                            color: WorkstationStyle.muted,
+                            fontSize: 12,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (canSelectGroup || canReceive || status == 'CARD')
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 6,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          if (canSelectGroup)
+                            FilledButton.tonal(
+                              onPressed: _loading || _working
+                                  ? null
+                                  : () => _selectGroup(photos),
+                              style: FilledButton.styleFrom(
+                                foregroundColor: WorkstationStyle.accent,
+                                backgroundColor: WorkstationStyle.accentSoft,
+                              ),
+                              child: const Text('选中本组可处理照片'),
+                            ),
+                          if (canReceive)
+                            _BatchCardNote(
+                              icon: Icons.move_to_inbox_outlined,
+                              label: hovering ? '松开后确认移动' : '可接收游客照',
+                              color: WorkstationStyle.accent,
+                            )
+                          else if (status == 'CARD')
+                            _BatchCardNote(
+                              icon: Icons.lock_outline,
+                              label: batch['targetBlockedReason'] as String,
+                              color: WorkstationStyle.muted,
+                            ),
+                        ],
                       ),
                   ],
                 ),
+              ),
+              TextButton.icon(
+                onPressed: _loading || _working || photos.isEmpty
+                    ? null
+                    : () => _removePhotos(
+                        _photos(batch),
+                        batchLabel: _label(batch),
+                      ),
+                style: TextButton.styleFrom(
+                  foregroundColor: WorkstationStyle.bad,
+                ),
+                icon: const Icon(Icons.delete_outline, size: 17),
+                label: const Text('整批删除'),
+              ),
             ],
           ),
           const Divider(height: 14, color: WorkstationStyle.line),
@@ -1471,7 +1519,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
         }
         await _recognizeTail(photo);
       case _PhotoAction.remove:
-        await _removePhoto(photo);
+        await _removePhotos([photo]);
       case _PhotoAction.capture:
         await _showCapture(photo);
       case _PhotoAction.move:

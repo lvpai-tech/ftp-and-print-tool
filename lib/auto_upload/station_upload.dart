@@ -98,6 +98,25 @@ class StationUpload extends ChangeNotifier {
       uploader.jobs.where((job) => job.state == 'failed').length;
   DateTime? get latestIngested => uploader.latestIngested;
 
+  Future<void> reportCardTail(AutoJob job, int byteLength, String tail) async {
+    if (_closed || !uploader.jobs.contains(job)) {
+      throw StateError('上传任务已切换，请重新打开照片');
+    }
+    final client = CosUpload(profile);
+    try {
+      await client.reportCardTail(
+        job.snapshot,
+        job.id,
+        byteLength,
+        job.digest,
+        job.captureMetadata,
+        tail,
+      );
+    } finally {
+      client.close();
+    }
+  }
+
   String get name => [
     profile.stationCode,
     profile.stationName,

@@ -623,9 +623,11 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
             context,
             readPhoto: job.readPhotoForReview,
             sourcePath: job.source,
+            onRecognized: (length, tail) =>
+                station.reportCardTail(job, length, tail),
             guidance: [
               if (job.captureMetadata != null) job.captureMetadata!.description,
-              '请根据候选尾号核对卡面。归集由服务端识别结束照。',
+              '候选尾号随上传任务上报，供后台复核。自动归集由服务端识别结束照。',
             ].join('\n'),
           ),
         ),
