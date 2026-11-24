@@ -391,6 +391,8 @@ void main() {
     });
     final previous = FolderUploader(
       storage: Directory(p.join(support.path, 'auto-upload')),
+      scanInterval: const Duration(milliseconds: 100),
+      stableFor: const Duration(milliseconds: 200),
     );
     addTearDown(() async {
       await previous.stop();
@@ -404,6 +406,7 @@ void main() {
       await _until(
         () => previous.jobs.singleOrNull?.state == 'accepted',
         '旧工作台原片确认',
+        describe: () => '${previous.issues} ${previous.orderWaitMessage}',
       );
       final original = previous.jobs.single;
       fixture.rejectNotices = true;
