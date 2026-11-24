@@ -8,6 +8,12 @@ import 'package:path_provider/path_provider.dart';
 
 typedef Json = Map<String, dynamic>;
 
+class PrintBridgeResultError extends StateError {
+  PrintBridgeResultError(super.message, this.resultCode);
+
+  final int resultCode;
+}
+
 /// Flutter 与独立打印进程之间的私有管道。断开后禁止自动重试送打。
 class PrintBridge extends ChangeNotifier {
   Process? _process;
@@ -95,7 +101,11 @@ class PrintBridge extends ChangeNotifier {
       final pending = _pending.remove(message['id']);
       if (pending == null) return;
       if (message['error'] != null) {
-        pending.completeError(StateError(message['error'] as String));
+        final error = message['error'] as String;
+        final code = message['resultCode'];
+        pending.completeError(
+          code is int ? PrintBridgeResultError(error, code) : StateError(error),
+        );
       } else {
         final data = message['data'];
         if (data is Map && data.containsKey('state')) {

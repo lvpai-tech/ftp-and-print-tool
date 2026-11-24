@@ -25,7 +25,9 @@ async function callJson(config, method, route, body, signal) {
     const detail = payload && payload.code != null
       ? `${payload.code} ${payload.message || ''}`.trim()
       : `HTTP ${response.status}${payload && payload.error ? ` ${payload.error}` : ''}`;
-    throw new Error(`${method} ${route} 失败：${detail}`);
+    const error = new Error(`${method} ${route} 失败：${detail}`);
+    error.resultCode = payload?.code;
+    throw error;
   }
   return payload.data;
 }

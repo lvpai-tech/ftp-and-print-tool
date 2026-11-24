@@ -86,10 +86,12 @@ class PhotoBatchTimeline extends StatefulWidget {
 }
 
 const _batchThumbnailHeight = 84.0;
+const _maxSelection = 100;
 
 class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   final _selected = <String>{};
   final _requests = <String, String>{};
+  final _selectionOverlay = OverlayPortalController();
   List<Json>? _stations;
   List<Json> _batches = [];
   String? _station;
@@ -98,6 +100,10 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   bool _loading = true;
   bool _working = false;
   bool _submitting = false;
+  bool _selecting = false;
+  String? _candidate;
+  String? _recognitionPhotoId;
+  String? _selectionNotice;
 
   @override
   void initState() {
@@ -107,9 +113,15 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   }
 
   Future<void> _load() async {
+    if (_selectionOverlay.isShowing) _selectionOverlay.hide();
     setState(() {
       _loading = true;
       _error = null;
+      _selecting = false;
+      _selected.clear();
+      _candidate = null;
+      _recognitionPhotoId = null;
+      _selectionNotice = null;
     });
     try {
       final stations =
@@ -138,7 +150,6 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
           _batches = result == null
               ? []
               : (result['batches'] as List).cast<Json>().reversed.toList();
-          _selected.clear();
         });
       }
     } catch (error) {
@@ -149,10 +160,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   }
 
   bool _canDrop(_Dragged photo, Json target) =>
-      !_loading &&
-      !_working &&
-      photo.batch['id'] != target['id'] &&
-      target['targetPhotoId'] != null;
+      !_loading && !_working && !_selecting && _isTarget(photo.batch, target);
 
   Future<void> _move(_Dragged item, Json target) async {
     if (!_canDrop(item, target)) return;
@@ -198,48 +206,107 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     }
   }
 
-  List<Json> _photosToFill(Json batch, {String? cardPhotoId}) {
-    final available = _photos(batch).where(_movable).toList();
-    final chosen = available
-        .where((photo) => _selected.contains(photo['id']))
-        .toList();
-    return (chosen.isEmpty ? available : chosen)
-        .where((photo) => photo['id'] != cardPhotoId)
-        .toList();
+  bool _canSelect(Json photo) =>
+      _movable(photo) && photo['id'] != _recognitionPhotoId;
+
+  bool _isTarget(Json source, Json target) =>
+      source['id'] != target['id'] &&
+      target['targetPhotoId'] != null &&
+      target['targetCardId'] != null &&
+      source['targetCardId'] != target['targetCardId'];
+
+  void _setSelectionMode(bool active) {
+    if (active) ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    if (widget.inline) {
+      if (active) {
+        _selectionOverlay.show();
+      } else if (_selectionOverlay.isShowing) {
+        _selectionOverlay.hide();
+      }
+    }
+    setState(() {
+      _selecting = active;
+      _selectionNotice = null;
+      if (!active) {
+        _selected.clear();
+        _candidate = null;
+        _recognitionPhotoId = null;
+      }
+    });
   }
 
-  Future<void> _fill(
-    Json batch, {
-    String? candidate,
-    String? cardPhotoId,
-  }) async {
+  void _selectGroup(Iterable<Json> photos) {
+    final ids = photos.where(_canSelect).map((photo) => photo['id'] as String);
+    if ({..._selected, ...ids}.length > _maxSelection) {
+      setState(() => _selectionNotice = '每次最多选 100 张，请减少勾选范围。');
+      return;
+    }
+    setState(() {
+      _selected.addAll(ids);
+      _selectionNotice = null;
+    });
+  }
+
+  void _selectPhoto(Json photo, bool checked) {
+    if (checked) {
+      _selectGroup([photo]);
+    } else {
+      setState(() {
+        _selected.remove(photo['id']);
+        _selectionNotice = null;
+      });
+    }
+  }
+
+  List<_SelectedGroup> _selectedGroups() => [
+    for (final batch in _batches)
+      if (_photos(batch)
+              .where(
+                (photo) => _canSelect(photo) && _selected.contains(photo['id']),
+              )
+              .toList()
+          case final photos when photos.isNotEmpty)
+        (batch: batch, photos: photos),
+  ];
+
+  Future<void> _assign() async {
     if (_working || _loading) return;
-    final photos = _photosToFill(batch, cardPhotoId: cardPhotoId);
-    if (photos.isEmpty) {
-      await showAppMessage(context, message: '请至少选择一张游客照，卡面照片不会随本次补录归批。');
-      return;
-    }
-    if (photos.length > 100) {
-      await showAppMessage(context, message: '请勾选本次归批的照片，每次最多 100 张。');
-      return;
-    }
+    final groups = _selectedGroups();
+    if (groups.isEmpty) return;
+    final photos = groups.expand((group) => group.photos).toList();
+    final byCode = groups.every((group) => _unassigned(group.batch));
+    final targets = _batches
+        .where(
+          (target) => groups.every((group) => _isTarget(group.batch, target)),
+        )
+        .toList();
+    final station = _stations
+        ?.where((row) => row['id'] == _station)
+        .firstOrNull;
     setState(() => _working = true);
     try {
-      final code = await showDialog<String>(
+      final result = await showDialog<Json>(
         context: context,
-        builder: (_) => _CodeDialog(
-          count: photos.length,
-          time: _time(batch),
-          candidate: candidate,
+        barrierDismissible: false,
+        builder: (_) => _AssignmentDialog(
+          groups: groups,
+          targets: targets,
+          byCode: byCode,
+          station: station == null ? '' : _stationName(station),
+          candidate: _candidate,
+          thumbnail: _thumbnail,
+          save: (fields) => _saveCorrection(photos, fields),
         ),
       );
-      if (code != null && mounted) await _submit(photos, {'cardCode': code});
+      if (result != null && mounted) {
+        await _correctionSaved(result, photos.length);
+      }
     } finally {
       if (mounted) setState(() => _working = false);
     }
   }
 
-  Future<void> _submit(List<Json> photos, Json fields) async {
+  Future<Json> _saveCorrection(List<Json> photos, Json fields) async {
     final change = {
       'photos': photos
           .map(
@@ -250,7 +317,6 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     };
     final key = jsonEncode([_station, change]);
     final requestId = _requestId(key);
-    setState(() => _submitting = true);
     try {
       final result = await widget.call('correctPhotoBatch', [
         _station!,
@@ -264,11 +330,25 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
         throw StateError('服务返回的矫正结果不完整，请刷新核对。');
       }
       _requests.remove(key);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已将 ${photos.length} 张照片归入取片卡 $tail')),
-      );
-      await _load();
+      return result;
+    } on PrintBridgeResultError catch (error) {
+      if (_isRejectedCorrection(error)) _requests.remove(key);
+      rethrow;
+    }
+  }
+
+  Future<void> _correctionSaved(Json result, int count) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已将 $count 张照片归入取片卡 ${result['cardTail']}')),
+    );
+    await _load();
+  }
+
+  Future<void> _submit(List<Json> photos, Json fields) async {
+    setState(() => _submitting = true);
+    try {
+      final result = await _saveCorrection(photos, fields);
+      if (mounted) await _correctionSaved(result, photos.length);
     } catch (error) {
       if (mounted) {
         await showAppMessage(
@@ -371,19 +451,31 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     }
   }
 
-  Future<void> _recognizeTail(Json photo, Json batch) async {
+  Future<void> _recognizeTail(Json photo) async {
     final cardPhotoId = photo['id'] as String;
-    final canFill =
-        _unassigned(batch) &&
-        _photosToFill(batch, cardPhotoId: cardPhotoId).isNotEmpty;
+    final canFill = _batches.any(
+      (batch) =>
+          _unassigned(batch) &&
+          _photos(batch)
+              .any((photo) => _movable(photo) && photo['id'] != cardPhotoId),
+    );
     final candidate = await showCardTailDialog(
       context,
       readPhoto: () => _readBatchPhoto(photo),
       guidance: '条形码拍不全时，请框住卡面印刷的四位数字。',
       allowUse: canFill,
+      useLabel: '核对后用于归集',
     );
     if (candidate != null && mounted) {
-      await _fill(batch, candidate: candidate, cardPhotoId: cardPhotoId);
+      _candidate = candidate;
+      _recognitionPhotoId = cardPhotoId;
+      _selected.remove(cardPhotoId);
+      _setSelectionMode(true);
+      final groups = _selectedGroups();
+      if (groups.isNotEmpty &&
+          groups.every((group) => _unassigned(group.batch))) {
+        await _assign();
+      }
     }
   }
 
@@ -466,6 +558,15 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
               ),
               icon: const Icon(Icons.refresh_rounded, size: 20),
             ),
+            OutlinedButton.icon(
+              onPressed:
+                  enabled &&
+                      _batches.any((batch) => _photos(batch).any(_movable))
+                  ? () => _setSelectionMode(!_selecting)
+                  : null,
+              icon: Icon(_selecting ? Icons.close : Icons.checklist),
+              label: Text(_selecting ? '退出批量归集' : '批量归集'),
+            ),
             Text(
               [
                 widget.scenicName,
@@ -492,22 +593,88 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       ],
     );
     final timeline = _timeline();
-    return PopScope(
-      canPop: !_working,
-      child: widget.inline
-          ? SliverMainAxisGroup(
-              slivers: [
-                SliverToBoxAdapter(child: header),
-                timeline,
-              ],
-            )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                header,
-                Expanded(child: CustomScrollView(slivers: [timeline])),
-              ],
-            ),
+    final visible = TickerMode.valuesOf(context).enabled;
+    final content = widget.inline
+        ? SliverMainAxisGroup(
+            slivers: [
+              SliverToBoxAdapter(
+                child: OverlayPortal(
+                  controller: _selectionOverlay,
+                  overlayChildBuilder: (_) => !visible
+                      ? const SizedBox.shrink()
+                      : SafeArea(
+                          minimum: const EdgeInsets.all(16),
+                          child: Align(
+                            alignment: Alignment.bottomCenter,
+                            child: _selectionBar(),
+                          ),
+                        ),
+                  child: header,
+                ),
+              ),
+              timeline,
+              if (_selecting)
+                const SliverToBoxAdapter(child: SizedBox(height: 88)),
+            ],
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              header,
+              Expanded(child: CustomScrollView(slivers: [timeline])),
+              if (_selecting) _selectionBar(),
+            ],
+          );
+    return PopScope(canPop: !_working, child: content);
+  }
+
+  Widget _selectionBar() {
+    final enabled = !_working && !_loading && _selected.isNotEmpty;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 780),
+      child: Material(
+        color: WorkstationStyle.card,
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+          side: const BorderSide(color: WorkstationStyle.line),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                '已选 ${_selected.length} 张',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+              if (_selectionNotice != null || _candidate != null)
+                Text(
+                  _selectionNotice ?? '已识别候选尾号 $_candidate',
+                  style: const TextStyle(color: WorkstationStyle.muted),
+                ),
+              TextButton(
+                onPressed: enabled
+                    ? () => setState(() {
+                        _selected.clear();
+                        _selectionNotice = null;
+                      })
+                    : null,
+                child: const Text('清空'),
+              ),
+              FilledButton(
+                onPressed: enabled ? _assign : null,
+                child: const Text('设置取片批次'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -649,15 +816,9 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     final photos = _photos(batch);
     final status = batch['status'];
     final pending = _unassigned(batch);
-    final canFill = pending && photos.any(_movable);
+    final canSelectGroup = _selecting && photos.any(_canSelect);
     final canReceive = batch['targetPhotoId'] != null;
-    final hasDestination = _batches.any(
-      (target) =>
-          target['id'] != batch['id'] && target['targetPhotoId'] != null,
-    );
-    final chosen = photos
-        .where((photo) => _selected.contains(photo['id']))
-        .length;
+    final hasDestination = _batches.any((target) => _isTarget(batch, target));
     final count = photos.where((photo) => photo['ending'] != true).length;
     final label = switch (status) {
       'MISSING_END' => '缺少结束照',
@@ -735,24 +896,22 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
                   ),
                 ],
               ),
-              if (canFill || canReceive || status == 'CARD')
+              if (canSelectGroup || canReceive || status == 'CARD')
                 Wrap(
                   spacing: 12,
                   runSpacing: 6,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    if (canFill)
+                    if (canSelectGroup)
                       FilledButton.tonal(
                         onPressed: _loading || _working
                             ? null
-                            : () => _fill(batch),
+                            : () => _selectGroup(photos),
                         style: FilledButton.styleFrom(
                           foregroundColor: WorkstationStyle.accent,
                           backgroundColor: WorkstationStyle.accentSoft,
                         ),
-                        child: Text(
-                          chosen == 0 ? '补录取片码' : '补录取片码（已选 $chosen 张）',
-                        ),
+                        child: const Text('选中本组可处理照片'),
                       ),
                     if (canReceive)
                       _BatchCardNote(
@@ -786,7 +945,6 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
               itemBuilder: (_, index) => _photoTile(
                 photos[index],
                 batch,
-                canFill,
                 hasDestination,
                 captionLines,
               ),
@@ -800,18 +958,29 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   Widget _photoTile(
     Json photo,
     Json batch,
-    bool canFill,
     bool hasDestination,
     int captionLines,
   ) {
     final ending = photo['ending'] == true;
     final time = _time(photo);
     final id = photo['id'] as String;
-    final canMove = _movable(photo) && hasDestination && !_working && !_loading;
+    final canMove =
+        !_selecting &&
+        _movable(photo) &&
+        hasDestination &&
+        !_working &&
+        !_loading;
+    final checked = _selected.contains(id);
+    final selectable = _canSelect(photo) && !_working && !_loading;
     final item = (photo: photo, batch: batch);
     final blocked = photo['blockedReason'] as String?;
     final unavailable =
         blocked ?? (!ending && !hasDestination ? '所选日期没有其他可接收批次' : null);
+    final selectionReason = id == _recognitionPhotoId
+        ? '识别来源照片仅供核对'
+        : ending
+        ? '结束照仅供核对'
+        : blocked;
     final preview = Stack(
       fit: StackFit.expand,
       children: [
@@ -820,17 +989,24 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(8),
             side: BorderSide(
-              color: ending ? WorkstationStyle.accent : WorkstationStyle.line,
+              width: checked ? 2 : 1,
+              color: ending || checked
+                  ? WorkstationStyle.accent
+                  : WorkstationStyle.line,
             ),
           ),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
             mouseCursor: canMove ? SystemMouseCursors.grab : null,
-            onTap: () => _preview(photo),
+            onTap: _selecting
+                ? selectable
+                      ? () => _selectPhoto(photo, !checked)
+                      : null
+                : () => _preview(photo),
             child: _thumbnail(photo),
           ),
         ),
-        if (!ending && (canMove || unavailable != null))
+        if (!_selecting && !ending && (canMove || unavailable != null))
           Positioned(
             left: 4,
             top: 4,
@@ -913,8 +1089,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
                         padding: EdgeInsets.zero,
                         position: PopupMenuPosition.under,
                         enabled: !_working && !_loading,
-                        onSelected: (action) =>
-                            _runPhotoAction(action, photo, batch),
+                        onSelected: (action) => _runPhotoAction(action, photo),
                         itemBuilder: (_) => [
                           for (final action in _PhotoAction.values)
                             PopupMenuItem(
@@ -945,27 +1120,24 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
                     ),
                   ),
                 ),
-                if (canFill && _movable(photo))
+                if (_selecting)
                   Positioned(
-                    right: 4,
-                    bottom: 4,
+                    left: 4,
+                    top: 4,
                     child: Material(
                       color: WorkstationStyle.card,
                       borderRadius: BorderRadius.circular(6),
                       child: Tooltip(
-                        message: '选择这张照片补码',
-                        child: Checkbox(
-                          visualDensity: VisualDensity.compact,
-                          value: _selected.contains(id),
-                          onChanged: _working || _loading
-                              ? null
-                              : (checked) => setState(() {
-                                  if (checked == true) {
-                                    _selected.add(id);
-                                  } else {
-                                    _selected.remove(id);
-                                  }
-                                }),
+                        message: selectionReason ?? '选中游客照 $time',
+                        child: SizedBox.square(
+                          dimension: 40,
+                          child: Checkbox(
+                            key: ValueKey('select-photo-$id'),
+                            value: checked,
+                            onChanged: selectable
+                                ? (value) => _selectPhoto(photo, value == true)
+                                : null,
+                          ),
                         ),
                       ),
                     ),
@@ -1022,11 +1194,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     if (target != null && mounted) await _move(item, target);
   }
 
-  Future<void> _runPhotoAction(
-    _PhotoAction action,
-    Json photo,
-    Json batch,
-  ) async {
+  Future<void> _runPhotoAction(_PhotoAction action, Json photo) async {
     switch (action) {
       case _PhotoAction.recognize:
         if (photo['previewUrl'] is! String || photo['previewUrl'] == '') {
@@ -1037,7 +1205,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
           );
           return;
         }
-        await _recognizeTail(photo, batch);
+        await _recognizeTail(photo);
       case _PhotoAction.remove:
         await _removePhoto(photo);
       case _PhotoAction.capture:
@@ -1417,67 +1585,238 @@ class _BatchFilterMenuState extends State<_BatchFilterMenu> {
   );
 }
 
-class _CodeDialog extends StatefulWidget {
-  const _CodeDialog({required this.count, required this.time, this.candidate});
-  final int count;
-  final String time;
+bool _isRejectedCorrection(Object error) =>
+    error is PrintBridgeResultError &&
+    const {40001, 40101, 40102, 40301, 40401, 40901}.contains(error.resultCode);
+
+class _AssignmentDialog extends StatefulWidget {
+  const _AssignmentDialog({
+    required this.groups,
+    required this.targets,
+    required this.byCode,
+    required this.station,
+    required this.candidate,
+    required this.thumbnail,
+    required this.save,
+  });
+
+  final List<_SelectedGroup> groups;
+  final List<Json> targets;
+  final bool byCode;
+  final String station;
   final String? candidate;
+  final Widget Function(Json) thumbnail;
+  final Future<Json> Function(Json) save;
 
   @override
-  State<_CodeDialog> createState() => _CodeDialogState();
+  State<_AssignmentDialog> createState() => _AssignmentDialogState();
 }
 
-class _CodeDialogState extends State<_CodeDialog> {
+class _AssignmentDialogState extends State<_AssignmentDialog> {
+  late bool _byCode = widget.byCode;
   late String _code = widget.candidate ?? '';
+  Json? _target;
+  Json? _pending;
+  String? _error;
+  bool _saving = false;
+
+  Json? get _fields {
+    if (_byCode) {
+      return RegExp(r'^(?:[0-9]{4}|[A-Z0-9]{12})$').hasMatch(_code)
+          ? {'cardCode': _code}
+          : null;
+    }
+    final target = _target;
+    return target == null
+        ? null
+        : {
+            'targetPhotoId': target['targetPhotoId'],
+            'targetCardId': target['targetCardId'],
+          };
+  }
+
+  Future<void> _confirm() async {
+    final fields = _pending ?? _fields;
+    if (_saving || fields == null) return;
+    setState(() {
+      _pending = fields;
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final result = await widget.save(fields);
+      if (mounted) Navigator.pop(context, result);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        final message = appErrorMessage(error);
+        if (_isRejectedCorrection(error)) {
+          _pending = null;
+          _error = message.replaceFirst(
+            RegExp(r'^POST [^ ]+ 失败：[0-9]+\s*'),
+            '',
+          );
+        } else {
+          _error = '提交未确认：$message';
+        }
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final valid = RegExp(r'^(?:[0-9]{4}|[A-Z0-9]{12})$').hasMatch(_code);
-    final count = widget.count;
-    final time = widget.time;
-    return AlertDialog(
-      title: const Text('确认补录取片码'),
-      scrollable: true,
-      content: SizedBox(
-        width: 390,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('将 $time 批次的 $count 张游客照归入下方取片卡。'),
-            const SizedBox(height: 12),
-            TextFormField(
-              initialValue: _code,
-              autofocus: true,
-              autocorrect: false,
-              decoration: const InputDecoration(
-                labelText: '取片码',
-                helperText: '4 位卡尾号或 12 位完整取片码',
-                border: OutlineInputBorder(),
+    final available = widget.byCode || widget.targets.isNotEmpty;
+    final editable = _pending == null;
+    final count = widget.groups.fold(
+      0,
+      (sum, group) => sum + group.photos.length,
+    );
+    return PopScope(
+      canPop: !_saving,
+      child: AlertDialog(
+        title: const Text('设置取片批次'),
+        scrollable: true,
+        content: SizedBox(
+          width: 440,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            spacing: 12,
+            children: [
+              Text(
+                '${widget.station} · 已选 $count 张游客照',
+                style: const TextStyle(fontWeight: FontWeight.w700),
               ),
-              onChanged: (text) =>
-                  setState(() => _code = text.trim().toUpperCase()),
-              onFieldSubmitted: (_) {
-                if (valid) Navigator.pop(context, _code);
-              },
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 190),
+                child: SingleChildScrollView(
+                  primary: false,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    spacing: 10,
+                    children: [
+                      for (final group in widget.groups)
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          spacing: 6,
+                          children: [
+                            Text(
+                              '${_label(group.batch)} · ${_wall(group.batch)} · ${group.photos.length} 张',
+                            ),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: [
+                                for (final photo in group.photos)
+                                  Tooltip(
+                                    message:
+                                        "游客照 #${photo['id']} · ${_wall(photo)}",
+                                    child: SizedBox.square(
+                                      dimension: 52,
+                                      child: widget.thumbnail(photo),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              if (!available)
+                const Text('当前选择没有可接收的目标批次，请返回调整选中的照片。')
+              else ...[
+                DropdownButtonFormField<bool>(
+                  initialValue: _byCode,
+                  decoration: const InputDecoration(
+                    labelText: '归集方式',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: [
+                    if (widget.byCode)
+                      const DropdownMenuItem(value: true, child: Text('输入取片码')),
+                    if (widget.targets.isNotEmpty)
+                      const DropdownMenuItem(
+                        value: false,
+                        child: Text('选择已有批次'),
+                      ),
+                  ],
+                  onChanged: editable
+                      ? (value) => setState(() {
+                          _byCode = value!;
+                          _error = null;
+                        })
+                      : null,
+                ),
+                if (_byCode)
+                  TextFormField(
+                    initialValue: _code,
+                    enabled: editable,
+                    autofocus: widget.candidate != null,
+                    autocorrect: false,
+                    maxLength: 12,
+                    decoration: const InputDecoration(
+                      labelText: '取片码',
+                      helperText: '4 位卡尾号或 12 位完整取片码',
+                      counterText: '',
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (value) => setState(() {
+                      _code = value.trim().toUpperCase();
+                      _error = null;
+                    }),
+                  )
+                else
+                  DropdownButtonFormField<Json>(
+                    initialValue: _target,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: '目标批次',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: [
+                      for (final target in widget.targets)
+                        DropdownMenuItem(
+                          value: target,
+                          child: Text('${_label(target)} · ${_wall(target)}'),
+                        ),
+                    ],
+                    onChanged: editable
+                        ? (target) => setState(() {
+                            _target = target;
+                            _error = null;
+                          })
+                        : null,
+                  ),
+              ],
+              if (_saving) const LinearProgressIndicator(minHeight: 2),
+              if (_error case final String error)
+                Text(
+                  error,
+                  style: const TextStyle(color: WorkstationStyle.bad),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _saving ? null : () => Navigator.pop(context),
+            child: Text(available ? '取消' : '关闭'),
+          ),
+          if (available)
+            FilledButton(
+              onPressed: _saving || _fields == null ? null : _confirm,
+              child: Text(_pending == null || _saving ? '确认归集' : '重试同一请求'),
             ),
-          ],
-        ),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          onPressed: valid ? () => Navigator.pop(context, _code) : null,
-          child: const Text('确认归批'),
-        ),
-      ],
     );
   }
 }
 
+typedef _SelectedGroup = ({Json batch, List<Json> photos});
 typedef _Dragged = ({Json photo, Json batch});
 
 DateTime _shanghaiToday() {

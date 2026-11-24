@@ -9,7 +9,7 @@ import 'package:material_ui/material_ui.dart';
 
 void main() {
   for (final inline in [false, true]) {
-    testWidgets('${inline ? '上传任务列表' : '打印矫正页'}中拖动和补录各自确认，取消时不写入', (
+    testWidgets('${inline ? '上传任务列表' : '打印矫正页'}中拖动和批量归集各自确认，取消时不写入', (
       tester,
     ) async {
       await tester.binding.setSurfaceSize(const Size(1120, 850));
@@ -201,18 +201,42 @@ void main() {
       await tester.pumpAndSettle();
       expect(writes, hasLength(1));
 
-      await tester.tap(find.text('补录取片码'));
+      await tester.tap(find.text('批量归集'));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, '设置取片批次'))
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<Checkbox>(find.byKey(const ValueKey('select-photo-2')))
+            .onChanged,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<Checkbox>(find.byKey(const ValueKey('select-photo-3')))
+            .onChanged,
+        isNull,
+      );
+      await tester.tap(find.text('选中本组可处理照片'));
+      await tester.pumpAndSettle();
+      expect(find.text('已选 1 张'), findsOneWidget);
+      final assign = find.widgetWithText(FilledButton, '设置取片批次');
+      await tester.tap(assign);
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).last, '1234');
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
       expect(writes, hasLength(1));
 
-      await tester.tap(find.text('补录取片码'));
+      await tester.tap(assign);
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).last, '1234');
       await tester.pumpAndSettle();
-      await tester.tap(find.text('确认归批'));
+      await tester.tap(find.text('确认归集'));
       await tester.pumpAndSettle();
       expect(writes.last['cardCode'], '1234');
       expect(writes.last['photos'], [
@@ -223,7 +247,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('任务列表'), findsOneWidget);
         expect(find.text('取片卡 1234'), findsOneWidget);
-        expect(find.text('补录取片码'), findsOneWidget);
+        expect(find.text('批量归集'), findsOneWidget);
         expect(tester.takeException(), isNull);
       }
       await tester.binding.setSurfaceSize(const Size(1120, 850));

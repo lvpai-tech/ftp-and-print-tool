@@ -551,10 +551,13 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
         else
           const SliverToBoxAdapter(child: SizedBox(height: 20)),
         if (batchTimeline != null)
-          SliverVisibility(
-            visible: !showQueue,
-            maintainState: true,
-            sliver: batchTimeline,
+          TickerMode(
+            enabled: !showQueue && widget.allowDrop,
+            child: SliverVisibility(
+              visible: !showQueue,
+              maintainState: true,
+              sliver: batchTimeline,
+            ),
           ),
         SliverVisibility(
           visible: showQueue,

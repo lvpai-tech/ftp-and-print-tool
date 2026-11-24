@@ -177,7 +177,9 @@ async function serve({ input = process.stdin, send, configPath, root }) {
       send({ id: request.id, data });
       if (closing) process.exitCode = 0;
     } catch (error) {
-      send({ id: request?.id ?? null, error: error.message });
+      send({ id: request?.id ?? null, error: error.message,
+        ...(request?.method === 'correctPhotoBatch' && Number.isInteger(error.resultCode)
+          ? { resultCode: error.resultCode } : {}) });
     } finally {
       if (ownsMutation) mutating = false;
     }

@@ -8,12 +8,14 @@ Future<String?> showCardTailDialog(
   required Future<Uint8List> Function() readPhoto,
   required String guidance,
   bool allowUse = false,
+  String useLabel = '核对后用于补录',
 }) => showDialog<String>(
   context: context,
   builder: (_) => _CardTailDialog(
     readPhoto: readPhoto,
     guidance: guidance,
     allowUse: allowUse,
+    useLabel: useLabel,
   ),
 );
 
@@ -22,11 +24,13 @@ class _CardTailDialog extends StatefulWidget {
     required this.readPhoto,
     required this.guidance,
     required this.allowUse,
+    required this.useLabel,
   });
 
   final Future<Uint8List> Function() readPhoto;
   final String guidance;
   final bool allowUse;
+  final String useLabel;
 
   @override
   State<_CardTailDialog> createState() => _CardTailDialogState();
@@ -203,7 +207,7 @@ class _CardTailDialogState extends State<_CardTailDialog> {
         if (widget.allowUse && _candidate != null)
           FilledButton.tonal(
             onPressed: () => Navigator.pop(context, _candidate),
-            child: const Text('核对后用于补录'),
+            child: Text(widget.useLabel),
           ),
       ],
     );
