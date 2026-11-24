@@ -161,6 +161,12 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   Widget build(BuildContext context) {
     final release = widget.release;
     final ios = release.platform == 'ios';
+    final manualInstallHint = switch (release.platform) {
+      'windows-x64' when release.url.path.endsWith('-setup.exe') =>
+        '请先停止上传和打印，从托盘退出旧版本，再运行 Setup.exe 覆盖安装。',
+      'windows-x64' => '请退出旧版本，再解压完整 ZIP 运行。',
+      _ => '请先退出旧版本，再打开 DMG 安装。',
+    };
     return PopScope(
       canPop: !_busy,
       child: AlertDialog(
@@ -182,7 +188,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                       : widget.install != null
                       ? '下载校验后，等待当前上传和打印完成，再覆盖安装并重启。'
                       : '更新包 ${(release.size / 1048576).toStringAsFixed(1)} MiB，下载后校验完整性。'
-                            '请先停止上传并退出旧版本；Windows解压完整ZIP运行，Mac打开DMG安装。',
+                            '$manualInstallHint',
                 ),
                 if (_busy)
                   Padding(
