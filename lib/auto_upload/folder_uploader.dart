@@ -577,7 +577,6 @@ class FolderUploader extends ChangeNotifier {
       }
       _timer = Timer.periodic(scanInterval, (_) => _tick());
       await scanNow();
-      _tick();
       _notify();
     } catch (_) {
       running = false;
