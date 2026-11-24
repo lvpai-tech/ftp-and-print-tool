@@ -142,7 +142,7 @@ void main() {
       await tester.tap(review);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('识别取片卡尾号'), findsOneWidget);
+      expect(find.text('识别取片码'), findsOneWidget);
       await tester.tap(find.text('关闭'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
