@@ -1,4 +1,6 @@
-#define Workstation "帧集快拍"
+#ifndef Workstation
+  #define Workstation "帧集快拍"
+#endif
 #define WorkstationExe "lvpai_ftp_client.exe"
 
 [Setup]
@@ -6,6 +8,7 @@ AppId={{0865ABC5-AAA9-4E6B-AC85-05C88093CB02}
 AppName={#Workstation}
 AppVersion={#AppVersion}
 AppPublisher=旅派
+VersionInfoProductName={#Workstation}
 DefaultDirName={localappdata}\Programs\Lvpai\ZhenjiWorkstation
 DefaultGroupName={#Workstation}
 DisableDirPage=yes
@@ -38,8 +41,8 @@ FinishedHeadingLabel=安装完成
 FinishedLabelNoIcons=[name] 已安装完成。
 FinishedLabel=[name] 已安装完成。
 ClickFinish=点击「完成」退出安装向导。
-SetupAppRunningError=帧集快拍正在运行。请先从系统托盘正常退出工作台，再继续安装。
-UninstallAppRunningError=帧集快拍正在运行。请先从系统托盘正常退出工作台，再继续卸载。
+SetupAppRunningError={#Workstation}正在运行。请先从系统托盘正常退出工作台，再继续安装。
+UninstallAppRunningError={#Workstation}正在运行。请先从系统托盘正常退出工作台，再继续卸载。
 
 [Files]
 ; Only staged program files. AppData and the user's photo folder are outside the payload.
@@ -51,4 +54,4 @@ Name: "{group}\{#Workstation}（图形兼容模式）"; Filename: "{app}\{#Works
 Name: "{autodesktop}\{#Workstation}"; Filename: "{app}\{#WorkstationExe}"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\{#WorkstationExe}"; Description: "打开帧集快拍"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#WorkstationExe}"; Description: "打开{#Workstation}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent

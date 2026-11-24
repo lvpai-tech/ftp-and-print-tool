@@ -3,8 +3,14 @@ name: Build Windows
 on:
   workflow_dispatch:
     inputs:
+      channel:
+        description: 'Client update channel'
+        type: choice
+        required: true
+        default: prd
+        options: [local, test, prd]
       publish_update:
-        description: 'Sign and publish Setup.exe to the test auto-update feed'
+        description: 'Sign and publish Setup.exe to the selected COS update feed'
         type: boolean
         default: false
 
@@ -15,12 +21,13 @@ jobs:
   windows:
     if: '!inputs.publish_update || github.ref == ''refs/heads/dev/huangml'''
     runs-on: windows-2022
-    environment: ${{ inputs.publish_update && 'cos-test' || 'desktop-build' }}
+    environment: ${{ inputs.publish_update && format('cos-{0}', inputs.channel) || 'desktop-build' }}
     concurrency:
-      group: windows-desktop-update-${{ inputs.publish_update && 'publish' || github.run_id }}
+      group: windows-desktop-update-${{ inputs.publish_update && inputs.channel || github.run_id }}
     timeout-minutes: 60
     env:
       PUB_HOSTED_URL: https://pub.dev
+      LVPAI_UPDATE_ENV: ${{ inputs.channel }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,11 +76,13 @@ jobs:
         run: |
           flutter test --no-pub
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tool -p test_desktop_publishing.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --test 'print-runtime/test/*.test.cjs'
 
       - name: Build and package Windows x64 release
         if: '!inputs.publish_update'
-        run: python -X utf8 tool/package_release.py --platform windows-x64 --channel test --iscc "$env:INNO_ISCC"
+        run: python -X utf8 tool/package_release.py --platform windows-x64 --channel "$env:LVPAI_UPDATE_ENV" --iscc "$env:INNO_ISCC"
 
       - name: Sign and package Windows x64 release
         if: inputs.publish_update
@@ -100,11 +109,17 @@ jobs:
             Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           if (-not $signTool) { throw 'SignTool not found' }
           Remove-Item Env:WINDOWS_SIGNING_PFX, Env:WINDOWS_SIGNING_PASSWORD
-          python -X utf8 tool/package_release.py --platform windows-x64 --channel test --iscc "$env:INNO_ISCC" --windows-sign-tool "$signTool" --windows-sign-thumbprint $cert.Thumbprint
+          python -X utf8 tool/package_release.py --platform windows-x64 --channel "$env:LVPAI_UPDATE_ENV" --iscc "$env:INNO_ISCC" --windows-sign-tool "$signTool" --windows-sign-thumbprint $cert.Thumbprint
 
       - name: Verify installer and data retention
         run: |
-          $setup = Get-Item -Path 'build/releases/test/windows-x64/*-setup.exe'
+          $setup = Get-Item -Path "build/releases/$env:LVPAI_UPDATE_ENV/windows-x64/*-setup.exe"
+          $displayName = switch ($env:LVPAI_UPDATE_ENV) {
+            'local' { '帧集快拍（本地版）' }
+            'test' { '帧集快拍（测试版）' }
+            'prd' { '帧集快拍' }
+          }
+          if ($setup.VersionInfo.ProductName.Trim() -cne $displayName) { throw 'Setup product name does not match the channel' }
           $app = Join-Path $env:LOCALAPPDATA 'Programs/Lvpai/ZhenjiWorkstation'
           $data = Join-Path $env:APPDATA 'ai.lvpai/lvpai_ftp_client'
           New-Item -ItemType Directory -Path $data -Force | Out-Null
@@ -142,8 +157,8 @@ jobs:
         with:
           name: lvpai-ftp-windows-x64
           path: |
-            build/releases/test/windows-x64/*.zip
-            build/releases/test/windows-x64/release-info.json
+            build/releases/${{ inputs.channel }}/windows-x64/*.zip
+            build/releases/${{ inputs.channel }}/windows-x64/release-info.json
           if-no-files-found: error
           retention-days: 14
 
@@ -152,8 +167,9 @@ jobs:
         with:
           name: lvpai-ftp-windows-x64-setup
           path: |
-            build/releases/test/windows-x64/*-setup.exe
-            build/releases/test/windows-x64/*-setup.exe.sha256
+            build/releases/${{ inputs.channel }}/windows-x64/*-setup.exe
+            build/releases/${{ inputs.channel }}/windows-x64/*-setup.exe.sha256
+            build/releases/${{ inputs.channel }}/windows-x64/setup-release-info.json
           if-no-files-found: error
           retention-days: 14
 
@@ -161,7 +177,7 @@ jobs:
         if: inputs.publish_update
         run: python -m pip install cos-python-sdk-v5==1.9.45
 
-      - name: Publish Windows test update
+      - name: Publish Windows update to COS
         if: inputs.publish_update
         env:
           COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
@@ -169,5 +185,5 @@ jobs:
           COS_BUCKET: ${{ vars.COS_BUCKET }}
           COS_REGION: ${{ vars.COS_REGION }}
         run: |
-          $setup = Get-Item -Path 'build/releases/test/windows-x64/*-setup.exe'
-          python -X utf8 tool/publish_desktop_update.py "$($setup.FullName)"
+          $setup = Get-Item -Path "build/releases/$env:LVPAI_UPDATE_ENV/windows-x64/*-setup.exe"
+          python -X utf8 tool/publish_desktop_update.py --channel "$env:LVPAI_UPDATE_ENV" "$($setup.FullName)"

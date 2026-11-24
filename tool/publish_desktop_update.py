@@ -1,7 +1,8 @@
-"""Publish a signed desktop update to its test feed after uploading the package."""
+"""Publish a signed desktop update to the channel embedded by the packager."""
 
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -16,9 +17,12 @@ from xml.etree import ElementTree as xml
 ORIGIN = "https://cdn.hilvpai.com"
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 MAX_PACKAGE_BYTES = 512 * 1024 * 1024
+CHANNELS = ("local", "test", "prd")
+PART_SIZE = 2 * 1024 * 1024
+PART_WORKERS = 24
 
 
-def package_metadata(package):
+def package_metadata(package, channel):
     match = re.fullmatch(
         r"lvpai-ftp-(\d+\.\d+\.\d+)-(\d+)-(windows-x64-setup\.exe|macos-arm64\.dmg)",
         package.name,
@@ -32,18 +36,24 @@ def package_metadata(package):
         raise ValueError("Package size or build number is outside the update protocol")
     windows = suffix.endswith(".exe")
     platform = "windows-x64" if windows else "macos-arm64"
-    prefix = f"ftp-client/test/{platform}" + ("/setup" if windows else "")
+    prefix = f"ftp-client/{channel}/{platform}" + ("/setup" if windows else "")
     with package.open("rb") as source:
         digest = hashlib.file_digest(source, "sha256").hexdigest()
-    return prefix, {
+    manifest = {
         "versionCode": code,
         "versionName": version,
         "platform": platform,
-        "channel": "test",
+        "channel": channel,
         "installerUrl": f"{ORIGIN}/{prefix}/{package.name}",
         "sizeBytes": size,
         "sha256": digest,
     }
+    info_path = package.with_name("setup-release-info.json" if windows else "release-info.json")
+    recorded = json.loads(info_path.read_text(encoding="utf-8"))
+    if (recorded != manifest or type(recorded["versionCode"]) is not int
+            or type(recorded["sizeBytes"]) is not int):
+        raise ValueError("Build metadata differs from this package or selected update channel")
+    return prefix, manifest
 
 
 def sign(tool, file, secret, signature_only=False):
@@ -120,21 +130,51 @@ def upload_package(client, bucket, key, package, manifest):
     from qcloud_cos import CosServiceError
 
     try:
-        with package.open("rb") as source:
-            client.put_object(
-                Bucket=bucket, Key=key, Body=source, EnableMD5=True,
-                ForbidOverwrite="true", ContentType="application/octet-stream",
-                CacheControl="public,max-age=31536000,immutable",
-                Metadata={"x-cos-meta-sha256": manifest["sha256"]},
-            )
+        headers = client.head_object(Bucket=bucket, Key=key)
     except CosServiceError as error:
-        if str(error.get_status_code()) != "409":
+        if str(error.get_status_code()) != "404":
             raise
-    headers = {name.lower(): value for name, value in
-               client.head_object(Bucket=bucket, Key=key).items()}
+        try:
+            upload_parts(client, bucket, key, package, manifest)
+        except CosServiceError as conflict:
+            if str(conflict.get_status_code()) != "409":
+                raise
+        headers = client.head_object(Bucket=bucket, Key=key)
+    headers = {name.lower(): value for name, value in headers.items()}
     if (int(headers["content-length"]) != manifest["sizeBytes"]
             or headers.get("x-cos-meta-sha256") != manifest["sha256"]):
         raise ValueError("An immutable object already exists with different bytes")
+
+
+def upload_parts(client, bucket, key, package, manifest):
+    # COS needs ForbidOverwrite at completion to keep versioned objects immutable.
+    target = {"Bucket": bucket, "Key": key}
+    upload_id = client.create_multipart_upload(
+        **target, ContentType="application/octet-stream",
+        CacheControl="public,max-age=31536000,immutable",
+        Metadata={"x-cos-meta-sha256": manifest["sha256"]},
+    )["UploadId"]
+
+    def upload(part):
+        with package.open("rb") as source:
+            source.seek((part - 1) * PART_SIZE)
+            data = source.read(PART_SIZE)
+        response = client.upload_part(**target, UploadId=upload_id, PartNumber=part,
+                                      Body=data, EnableMD5=True)
+        return {"PartNumber": part, "ETag": response["ETag"]}
+
+    try:
+        count = (manifest["sizeBytes"] + PART_SIZE - 1) // PART_SIZE
+        with ThreadPoolExecutor(max_workers=min(count, PART_WORKERS)) as pool:
+            parts = list(pool.map(upload, range(1, count + 1)))
+        client.complete_multipart_upload(**target, UploadId=upload_id,
+                                        MultipartUpload={"Part": parts}, ForbidOverwrite="true")
+    except Exception as error:
+        try:
+            client.abort_multipart_upload(**target, UploadId=upload_id)
+        except Exception as cleanup_error:
+            error.add_note(f"Could not abort COS multipart upload {upload_id}: {cleanup_error}")
+        raise
 
 
 def check_cdn(url, expected):
@@ -160,19 +200,22 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("package", type=Path)
+    parser.add_argument("--channel", required=True, choices=CHANNELS)
     parser.add_argument("--sparkle-sign-tool", type=Path)
     args = parser.parse_args()
-    prefix, manifest = package_metadata(args.package)
+    prefix, manifest = package_metadata(args.package, args.channel)
     appcast = manifest["platform"] == "macos-arm64"
     if appcast != (args.sparkle_sign_tool is not None):
         parser.error("macOS publication requires the Sparkle signing tool")
     feed_key = f"{prefix}/" + ("appcast.xml" if appcast else "latest.json")
-    client = CosS3Client(CosConfig(
-        Region=os.environ["COS_REGION"],
-        SecretId=os.environ["COS_SECRET_ID"],
-        SecretKey=os.environ["COS_SECRET_KEY"],
-        Scheme="https",
-    ))
+    required = ("COS_REGION", "COS_SECRET_ID", "COS_SECRET_KEY", "COS_BUCKET")
+    missing = [name for name in required if not os.environ.get(name, "").strip()]
+    if missing:
+        parser.error(f"Missing COS configuration for {args.channel}: {', '.join(missing)}")
+    client = CosS3Client(CosConfig(Region=os.environ["COS_REGION"],
+                                 SecretId=os.environ["COS_SECRET_ID"],
+                                 SecretKey=os.environ["COS_SECRET_KEY"], Scheme="https",
+                                 PoolConnections=PART_WORKERS, PoolMaxSize=PART_WORKERS))
     bucket = os.environ["COS_BUCKET"]
     previous, previous_body = read_current(client, bucket, feed_key, appcast)
     code = manifest["versionCode"]

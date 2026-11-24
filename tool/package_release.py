@@ -15,6 +15,7 @@ from bundle_print_runtime import bundle, require_bundle
 
 # Keep a Windows subst drive in the path passed to Flutter and MSBuild.
 APP = pathlib.Path(__file__).absolute().parents[1]
+CHANNEL_APP_NAMES = {'local': '帧集快拍（本地版）', 'test': '帧集快拍（测试版）', 'prd': '帧集快拍'}
 
 
 def run(*args):
@@ -52,6 +53,17 @@ def add_msvc_runtime(release, payload):
     runtime = max(runtimes, key=lambda file: tuple(map(int, file.parents[2].name.split('.'))))
     for dll in runtime.parent.glob('*.dll'):
         shutil.copy2(dll, payload / dll.name)
+
+
+def write_release_info(output, package, *, version, code, platform, channel, setup=False):
+    with package.open('rb') as source:
+        digest = hashlib.file_digest(source, 'sha256').hexdigest()
+    prefix = f'ftp-client/{channel}/{platform}' + ('/setup' if setup else '')
+    manifest = {'versionCode': int(code), 'versionName': version, 'platform': platform,
+                'channel': channel, 'sizeBytes': package.stat().st_size, 'sha256': digest,
+                'installerUrl': f'https://cdn.hilvpai.com/{prefix}/{package.name}'}
+    output.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+    return manifest
 
 
 def main():
@@ -118,12 +130,11 @@ def main():
                 add_msvc_runtime(release, payload)
                 run(args.iscc.resolve(), f'/O{staging}', f'/F{setup.stem}',
                     f'/DPayloadDir={payload}', f'/DAppVersion={version}+{code}',
+                    f'/DWorkstation={CHANNEL_APP_NAMES[args.channel]}',
                     APP / 'windows/installer/workstation.iss')
                 staged_setup = staging / setup.name
                 if signing:
                     sign_windows(args, staged_setup)
-                with staged_setup.open('rb') as source:
-                    setup_digest = hashlib.file_digest(source, 'sha256').hexdigest()
         else:
             if sys.platform != 'darwin' or not args.app or not args.notary_profile or not args.sign_identity:
                 parser.error('Mac requires macOS, --app, --notary-profile and --sign-identity')
@@ -134,6 +145,10 @@ def main():
                 info = plistlib.load(source)
             if info.get('CFBundleShortVersionString') != version or str(info.get('CFBundleVersion')) != code:
                 raise RuntimeError('signed app version does not match pubspec; rebuild and sign the current release')
+            display_name = CHANNEL_APP_NAMES[args.channel]
+            if (info.get('LvpaiUpdateChannel', args.channel) != args.channel
+                    or info.get('CFBundleDisplayName') != display_name):
+                raise RuntimeError('signed app name or channel does not match the requested release channel')
             run('codesign', '--verify', '--deep', '--strict', app)
             signature = subprocess.run(['codesign', '-dv', '--verbose=4', str(app)],
                                        check=True, capture_output=True, text=True)
@@ -147,9 +162,10 @@ def main():
             run('lipo', '-verify_arch', arch, runtime / 'node')
             content = staging / 'image'
             content.mkdir()
-            shutil.copytree(app, content / app.name, symlinks=True)
+            bundle_name = app.name if args.channel == 'prd' else f'{display_name}.app'
+            shutil.copytree(app, content / bundle_name, symlinks=True)
             (content / 'Applications').symlink_to('/Applications')
-            run('hdiutil', 'create', '-volname', '帧集快拍', '-srcfolder', content,
+            run('hdiutil', 'create', '-volname', display_name, '-srcfolder', content,
                 '-format', 'UDZO', package)
             run('codesign', '--sign', args.sign_identity, '--timestamp', package)
             run('codesign', '--verify', '--strict', package)
@@ -160,18 +176,17 @@ def main():
         package.replace(destination)
         if setup:
             staged_setup.replace(setup)
+            setup_info = write_release_info(directory / 'setup-release-info.json', setup,
+                                            version=version, code=code, platform=args.platform,
+                                            channel=args.channel, setup=True)
             setup.with_suffix('.exe.sha256').write_text(
-                f'{setup_digest}  {setup.name}\n', encoding='ascii')
+                f'{setup_info["sha256"]}  {setup.name}\n', encoding='ascii')
             print(f'Local installer: {setup}')
-    with destination.open('rb') as source:
-        digest = hashlib.file_digest(source, 'sha256').hexdigest()
-    manifest = {'versionCode': int(code), 'versionName': version, 'platform': args.platform,
-                'channel': args.channel, 'sizeBytes': destination.stat().st_size, 'sha256': digest,
-                'installerUrl': f'https://cdn.hilvpai.com/ftp-client/{args.channel}/{args.platform}/{name}'}
-    (directory / 'release-info.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+    manifest = write_release_info(directory / 'release-info.json', destination,
+                                  version=version, code=code, platform=args.platform, channel=args.channel)
     print(f'Local package: {destination}')
     print(json.dumps(manifest, indent=2))
-    print('Not published. Use the administrator release page after testing this exact artifact.')
+    print('Package built locally. Publication is a separate step.')
 
 
 def sign_windows(args, file):

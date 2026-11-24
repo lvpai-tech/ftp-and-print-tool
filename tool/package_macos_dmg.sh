@@ -28,12 +28,17 @@ info="$app/Contents/Info.plist"
 version="$(plutil -extract CFBundleShortVersionString raw -o - "$info")"
 build="$(plutil -extract CFBundleVersion raw -o - "$info")"
 executable="$(plutil -extract CFBundleExecutable raw -o - "$info")"
+display_name="$(plutil -extract CFBundleDisplayName raw -o - "$info")"
+channel="$(plutil -extract LvpaiUpdateChannel raw -o - "$info")"
+if [[ "$channel" != prd ]]; then
+  app_name="$display_name.app"
+fi
 image="lvpai-ftp-$version-$build-macos-$arch-personal.dmg"
 
 mkdir "$work/image" "$mount"
 ditto "$app" "$work/image/$app_name"
 ln -s /Applications "$work/image/Applications"
-hdiutil create -volname '帧集快拍' -srcfolder "$work/image" \
+hdiutil create -volname "$display_name" -srcfolder "$work/image" \
   -format UDZO -fs HFS+ "$work/$image"
 hdiutil verify "$work/$image"
 hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$work/$image"

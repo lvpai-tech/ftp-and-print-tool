@@ -44,7 +44,7 @@ python tool/package_release.py --platform windows-x64 --channel test
 
 也可通过 `--flutter`、`--node` 指定本机工具。Node 发行包若将 `LICENSE` 放在其它目录，使用 `--node-license` 指定该版本的许可证。
 脚本重新构建指定通道，打包 EXE、DLL、data 和从本仓生成的 `print-runtime`，排除 PDB，输出到 `build/releases/test/windows-x64/`。
-如果需要每用户一键安装器，安装 Inno Setup 6.7 后加 `--iscc` 传入 `ISCC.exe` 的完整路径。同一次构建额外生成 `*-setup.exe` 和 `*.exe.sha256`，安装器会带上构建所用 Visual Studio 的 x64 VC++ 可再分发 DLL。
+如果需要每用户一键安装器，安装 Inno Setup 6.7 后加 `--iscc` 传入 `ISCC.exe` 的完整路径。同一次构建额外生成 `*-setup.exe`、`*.exe.sha256` 和 `setup-release-info.json`，安装器会带上构建所用 Visual Studio 的 x64 VC++ 可再分发 DLL。
 安装器默认使用 `%LOCALAPPDATA%\Programs\Lvpai\ZhenjiWorkstation`，提供桌面与开始菜单快捷方式，并在 Windows「已安装的应用」登记卸载。先从系统托盘退出工作台，再安装或卸载。相同 Windows 账户继续使用 `%APPDATA%\ai.lvpai\lvpai_ftp_client` 中的现有配置及队列。
 便携 ZIP 沿用原有清单。带更新器的签名安装版使用独立的 Setup.exe 清单。测试安装器也可从 Windows Actions 的 `lvpai-ftp-windows-x64-setup` 产物领取。
 若 MSBuild 报路径过长，从较短的源码路径构建。使用 `subst` 时，将项目放在映射盘的子目录。
@@ -61,16 +61,16 @@ ac96a332718dc7f2b02bed4f62f928767d38d64889215c08965924979608ae7b
 正式 Windows 发布前使用项目持有的代码签名证书签署 EXE/DLL，再将完整 Release 重新打包、计算校验和；
 不能在后台校验或生成清单之后再修改安装包。当前脚本不代办 Windows 签名。
 
-## GitHub Actions 测试包
+## GitHub Actions 构建产物
 
-workflow 文件进入默认分支后，在 GitHub Actions 里选择对应的构建任务和分支。下列任务均使用 Flutter 3.50.0、锁文件指定的包源和 `test` 通道。构建产物保留 14 天。
+workflow 文件进入默认分支后，在 GitHub Actions 选择对应构建任务和分支。下列任务使用 Flutter 3.50.0 和锁文件指定的包源。Android 和 iOS 保持 `test` 通道。Windows 和 macOS 可选 `local`、`test`、`prd`，默认 `prd`。关闭 `publish_update` 时生成供手动验收的安装包，保留 14 天。
 
 | Workflow | 产物 | 用途 |
 | --- | --- | --- |
 | `Build Android APK` | `lvpai-ftp-android-debug.apk` | Android 调试签名包，可安装测试手动上传 |
 | `Build iOS` | `lvpai-ftp-ios-unsigned.zip` | iPhone/iPad 设备 Release 构建，内含未签名 `Runner.app`，真机安装需另行签名 |
 | `Build Windows` | `lvpai-ftp-<版本>-<构建号>-windows-x64.zip` | 未签名的完整 x64 Release，含 Node 打印内核；SHA-256 见随包的 `release-info.json` |
-| `Build Windows` | `lvpai-ftp-<版本>-<构建号>-windows-x64-setup.exe` | 未签名的每用户 x64 测试安装器，附独立 SHA-256 文件 |
+| `Build Windows` | `lvpai-ftp-<版本>-<构建号>-windows-x64-setup.exe` | 未签名的每用户 x64 安装器，附独立 SHA-256 和 `setup-release-info.json` |
 | `Build macOS` | `lvpai-ftp-macos-personal.zip` | 个人跨机包：临时签名 `.app` + 随包打印内核 +「打开旅派客户端.command」；其他 Mac 首次需右键打开。不是公证正式包 |
 | `Build macOS` | `lvpai-ftp-<版本>-<构建号>-macos-<架构>-personal.dmg` | 选择 `lvpai-ftp-macos-personal-dmg` 产物并解压，挂载 DMG 后将工作台拖入「应用程序」。使用 ad hoc 签名，首次打开可能需在「隐私与安全性」选择「仍要打开」。附 SHA-256 文件 |
 
@@ -149,16 +149,20 @@ FTP二进制的contentType为`application/octet-stream`。接口返回沿用项�
 现有 COS 清单更新不是分布式原子版本比较，请串行发布同平台同环境版本；本轮没有引入并发发布锁。
 发现问题应发布更大构建号的修复版本，不能用覆盖旧同名包或降版本绕过校验。
 
-## 桌面自动更新测试通道
+<a id="桌面自动更新测试通道"></a>
 
-两条桌面 Actions 默认仍生成内测产物。选择 `dev/huangml` 并开启 `publish_update` 后才走签名及发布流程。签名安装包生成后，工作流将其上传至 COS，并在公开 CDN 读回包大小后更新对应清单。重跑发布时同名对象须与前次的大小和 SHA-256 一致。新版本使用比已发布版本更高的 `pubspec.yaml` 构建号。
+## 桌面自动更新发布
+
+在 `Build Windows` 或 `Build macOS` 手动运行表单选择 `dev/huangml`、`channel` 和 `publish_update`。`channel` 默认 `prd`，也可选 `test` 或 `local`。开启 `publish_update` 后，工作流签名并直接发布到对应通道的 COS。`channel` 同时决定客户端编译参数、应用名称和更新路径。`local` 发布使用 CDN 的 `local` 目录，可用于指定该通道的本地安装。
+
+运营人员只需选择通道和发布开关。版本名称及构建号来自仓库 `pubspec.yaml`，例如 `0.4.5+9` 对应版本 `0.4.5`、构建号 `9`。每个平台、通道的新版构建号须高于该清单已发布版本。工作流核对打包元数据、安装包 SHA-256 和发布通道，分块上传并在 CDN 读回包大小后写清单，再读回核对清单。版本化对象禁止覆盖。重试已上传的同名安装包时使用与前次完全一致的制品。
 
 | 构建 | 更新入口 | 发布产物 |
 | --- | --- | --- |
-| Windows x64 | `ftp-client/test/windows-x64/setup/latest.json` | Authenticode 签名的 `*-windows-x64-setup.exe` |
-| macOS Apple 芯片 | `ftp-client/test/macos-arm64/appcast.xml` | Developer ID 签名、公证、Sparkle EdDSA 签名的 `*-macos-arm64.dmg` |
+| Windows x64 | `ftp-client/{channel}/windows-x64/setup/latest.json` | Authenticode 签名的 `*-windows-x64-setup.exe` |
+| macOS Apple 芯片 | `ftp-client/{channel}/macos-arm64/appcast.xml` | Developer ID 签名、公证、Sparkle EdDSA 签名的 `*-macos-arm64.dmg` |
 
-在 GitHub 的 `cos-test` 环境设置以下签名发布配置，环境允许 `dev/huangml`。COS 账号需要限定 Windows `setup/` 和 macOS 对应 DMG、`appcast.xml` 对象的 PUT、GET 和 HEAD 权限。macOS 个人内测包的临时上传计划见 [COS 存档](#macos-内测-dmg-的-cos-存档)。签名包发布和两端真机覆盖更新的验收仍待完成。
+在 GitHub 对应的 `cos-prd`、`cos-test` 或 `cos-local` 环境配置下列参数，并允许 `dev/huangml`。COS 凭据按对应通道限制到 Windows `setup/` 及 macOS DMG、`appcast.xml`，允许读取、写清单和初始化、上传、完成及中止分块。发布桶须支持 `ForbidOverwrite`。macOS 个人包存档单独使用 `cos-test`，见 [COS 存档](#macos-内测-dmg-的-cos-存档)。
 
 | 范围 | Secrets | Variables |
 | --- | --- | --- |
@@ -166,9 +170,9 @@ FTP二进制的contentType为`application/octet-stream`。接口返回沿用项�
 | Windows | `WINDOWS_SIGNING_PFX`（Base64）、`WINDOWS_SIGNING_PASSWORD` | |
 | macOS | `MACOS_SIGNING_P12`（Base64）、`MACOS_SIGNING_PASSWORD`、`MACOS_NOTARY_APPLE_ID`、`MACOS_NOTARY_PASSWORD`（应用专用密码）、`SPARKLE_PRIVATE_KEY`（`generate_keys -x` 导出的文本） | `MACOS_SIGN_IDENTITY`、`MACOS_NOTARY_TEAM_ID`、`SPARKLE_PUBLIC_KEY` |
 
-现场先手动装一版带更新器的签名包，再在 test 通道发布更高构建号。Windows 更新要求当前程序和安装器都通过 Authenticode 验证并使用同一证书。更换 Windows 签名证书时，先分发使用新证书的首装包。macOS 沿用现有个人 DMG 的应用标识和非沙箱数据目录，仍需核对新签名下的钥匙串、收图目录和队列访问。
+现场先手动装一版带更新器的签名包，再在同一通道发布更高构建号。`test` 显示「帧集快拍（测试版）」，`local` 显示「帧集快拍（本地版）」，`prd` 显示「帧集快拍」。Windows 沿用安装标识和数据路径，更新前后通过 Authenticode 验证且使用同一证书。更换证书时，先分发使用新证书的首装包。macOS 沿用应用标识和非沙箱数据目录，需核对新签名下的钥匙串、收图目录和队列访问。
 
-「检查更新」发现新版并确认后，应用下载和验证包，暂停接收新的上传任务并保留队列，等待当前上传与打印结束，再安装并重开工作台。复核版本、机位绑定、监听恢复、上传队列及打印档案。自动打印沿用每次启动需现场开启的规则。生产更新通道发布另按正式发布流程执行。
+「检查更新」发现新版并确认后，应用下载和验证包，暂停接收新的上传任务并保留队列，等待当前上传与打印结束，再安装并重开工作台。复核版本、机位绑定、监听恢复、上传队列及打印档案。自动打印沿用每次启动需现场开启的规则。
 
 ## 下载页上线
 

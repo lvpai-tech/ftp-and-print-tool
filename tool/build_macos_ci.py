@@ -1,5 +1,6 @@
 """Build the CI app with the core ONNX Runtime Swift package."""
 
+import argparse
 import json
 from pathlib import Path
 import re
@@ -36,7 +37,7 @@ def core_manifest(manifest):
     return manifest
 
 
-def build():
+def build(channel):
     package_config = Path(".dart_tool/package_config.json").resolve()
     packages = json.loads(package_config.read_text(encoding="utf-8"))["packages"]
     plugin_uri = next(pkg["rootUri"] for pkg in packages if pkg["name"] == "flutter_onnxruntime")
@@ -71,7 +72,7 @@ def build():
             subprocess.run(
                 [
                     "flutter", "build", "macos", "--release", "--no-pub",
-                    "--dart-define=LVPAI_UPDATE_ENV=test",
+                    f"--dart-define=LVPAI_UPDATE_ENV={channel}",
                 ],
                 check=True,
             )
@@ -80,4 +81,6 @@ def build():
 
 
 if __name__ == "__main__":
-    build()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--channel", choices=("local", "test", "prd"), default="test")
+    build(parser.parse_args().channel)

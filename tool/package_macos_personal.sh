@@ -6,6 +6,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_PATH="${1:-$ROOT/build/macos/Build/Products/Release/lvpai_ftp_client.app}"
 CHANNEL="${LVPAI_UPDATE_ENV:-test}"
+case "$CHANNEL" in
+  local) APP_NAME='帧集快拍（本地版）' ;;
+  test) APP_NAME='帧集快拍（测试版）' ;;
+  prd) APP_NAME='帧集快拍' ;;
+  *) echo 'Invalid update channel' >&2; exit 2 ;;
+esac
 NODE_VERSION="${LVPAI_PRINT_NODE_VERSION:-v20.18.1}"
 DIST_NAME="${DIST_NAME:-lvpai-ftp-macos-personal}"
 OUT_DIR="${OUT_DIR:-$ROOT/dist}"
@@ -33,6 +39,10 @@ STAGE="$WORK/$DIST_NAME"
 mkdir -p "$STAGE"
 ditto "$APP_PATH" "$STAGE/lvpai_ftp_client.app"
 APP="$STAGE/lvpai_ftp_client.app"
+INFO="$APP/Contents/Info.plist"
+plutil -replace CFBundleDisplayName -string "$APP_NAME" "$INFO"
+plutil -replace CFBundleName -string "$APP_NAME" "$INFO"
+plutil -insert LvpaiUpdateChannel -string "$CHANNEL" "$INFO"
 test -x "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
 RUNTIME="$APP/Contents/Resources/print-runtime"
 NODE_TGZ="$WORK/node.tar.gz"
@@ -71,7 +81,7 @@ chmod 755 "$STAGE/打开旅派客户端.command"
 
 # 写入包内说明，避免误当正式公证包。
 cat > "$STAGE/使用说明.txt" <<EOF
-旅派 FTP/打印客户端 · macOS 个人包（${CHANNEL}）
+${APP_NAME} · macOS 个人包（${CHANNEL}）
 架构：${ARCH}
 Node：${NODE_VERSION}
 
