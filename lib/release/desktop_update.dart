@@ -96,5 +96,6 @@ Future<void> installWindowsUpdate(
     await session.recoverAfterUpdateFailure(restartPrinting: true);
     rethrow;
   }
+  session.crashJournal?.close();
   exit(0);
 }

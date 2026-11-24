@@ -27,42 +27,60 @@ function json(response, data) {
   response.end(JSON.stringify({ code: 200, message: 'success', data }));
 }
 
-test('列表查询 + 手动 begin 打印走 skipPrint 回报 PRINTED', async () => {
+test('刷新保留本机打印进度，中断可续打，完成后从待打印移出', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'print-queue-'));
   let begins = 0;
-  let downloads = 0;
-  let results = [];
+  let resumes = 0;
+  let status = 'QUEUED';
+  const downloads = [];
+  const results = [];
+  const activeRows = [];
+  const fileRequested = Promise.withResolvers();
+  const releaseFile = Promise.withResolvers();
+  const row = {
+    id: '501', cardTail: '4987', createdAt: '2026-11-24T02:00:00Z', totalSheets: 2,
+  };
+  const items = [1, 2].map((id) => ({
+    kind: 'SIZE_6', copies: 1, label: '6寸', fileUrl: `/print-agents/jobs/501/files/PHOTO/${id}`,
+  }));
   const { server, origin } = await startServer(async (request, response) => {
     const url = new URL(request.url, origin);
     if (url.pathname === '/api/operation/print-agents/jobs' && request.method === 'GET') {
-      return json(response, {
-        list: [{ id: '501', status: 'QUEUED', createdAt: new Date().toISOString() }],
-        total: 1,
-        pageNum: 1,
-        pageSize: 20,
-      });
+      const filter = url.searchParams.get('printStatus');
+      const visible = (filter === 'UNPRINTED' && status === 'QUEUED') || filter === status;
+      // 模拟未包含该单的异常页，由本机刚收到的失败结果保留这行。
+      const list = visible ? [{ ...row, status }] : [];
+      return json(response, { list, total: list.length, pageNum: 1, pageSize: 20 });
     }
     if (url.pathname === '/api/operation/print-agents/jobs/501/begin' && request.method === 'POST') {
       begins += 1;
-      return json(response, {
-        id: '501',
-        scenicId: '1',
-        leaseUntil: new Date(Date.now() + 3600000).toISOString(),
-        items: [
-          { kind: 'SIZE_6', copies: 1, label: '6寸', fileUrl: '/print-agents/jobs/501/files/PHOTO/1' },
-        ],
-      });
+      status = 'CLAIMED';
+      return json(response, { ...row, attempt: begins, completedSheets: 0, items });
+    }
+    if (url.pathname.endsWith('/continue')) {
+      resumes += 1;
+      status = 'CLAIMED';
+      return json(response, { ...row, attempt: begins + resumes, completedSheets: 1, items });
     }
     if (url.pathname.includes('/files/')) {
-      downloads += 1;
+      const id = url.pathname.split('/').at(-1);
+      downloads.push(id);
+      if (id === '1') {
+        fileRequested.resolve();
+        await releaseFile.promise;
+      } else if (resumes === 0) {
+        return response.writeHead(503).end('暂时无法取图');
+      }
       response.setHeader('Content-Type', 'image/jpeg');
       return response.end(Buffer.from('fake-jpeg'));
     }
     if (url.pathname.includes('/result')) {
       const chunks = [];
       for await (const c of request) chunks.push(c);
-      results.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-      return json(response, { id: '501', status: 'PRINTED' });
+      const result = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      results.push(result);
+      status = result.status;
+      return json(response, { id: '501', status });
     }
     response.statusCode = 404;
     response.end('no');
@@ -78,30 +96,62 @@ test('列表查询 + 手动 begin 打印走 skipPrint 回报 PRINTED', async () 
     skipPrint: true,
     command: [process.execPath, '-e', 'throw new Error("should not print")'],
     printers: { SIZE_6: '虚拟机' },
-  }, { configPath: path.join(directory, 'config.json'), scriptDir: directory });
+  }, { configPath: path.join(directory, 'config.json'), scriptDir: directory, lockDir: directory });
 
   const scheduler = createScheduler({
     config,
+    includePrintIssues: true,
     history: createHistory(10),
     autoPrint: false,
+    onStateChange({ activePrintJob }) {
+      if (activePrintJob) activeRows.push(activePrintJob);
+    },
     log() {},
   });
 
+  let printing;
   try {
-    scheduler.start();
-    await new Promise((r) => setTimeout(r, 80));
     const page = await scheduler.refreshJobs();
     assert.equal(page.total, 1);
     assert.equal(page.list[0].id, '501');
 
-    const printed = await scheduler.printJobIds(['501']);
+    printing = scheduler.printJobIds(['501']);
+    await Promise.race([
+      fileRequested.promise,
+      printing.then(() => assert.fail('取图挂起时打印任务应仍在运行')),
+    ]);
+    await scheduler.refreshJobs();
+    const active = scheduler.getState();
+    assert.deepEqual(active.jobPage.list, []);
+    assert.deepEqual(active.activePrintJob, {
+      ...row, status: 'PRINTING', completedSheets: 0, errorReason: '',
+    });
+    releaseFile.resolve();
+
+    const failed = await printing;
+    assert.equal(failed[0].state, 'FAILED');
+    const interrupted = scheduler.getState();
+    assert.equal(interrupted.activePrintJob, null);
+    assert.equal(interrupted.localPrintIssues[0].status, 'FAILED');
+    assert.equal(interrupted.localPrintIssues[0].completedSheets, 1);
+    assert(activeRows.some((activeRow) => activeRow.completedSheets === 1));
+
+    const printed = await scheduler.continueJobIds(['501']);
     assert.equal(printed[0].state, 'PRINTED');
     assert.equal(begins, 1);
-    assert.equal(downloads, 1);
-    assert.equal(results.length, 1);
-    assert.equal(results[0].status, 'PRINTED');
-    assert.match(String(results[0].printer || ''), /skip-print/);
+    assert.equal(resumes, 1);
+    assert.deepEqual(downloads, ['1', '2', '2']);
+    assert.deepEqual(results.map(({ status, completedSheets }) => [status, completedSheets]), [
+      ['FAILED', 1], ['PRINTED', 2],
+    ]);
+    assert.match(String(results[1].printer || ''), /skip-print/);
+    assert.deepEqual(scheduler.getState().localPrintIssues, []);
+    assert.deepEqual(scheduler.getState().jobPage.list, []);
+    await scheduler.setJobQuery({ printStatus: 'PRINTED' });
+    assert.equal(scheduler.getState().jobPage.list[0].id, row.id);
   } finally {
+    releaseFile.resolve();
+    await printing?.catch(() => {});
     scheduler.stop();
     server.close();
     fs.rmSync(directory, { recursive: true, force: true });

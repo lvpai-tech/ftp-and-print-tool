@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'print_enrollment.dart';
+
 typedef Json = Map<String, dynamic>;
 
 class PrintBridgeResultError extends StateError {
@@ -53,6 +55,7 @@ class PrintBridge extends ChangeNotifier {
       final configPath =
           Platform.environment['PRINT_AGENT_CONFIG'] ??
           p.join(support.path, 'printing', 'config.json');
+      final credentials = await PrintEnrollment.credentials();
       _process = await Process.start(
         node,
         [script],
@@ -60,6 +63,9 @@ class PrintBridge extends ChangeNotifier {
         environment: {
           'PRINT_AGENT_CONFIG': configPath,
           'LVPAI_PRINT_APP_ROOT': runtime,
+          'PRINT_AGENT_BASE': PrintEnrollment.origin
+              .replace(path: '/api/operation')
+              .toString(),
         },
       );
       _process!.stdout
@@ -75,7 +81,7 @@ class PrintBridge extends ChangeNotifier {
         error = text.trim();
         notifyListeners();
       });
-      await call('snapshot');
+      await call('initialize', [credentials]);
       connected = true;
       notifyListeners();
     } catch (e) {

@@ -40,13 +40,14 @@ function buildCommandArgs(config, item, file, printer) {
 /**
  * 运行打印命令；退出码 0 为受理成功。保留可用于逐张跟踪的 CUPS 作业 ID。
  */
-function runPrintCommand(config, item, file, printer) {
+function runPrintCommand(config, item, file, printer, documentName) {
   const args = buildCommandArgs(config, item, file, printer);
   return new Promise((resolve, reject) => {
     const child = spawn(args[0], args.slice(1), {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, LVPAI_PRINT_DPI: String(config.printDpi ?? 300) },
+      env: { ...process.env, LVPAI_PRINT_DPI: String(config.printDpi ?? 300),
+        LVPAI_PRINT_DOCUMENT_NAME: documentName || '' },
     });
     let output = '';
     let stdout = '';

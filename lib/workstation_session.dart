@@ -2,12 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'diagnostics/crash_journal.dart';
 import 'printing/print_bridge.dart';
 
 /// 统一工作台退出门禁；导航切换不停止上传或打印。
 class WorkstationSession extends ChangeNotifier {
-  WorkstationSession(this.printBridge);
+  WorkstationSession(this.printBridge, {this.crashJournal});
   final PrintBridge printBridge;
+  final CrashJournal? crashJournal;
   bool transferActive = false;
   bool transferUploading = false;
   bool? transferConfigured;
@@ -18,6 +20,9 @@ class WorkstationSession extends ChangeNotifier {
   void setTransferActive(bool active) {
     if (transferActive == active) return;
     transferActive = active;
+    crashJournal?.record(
+      active ? CrashEvent.uploadListening : CrashEvent.uploadStopped,
+    );
     notifyListeners();
   }
 
@@ -29,6 +34,9 @@ class WorkstationSession extends ChangeNotifier {
   void setTransferUploading(bool active) {
     if (transferUploading == active) return;
     transferUploading = active;
+    crashJournal?.record(
+      active ? CrashEvent.uploadStarted : CrashEvent.uploadIdle,
+    );
     notifyListeners();
   }
 

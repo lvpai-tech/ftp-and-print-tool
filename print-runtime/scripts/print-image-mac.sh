@@ -51,7 +51,7 @@ if ! [[ "$dpi" =~ ^[1-9][0-9]{1,3}$ ]] || (( dpi < 72 || dpi > 1200 )); then
   exit 2
 fi
 
-lp_args=(-n "$Copies" -t "lvpai-$Kind" -o fit-to-page -o "printer-resolution=${dpi}dpi")
+lp_args=(-n "$Copies" -t "${LVPAI_PRINT_DOCUMENT_NAME:-lvpai-$Kind}" -o fit-to-page -o "printer-resolution=${dpi}dpi")
 if [[ -n "$Printer" ]]; then
   if ! /usr/bin/lpstat -p "$Printer" >/dev/null 2>&1; then
     echo "打印机不可用：$Printer" >&2

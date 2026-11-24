@@ -12,7 +12,9 @@ import 'ui/design.dart';
 import 'ui/job_thumbnails.dart';
 import 'ui/photo_batch_page.dart';
 import 'ui/preview_dialog.dart';
+import 'ui/print_recovery_dialog.dart';
 import 'ui/settings_panel.dart';
+import 'ui/print_enrollment_panel.dart';
 
 const _generatingFilter = 'GENERATING';
 
@@ -42,7 +44,6 @@ class _WorkstationState extends State<Workstation> {
   String filter = 'UNPRINTED';
   final selected = <String>{};
   DateTimeRange? dates;
-  bool _showPrintIssues = false;
   @override
   void initState() {
     super.initState();
@@ -212,7 +213,7 @@ class _WorkstationState extends State<Workstation> {
                   ),
                   bridge.configured
                       ? jobsView()
-                      : const Center(child: Text('请先在「打印设置」连接景区。')),
+                      : const Center(child: Text('请先在「打印设置」申请景区打印权限。')),
                   logsView(),
                 ],
               ),
@@ -480,7 +481,7 @@ class _WorkstationState extends State<Workstation> {
               ),
               const SizedBox(height: 22),
               const Text(
-                '请先连接景区',
+                '开通打印工作台',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 24,
@@ -490,7 +491,7 @@ class _WorkstationState extends State<Workstation> {
               ),
               const SizedBox(height: 10),
               const Text(
-                '打印前需要景区密钥和打印机路由。配置一次后会保存在本机，之后打开即可直接使用。',
+                '选择景区并提交申请。运营通过后，在本机刷新申请状态即可开通。',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: WorkstationStyle.muted,
@@ -499,15 +500,7 @@ class _WorkstationState extends State<Workstation> {
                 ),
               ),
               const SizedBox(height: 24),
-              FilledButton.icon(
-                onPressed: openConfig,
-                icon: const Icon(Icons.settings_outlined),
-                label: const Text('去配置打印'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xff6741a5),
-                  minimumSize: const Size(220, 48),
-                ),
-              ),
+              PrintEnrollmentPanel(bridge: bridge),
             ],
           ),
         ),
@@ -574,13 +567,23 @@ class _WorkstationState extends State<Workstation> {
     final loadedFilter = state['jobQuery']?['printStatus'];
     final matchesFilter =
         loadedFilter == filter || (loadedFilter == null && !generating);
-    final jobs = matchesFilter ? bridge.jobs : <Json>[];
+    final pending = filter == 'UNPRINTED';
+    final jobs = !matchesFilter
+        ? <Json>[]
+        : pending
+        ? _pendingRows(state)
+        : bridge.jobs;
     final ids = generating
         ? <String>{}
-        : jobs.map((job) => '${job['id']}').toSet();
+        : {
+            for (final job in jobs)
+              if (_JobAction.values.any((action) => action.supports(job)))
+                '${job['id']}',
+          };
     selected.retainAll(ids);
     final jobPage = matchesFilter ? state['jobPage'] : null;
     final listError = matchesFilter ? state['listError'] as String? : null;
+    final recoveryError = state['recoveryError'] as String? ?? '';
     final loading = state['listBusy'] == true || bridge.working;
     final total = (jobPage?['total'] as num?)?.toInt() ?? 0;
     final number = (jobPage?['pageNum'] as num?)?.toInt() ?? 1;
@@ -599,10 +602,6 @@ class _WorkstationState extends State<Workstation> {
             final table =
                 bounds.maxWidth >= 740 &&
                 MediaQuery.textScalerOf(context).scale(14) <= 17;
-            final hasPrintIssues =
-                filter == 'UNPRINTED' &&
-                (state['printIssuesError']?.toString().isNotEmpty == true ||
-                    (state['printIssues']?['total'] as num? ?? 0) > 0);
             final header = table && jobs.isNotEmpty
                 ? ColoredBox(
                     color: WorkstationStyle.bg,
@@ -641,48 +640,19 @@ class _WorkstationState extends State<Workstation> {
                         ),
                 ),
                 const Divider(height: 1, color: WorkstationStyle.line),
-                if (!hasPrintIssues && header != null) header,
+                if (pending && recoveryError.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    child: Text(
+                      recoveryError,
+                      style: const TextStyle(color: WorkstationStyle.warn),
+                    ),
+                  ),
+                if (pending && matchesFilter)
+                  _printIssueControls(state, number),
+                ?header,
                 Expanded(
-                  child: hasPrintIssues
-                      ? CustomScrollView(
-                          key: PageStorageKey((
-                            filter,
-                            dates,
-                            number,
-                            bridge.config['activeScenicProfileId'],
-                          )),
-                          slivers: [
-                            SliverToBoxAdapter(
-                              child: _printIssues(state, number),
-                            ),
-                            if (header != null)
-                              SliverToBoxAdapter(child: header),
-                            if (jobs.isEmpty)
-                              SliverFillRemaining(
-                                hasScrollBody: false,
-                                child: Center(
-                                  child: Text(
-                                    _emptyQueueMessage(
-                                      false,
-                                      loading,
-                                      listError,
-                                    ),
-                                  ),
-                                ),
-                              )
-                            else
-                              SliverList.separated(
-                                itemCount: jobs.length,
-                                itemBuilder: (_, index) =>
-                                    _jobRow(jobs[index], table: table),
-                                separatorBuilder: (_, _) => const Divider(
-                                  height: 1,
-                                  color: WorkstationStyle.line,
-                                ),
-                              ),
-                          ],
-                        )
-                      : jobs.isEmpty
+                  child: jobs.isEmpty
                       ? Center(
                           child: Text(
                             _emptyQueueMessage(generating, loading, listError),
@@ -717,7 +687,7 @@ class _WorkstationState extends State<Workstation> {
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       Text(
-                        '共 $total 单 · 第 $number 页',
+                        '${pending ? '排队' : '共'} $total 单 · 第 $number 页',
                         style: const TextStyle(color: WorkstationStyle.muted),
                       ),
                       IconButton(
@@ -836,106 +806,66 @@ class _WorkstationState extends State<Workstation> {
     if (mounted && bridge.configured && !bridge.busy) await query();
   }
 
-  Widget _printIssues(Json state, int queuePage) {
+  List<Json> _pendingRows(Json state) {
+    final issues = state['printIssues']?['list'] as List? ?? const [];
+    final local = state['localPrintIssues'] as List? ?? const [];
+    final recovery = state['recoveryJobs'] as List? ?? const [];
+    final active = state['activePrintJob'];
+    final byId = <String, Json>{
+      for (final row in [
+        ...bridge.jobs,
+        ...issues,
+        ...local,
+        ...recovery,
+        ?active,
+      ])
+        '${row['id']}': Map<String, dynamic>.from(row as Map),
+    };
+    // 工单 ID 是十进制字符串，按位数和字典序排序以保留任意精度。
+    return byId.values.toList()..sort((left, right) {
+      final a = '${left['id']}';
+      final b = '${right['id']}';
+      final length = b.length.compareTo(a.length);
+      return length == 0 ? b.compareTo(a) : length;
+    });
+  }
+
+  Widget _printIssueControls(Json state, int queuePage) {
     final page = state['printIssues'] as Map?;
     final error = state['printIssuesError'] as String? ?? '';
     final total = (page?['total'] as num?)?.toInt() ?? 0;
     final number = (page?['pageNum'] as num?)?.toInt() ?? 1;
     final size = (page?['pageSize'] as num?)?.toInt() ?? 10;
-    final jobs = (page?['list'] as List? ?? []).map(
-      (row) => Map<String, dynamic>.from(row as Map),
-    );
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextButton(
-            style: _queueButtonStyle(
-              foreground: WorkstationStyle.warn,
-              background: WorkstationStyle.warnSoft,
-            ),
-            onPressed: error.isNotEmpty
-                ? (bridge.busy ? null : () => query(number: queuePage))
-                : () => setState(() => _showPrintIssues = !_showPrintIssues),
-            child: Row(
-              children: [
-                const Icon(Icons.warning_amber_outlined, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    error.isNotEmpty ? '打印异常列表加载失败，点击重试' : '$total 单打印异常',
-                  ),
-                ),
-                if (error.isEmpty) Text(_showPrintIssues ? '收起' : '查看'),
-              ],
-            ),
-          ),
-          if (error.isEmpty && _showPrintIssues) ...[
-            for (final job in jobs)
-              ListTile(
-                title: Text('${job['cardTail'] ?? '取片卡'} · #${job['id']}'),
-                subtitle: Text(
-                  [
-                    if (job['status'] == 'UNKNOWN') '打印结果待核对',
-                    if (job['errorReason'] case final String reason
-                        when reason.isNotEmpty)
-                      reason,
-                    if ((job['completedSheets'] as num? ?? 0) > 0)
-                      '已出纸 ${job['completedSheets']} / ${job['totalSheets'] ?? '待核对'} 张',
-                  ].join(' · '),
-                ),
-                trailing: _issueAction(job),
-              ),
-            if (total > size)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  IconButton(
-                    tooltip: '上一页打印异常',
-                    onPressed: number > 1 && !bridge.busy
-                        ? () => query(number: queuePage, issuePage: number - 1)
-                        : null,
-                    icon: const Icon(Icons.chevron_left),
-                  ),
-                  Text('第 $number 页'),
-                  IconButton(
-                    tooltip: '下一页打印异常',
-                    onPressed: number * size < total && !bridge.busy
-                        ? () => query(number: queuePage, issuePage: number + 1)
-                        : null,
-                    icon: const Icon(Icons.chevron_right),
-                  ),
-                ],
-              ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _issueAction(Json job) {
-    final id = '${job['id']}';
-    final resume = _JobAction.resume.supports(job);
-    if (!resume && job['status'] != 'UNKNOWN') return _rowAction(job, id);
-    final action = resume ? _JobAction.resume : _JobAction.confirm;
+    if (error.isNotEmpty) {
+      return TextButton.icon(
+        style: _queueButtonStyle(foreground: WorkstationStyle.warn),
+        onPressed: bridge.busy
+            ? null
+            : () => query(number: queuePage, issuePage: number),
+        icon: const Icon(Icons.warning_amber_outlined, size: 18),
+        label: const Text('打印异常列表加载失败，点击重试'),
+      );
+    }
+    if (total <= size) return const SizedBox.shrink();
     return Wrap(
+      alignment: WrapAlignment.end,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        TextButton(
-          onPressed: bridge.busy ? null : () => _applyJobAction(action, [id]),
-          child: Text(resume ? '继续打印' : action.label),
+        Text('打印异常 $total 单 · 第 $number 页'),
+        IconButton(
+          tooltip: '上一页打印异常',
+          onPressed: number > 1 && !bridge.busy
+              ? () => query(number: queuePage, issuePage: number - 1)
+              : null,
+          icon: const Icon(Icons.chevron_left),
         ),
-        if (resume)
-          PopupMenuButton<_JobAction>(
-            enabled: !bridge.busy,
-            tooltip: '更多异常操作',
-            onSelected: (action) => _applyJobAction(action, [id]),
-            itemBuilder: (_) => [
-              for (final action in [_JobAction.confirm, _JobAction.reset])
-                PopupMenuItem(value: action, child: Text(action.label)),
-            ],
-          ),
+        IconButton(
+          tooltip: '下一页打印异常',
+          onPressed: number * size < total && !bridge.busy
+              ? () => query(number: queuePage, issuePage: number + 1)
+              : null,
+          icon: const Icon(Icons.chevron_right),
+        ),
       ],
     );
   }
@@ -1029,6 +959,10 @@ class _WorkstationState extends State<Workstation> {
   }
 
   Future<void> _applyJobAction(_JobAction action, List<String> ids) async {
+    if (action == _JobAction.resume &&
+        !await confirm('续打剩余照片', '补纸后请先核对纸面和打印队列。照片未出齐且队列无待出作业时再续打。', '续打')) {
+      return;
+    }
     if (action == _JobAction.confirm &&
         !await confirm('确认已打印', '请先核对纸面已齐。本操作只更新状态，不会再次打印。', '确认已打印')) {
       return;
@@ -1049,7 +983,7 @@ class _WorkstationState extends State<Workstation> {
           : selected.length == ids.length
           ? true
           : null,
-      onChanged: bridge.busy
+      onChanged: bridge.busy || ids.isEmpty
           ? null
           : (_) => setState(() {
               if (selected.length == ids.length) {
@@ -1180,6 +1114,7 @@ class _WorkstationState extends State<Workstation> {
     final total = (job['totalSheets'] as num?)?.toInt();
     final completed = (job['completedSheets'] as num?)?.toInt() ?? 0;
     final reason = '${job['errorReason'] ?? ''}'.trim();
+    final state = '${job['status']}';
     final summary = '${job['contentSummary'] ?? '内容未知'}';
     final created = '${job['createdAt'] ?? '—'}'.replaceFirst('T', ' ');
     final time = created.length >= 16 ? created.substring(0, 16) : created;
@@ -1198,7 +1133,9 @@ class _WorkstationState extends State<Workstation> {
       message: '选择工单 #$id',
       child: Checkbox(
         value: isSelected,
-        onChanged: bridge.busy
+        onChanged:
+            bridge.busy ||
+                !_JobAction.values.any((action) => action.supports(job))
             ? null
             : (checked) => setState(() {
                 if (checked == true) {
@@ -1263,7 +1200,9 @@ class _WorkstationState extends State<Workstation> {
           ),
       ],
     );
-    final status = StatusBadge(status: '${job['status']}');
+    final status = StatusBadge(
+      status: state == 'FAILED' && reason.contains('缺纸') ? 'PAPER_OUT' : state,
+    );
     final action = _rowAction(job, id);
     return ColoredBox(
       key: ValueKey(id),
@@ -1321,45 +1260,70 @@ class _WorkstationState extends State<Workstation> {
   }
 
   Widget _rowAction(Json job, String id) {
-    if (_JobAction.print.supports(job)) {
+    if (job['status'] == 'RECOVERY_REQUIRED') {
       return OutlinedButton(
-        style: OutlinedButton.styleFrom(
-          foregroundColor: WorkstationStyle.accent,
-          side: const BorderSide(color: WorkstationStyle.line),
-          minimumSize: const Size(44, 44),
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.all(Radius.circular(8)),
-          ),
-        ),
         onPressed: bridge.busy
             ? null
-            : () => _applyJobAction(_JobAction.print, [id]),
-        child: const Text('打印本单'),
+            : () => showDialog<void>(
+                context: context,
+                builder: (_) => PrintRecoveryDialog(
+                  bridge: bridge,
+                  jobId: id,
+                  perform: perform,
+                ),
+              ),
+        child: const Text('核对打印'),
       );
     }
-    if (_JobAction.confirm.supports(job)) {
-      return PopupMenuButton<_JobAction>(
-        enabled: !bridge.busy,
-        tooltip: '处理异常',
-        onSelected: (action) => _applyJobAction(action, [id]),
-        itemBuilder: (context) => [
-          for (final action in _JobAction.values.where(
-            (action) => action.supports(job),
-          ))
-            PopupMenuItem(value: action, child: Text(action.label)),
-        ],
-        child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [Text('处理异常'), Icon(Icons.expand_more, size: 16)],
+    final canPrint = _JobAction.print.supports(job);
+    final canResume = _JobAction.resume.supports(job);
+    if (canPrint || canResume) {
+      final action = canPrint ? _JobAction.print : _JobAction.resume;
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: WorkstationStyle.accent,
+              side: const BorderSide(color: WorkstationStyle.line),
+              minimumSize: const Size(44, 44),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.all(Radius.circular(8)),
+              ),
+            ),
+            onPressed: bridge.busy ? null : () => _applyJobAction(action, [id]),
+            child: Text(canPrint ? '打印本单' : '续打'),
           ),
-        ),
+          if (canResume) _exceptionMenu(job, id, compact: true),
+        ],
       );
     }
+    if (_JobAction.confirm.supports(job)) return _exceptionMenu(job, id);
     return const SizedBox.shrink();
   }
+
+  Widget _exceptionMenu(Json job, String id, {bool compact = false}) =>
+      PopupMenuButton<_JobAction>(
+        enabled: !bridge.busy,
+        tooltip: '处理异常',
+        icon: compact ? const Icon(Icons.more_horiz, size: 18) : null,
+        onSelected: (action) => _applyJobAction(action, [id]),
+        itemBuilder: (context) => [
+          for (final action in [_JobAction.confirm, _JobAction.reset])
+            if (action.supports(job))
+              PopupMenuItem(value: action, child: Text(action.label)),
+        ],
+        child: compact
+            ? null
+            : const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [Text('处理异常'), Icon(Icons.expand_more, size: 16)],
+                ),
+              ),
+      );
 
   static const _jobMeta = TextStyle(
     color: WorkstationStyle.muted,
@@ -1370,7 +1334,7 @@ class _WorkstationState extends State<Workstation> {
   Widget logsView() => ListView(
     padding: const EdgeInsets.all(24),
     children: [
-      const Text('只记录运行事件，不记录打印密钥与图片内容', style: TextStyle(color: muted)),
+      const Text('日志仅记录运行事件', style: TextStyle(color: muted)),
       const SizedBox(height: 16),
       for (final entry in (bridge.snapshot['logs'] as List? ?? []).reversed)
         Padding(
@@ -1395,7 +1359,7 @@ enum _JobAction {
   bool supports(Json job) {
     final status = job['status'];
     return switch (this) {
-      _JobAction.print => status == 'QUEUED' || status == 'CLAIMED',
+      _JobAction.print => status == 'QUEUED',
       _JobAction.resume => _canResume(job),
       _JobAction.confirm => status == 'FAILED' || status == 'UNKNOWN',
       _JobAction.reset => status == 'FAILED' || status == 'PRINTED',
@@ -1436,7 +1400,12 @@ class StatusBadge extends StatelessWidget {
       ),
       'PRINTED' => ('已打印', WorkstationStyle.ok, WorkstationStyle.okSoft),
       'FAILED' => ('需处理', WorkstationStyle.warn, WorkstationStyle.warnSoft),
-      'UNKNOWN' => ('待核对', WorkstationStyle.warn, WorkstationStyle.warnSoft),
+      'PAPER_OUT' => ('缺纸中断', WorkstationStyle.warn, WorkstationStyle.warnSoft),
+      'UNKNOWN' || 'RESULT_UNCONFIRMED' || 'RECOVERY_REQUIRED' => (
+        '待核对',
+        WorkstationStyle.warn,
+        WorkstationStyle.warnSoft,
+      ),
       _ => (status, WorkstationStyle.muted, WorkstationStyle.bg),
     };
     return StatusTag(label: label, color: color, soft: background);

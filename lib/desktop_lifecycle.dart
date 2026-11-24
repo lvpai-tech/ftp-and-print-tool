@@ -5,6 +5,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'branding.dart';
+import 'diagnostics/crash_journal.dart';
 import 'ui/app_dialogs.dart';
 import 'workstation_session.dart';
 
@@ -51,7 +52,28 @@ class DesktopLifecycle with WindowListener, TrayListener {
 
   @override
   void onWindowClose() {
+    session.crashJournal?.record(CrashEvent.windowHidden);
     windowManager.hide();
+  }
+
+  @override
+  void onWindowMinimize() {
+    session.crashJournal?.record(CrashEvent.windowMinimized);
+  }
+
+  @override
+  void onWindowRestore() {
+    session.crashJournal?.record(CrashEvent.windowRestored);
+  }
+
+  @override
+  void onWindowResized() {
+    session.crashJournal?.record(CrashEvent.windowResized);
+  }
+
+  @override
+  void onWindowMoved() {
+    session.crashJournal?.record(CrashEvent.windowMoved);
   }
 
   @override
@@ -91,8 +113,10 @@ class DesktopLifecycle with WindowListener, TrayListener {
       try {
         await session.printBridge.shutdown();
         await trayManager.destroy();
+        session.crashJournal?.close();
         await windowManager.destroy();
       } catch (error) {
+        session.crashJournal?.resume();
         await _showExitNotice(
           title: '退出失败',
           message: '请核对当前任务后重试。\n${appErrorMessage(error)}',
@@ -104,6 +128,7 @@ class DesktopLifecycle with WindowListener, TrayListener {
   }
 
   Future<void> _showWindow() async {
+    session.crashJournal?.record(CrashEvent.windowShown);
     await windowManager.show();
     await windowManager.focus();
   }

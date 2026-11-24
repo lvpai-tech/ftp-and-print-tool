@@ -5,7 +5,7 @@
  * Token 仅放请求头，调用方不得把 token 或图片内容写入日志。
  */
 
-async function call(config, method, route, body, signal) {
+async function call(config, method, route, body, signal, { redirect } = {}) {
   const response = await fetch(config.base + route, {
     method,
     headers: {
@@ -14,12 +14,13 @@ async function call(config, method, route, body, signal) {
     },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal,
+    redirect: redirect || 'error',
   });
   return response;
 }
 
-async function callJson(config, method, route, body, signal) {
-  const response = await call(config, method, route, body, signal);
+async function callJson(config, method, route, body, signal, options) {
+  const response = await call(config, method, route, body, signal, options);
   const payload = await response.json().catch(() => null);
   if (!payload || payload.code !== 200) {
     const detail = payload && payload.code != null
@@ -27,9 +28,19 @@ async function callJson(config, method, route, body, signal) {
       : `HTTP ${response.status}${payload && payload.error ? ` ${payload.error}` : ''}`;
     const error = new Error(`${method} ${route} 失败：${detail}`);
     error.resultCode = payload?.code;
+    error.httpStatus = response.status;
+    if (response.status === 401 || payload?.code === 40101 || payload?.code === 40102) {
+      error.authorizationLost = true;
+      error.message = '打印设备授权无效或已撤销，请联系运营';
+    }
     throw error;
   }
   return payload.data;
+}
+
+function sendCrashReport(config, report) {
+  return callJson(config, 'POST', '/print-agents/crash-reports', report,
+    AbortSignal.timeout(10000), { redirect: 'error' });
 }
 
 function listBatchStations(config) {
@@ -130,9 +141,13 @@ async function continueJob(config, jobId) {
   return callJson(config, 'POST', `/print-agents/jobs/${jobId}/continue`);
 }
 
+async function recoverJob(config, jobId, attempt) {
+  return callJson(config, 'POST', `/print-agents/jobs/${jobId}/recover`, { attempt }, AbortSignal.timeout(10000));
+}
+
 /** 打前核对：只读条目清单，不占单。 */
-async function previewJob(config, jobId) {
-  return callJson(config, 'GET', `/print-agents/jobs/${jobId}/preview`);
+async function previewJob(config, jobId, signal) {
+  return callJson(config, 'GET', `/print-agents/jobs/${jobId}/preview`, undefined, signal);
 }
 
 /** @deprecated 兼容旧测试；正式路径用 listJobs + beginJob */
@@ -185,16 +200,16 @@ async function confirmPrintedJobs(config, ids) {
   return callJson(config, 'POST', '/print-agents/jobs/confirm-printed', { ids: list });
 }
 
-async function reportResult(config, jobId, result) {
+async function reportResult(config, jobId, result, options = {}) {
   let lastError;
-  const retries = config.resultRetries || 5;
+  const retries = options.retries ?? (config.resultRetries || 5);
   for (let attempt = 0; attempt < retries; attempt += 1) {
     try {
-      return await callJson(config, 'POST', `/print-agents/jobs/${jobId}/result`, result);
+      return await callJson(config, 'POST', `/print-agents/jobs/${jobId}/result`, result, AbortSignal.timeout(10000));
     } catch (error) {
       lastError = error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+    if (attempt + 1 < retries) await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
   }
   throw lastError;
 }
@@ -205,6 +220,7 @@ module.exports = {
   fetchMe,
   listJobs,
   listGenerating,
+  sendCrashReport,
   listBatchStations,
   listPhotoBatches,
   correctPhotoBatch,
@@ -213,6 +229,7 @@ module.exports = {
   generatingThumbnailPath,
   beginJob,
   continueJob,
+  recoverJob,
   previewJob,
   claimJob,
   downloadFile,

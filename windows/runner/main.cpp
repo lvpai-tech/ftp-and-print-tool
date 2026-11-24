@@ -2,6 +2,7 @@
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
 
+#include <algorithm>
 #include <memory>
 
 #include "flutter_window.h"
@@ -84,6 +85,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
 
+  if (std::find(command_line_arguments.begin(), command_line_arguments.end(),
+                "--graphics-compatibility") != command_line_arguments.end()) {
+    // Select the supported Skia renderer before initializing Flutter.
+    project.set_impeller_switch(flutter::ImpellerSwitch::Disabled);
+  }
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
   FlutterWindow window(project);

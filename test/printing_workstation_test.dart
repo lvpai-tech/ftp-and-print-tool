@@ -48,6 +48,12 @@ class ControlledBridge extends PrintBridge {
     calls.add(method);
     arguments[method] = args;
     if (method == 'listPrinters') return ['真实系统适配的测试替身'];
+    if (method == 'listBatchStations') {
+      return <Json>[
+        {'id': '317', 'code': 'A08', 'name': '隔离测试机位'},
+      ];
+    }
+    if (method == 'listPhotoBatches') return {'batches': <Json>[]};
     if (method == 'revealToken' || method == 'revealScenicProfileToken') {
       return {'token': 'isolation-test-token'};
     }
@@ -79,8 +85,22 @@ class ControlledBridge extends PrintBridge {
     if (method == 'previewJobImage') {
       return {
         'contentType': 'image/gif',
-        'dataUrl':
-            'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+        'dataUrl': 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+      };
+    }
+    if (method == 'recoveryDetails') {
+      return {
+        'sheets': [
+          for (final (index, state) in ['DONE', 'UNCERTAIN', 'READY'].indexed)
+            {
+              'index': index,
+              'state': state,
+              'kind': 'ORIGINAL',
+              'label': '原片',
+              'fileUrl':
+                  '/print-agents/jobs/${args.first}/preview-files/PHOTO/$index',
+            },
+        ],
       };
     }
     return snapshot;
@@ -239,20 +259,46 @@ void main() {
       expect(find.text('打印选中'), findsNothing);
       await tester.tap(find.text('继续剩余'));
       await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '续打'));
+      await tester.pumpAndSettle();
       expect(bridge.calls, contains('continueJobs'));
       expect(bridge.arguments['continueJobs'], [
         ['9007199254740993'],
       ]);
     });
   }
-  testWidgets('首次连接不展示假数据且密钥遮挡', (tester) async {
+  testWidgets('首次启动显示打印申请和申请记录', (tester) async {
     final bridge = ControlledBridge(configured: false);
     await tester.pumpWidget(MaterialApp(home: Workstation(bridge: bridge)));
     await tester.pumpAndSettle();
-    expect(find.text('验证并连接景区'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, '申请打印权限'), findsOneWidget);
     expect(find.text('#9007199254740993'), findsNothing);
-    expect(tester.widget<TextField>(find.byType(TextField)).obscureText, true);
+    expect(find.byType(TextField), findsNothing);
+    await tester.tap(find.text('申请记录（0）'));
+    await tester.pumpAndSettle();
+    expect(find.text('暂无打印申请记录'), findsOneWidget);
   });
+
+  testWidgets('打印照片可以打开照片批次矫正并读取机位', (tester) async {
+    final bridge = ControlledBridge();
+    addTearDown(bridge.dispose);
+    await tester.pumpWidget(
+      MaterialApp(home: Workstation(bridge: bridge, embedded: true)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('照片批次矫正'));
+    await tester.pumpAndSettle();
+    expect(find.text('照片批次矫正'), findsOneWidget);
+    expect(find.textContaining('A08'), findsOneWidget);
+    expect(find.text('当天暂无收图'), findsOneWidget);
+    expect(bridge.arguments['listBatchStations'], isEmpty);
+    expect(
+      bridge.arguments['listPhotoBatches']?.single,
+      containsPair('stationId', '317'),
+    );
+  });
+
   testWidgets('自动打印必须经过实际出纸确认', (tester) async {
     final bridge = ControlledBridge();
     await tester.pumpWidget(MaterialApp(home: Workstation(bridge: bridge)));
@@ -305,6 +351,132 @@ void main() {
     expect(find.textContaining('打印预览'), findsOneWidget);
     expect(bridge.arguments['previewJob'], ['9007199254740993']);
     expect(bridge.calls, isNot(contains('printJobs')));
+  });
+
+  testWidgets('工单刷新后留在待打印，缺纸时可从同一行续打', (tester) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final bridge = ControlledBridge();
+    addTearDown(bridge.dispose);
+    final job = bridge.jobs.single;
+    final state = bridge.state;
+    bridge.snapshot['state'] = state;
+    void showQueue(List<Json> rows) {
+      state['jobPage'] = {'list': rows, 'total': rows.length, 'pageNum': 1};
+      bridge.notifyListeners();
+    }
+
+    showQueue([
+      {...job, 'status': 'QUEUED', 'completedSheets': 0},
+    ]);
+    await tester.pumpWidget(
+      MaterialApp(home: Workstation(bridge: bridge, embedded: true)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('打印本单'));
+    await tester.pumpAndSettle();
+    expect(bridge.arguments['printJobs'], [
+      [job['id']],
+    ]);
+
+    state['printBusy'] = true;
+    state['activePrintJob'] = {...job, 'status': 'PRINTING'};
+    showQueue([]);
+    await tester.pump();
+    expect(find.text('#${job['id']}'), findsOneWidget);
+    expect(find.text('打印中'), findsOneWidget);
+    expect(find.text('已完成 3 / 9 张'), findsOneWidget);
+    expect(find.text('打印本单'), findsNothing);
+
+    state['printBusy'] = false;
+    state.remove('activePrintJob');
+    final failed = {...job, 'errorReason': '作业缺纸'};
+    state['localPrintIssues'] = [failed];
+    state['printIssues'] = {
+      'list': [failed],
+      'total': 1,
+      'pageNum': 1,
+      'pageSize': 10,
+    };
+    showQueue([]);
+    await tester.pumpAndSettle();
+    expect(find.text('#${job['id']}'), findsOneWidget);
+    expect(find.text('缺纸中断'), findsOneWidget);
+    expect(find.text('续打'), findsOneWidget);
+    await tester.tap(find.text('续打'));
+    await tester.pumpAndSettle();
+    expect(bridge.calls, isNot(contains('continueJobs')));
+    await tester.tap(find.widgetWithText(FilledButton, '续打'));
+    await tester.pumpAndSettle();
+    expect(bridge.arguments['continueJobs'], [
+      [job['id']],
+    ]);
+
+    state.remove('printIssues');
+    state['localPrintIssues'] = [
+      {...job, 'status': 'RESULT_UNCONFIRMED'},
+    ];
+    showQueue([]);
+    await tester.pumpAndSettle();
+    expect(find.text('#${job['id']}'), findsOneWidget);
+    expect(find.text('待核对'), findsOneWidget);
+    expect(find.text('续打'), findsNothing);
+
+    state.remove('localPrintIssues');
+    showQueue([]);
+    await tester.pumpAndSettle();
+    expect(find.text('#${job['id']}'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('待核对按单张选择补印并阻止整单直接送打', (tester) async {
+    tester.view.physicalSize = const Size(1280, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final bridge = ControlledBridge();
+    addTearDown(bridge.dispose);
+    final job = bridge.snapshot['state']['jobPage']['list'][0] as Json;
+    job['status'] = 'CLAIMED';
+    bridge.snapshot['state'] = {
+      ...bridge.state,
+      'recoveryJobs': [
+        {
+          ...job,
+          'status': 'RECOVERY_REQUIRED',
+          'totalSheets': 3,
+          'completedSheets': 1,
+        },
+      ],
+    };
+    await tester.pumpWidget(
+      MaterialApp(home: Workstation(bridge: bridge, embedded: true)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('打印本单'), findsNothing);
+    await tester.tap(find.text('核对打印'));
+    await tester.pumpAndSettle();
+    expect(find.text('已确认完成'), findsOneWidget);
+    expect(find.text('尚未送打'), findsOneWidget);
+    final initial = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, '补印 1 张'),
+    );
+    expect(initial.onPressed, isNull);
+    await tester.tap(find.text('第 2 张 · 原片'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('已核对纸面和系统打印队列'));
+    await tester.tap(find.text('已核对纸面和系统打印队列'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '补印 2 张'));
+    await tester.pumpAndSettle();
+    expect(bridge.arguments['recoverPrintJob'], [
+      job['id'],
+      [1, 2],
+    ]);
+    expect(bridge.calls, isNot(contains('printJobs')));
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('异常菜单核对纸面后才确认已打印', (tester) async {

@@ -37,7 +37,7 @@ try {
   $document.PrinterSettings.Copies = [int16]$Copies
   # 去掉默认「正在打印 Document」状态小窗，静默送后台假脱机。
   $document.PrintController = New-Object System.Drawing.Printing.StandardPrintController
-  $document.DocumentName = "lvpai-$Kind"
+  $document.DocumentName = if ($env:LVPAI_PRINT_DOCUMENT_NAME) { $env:LVPAI_PRINT_DOCUMENT_NAME } else { "lvpai-$Kind" }
   $document.add_PrintPage({
     param($sender, $event)
     # 绘图原点在可打印区左上角；横向时 PrintableArea 不随方向旋转，需互换宽高。

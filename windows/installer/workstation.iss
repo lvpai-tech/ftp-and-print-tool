@@ -47,6 +47,7 @@ Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 Name: "{group}\{#Workstation}"; Filename: "{app}\{#WorkstationExe}"; WorkingDir: "{app}"
+Name: "{group}\{#Workstation}（图形兼容模式）"; Filename: "{app}\{#WorkstationExe}"; Parameters: "--graphics-compatibility"; WorkingDir: "{app}"
 Name: "{autodesktop}\{#Workstation}"; Filename: "{app}\{#WorkstationExe}"; WorkingDir: "{app}"
 
 [Run]

@@ -7,6 +7,7 @@ const { claimJob, downloadFile, reportResult } = require('./api');
 const { resolvePrinter, runPrintCommand, summarizePrinters } = require('./print');
 const { assertPrinterReady, watchAfterSubmit, cancelPendingLvpaiJobs } = require('./printer-status');
 const { usesMacPrintScript } = require('./mac-printer');
+const { matchesSheets } = require('./print-recovery');
 
 const CHECK_PAPER_HINT =
   '请核对实物：剩余未出点「继续打印」；纸已齐点「确认已打印」；要整单重打先「标记未打印」';
@@ -48,11 +49,10 @@ async function processClaimedJob(config, job, hooks = {}) {
   // 防御：claim 接口应只发 PHOTOS；若服务端误下发其它 target，整单 FAILED，不落盘、不出片。
   if (job.target != null && String(job.target).toUpperCase() !== 'PHOTOS') {
     const reason = `拒绝非PHOTOS任务：${job.target}`.slice(0, 480);
-    await reportResult(config, job.id, { status: 'FAILED', printer: '', reason, completedSheets: 0 });
+    await reportResult(config, job.id, { attempt: job.attempt, status: 'FAILED', printer: '', reason, completedSheets: 0 });
     return { state: 'FAILED', jobId: job.id, reason, printer: '', completedSheets: 0 };
   }
 
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `print-job-${job.id}-`));
   const usedPrinters = [];
   const sheets = expandSheets(job.items || []);
   const totalSheets = sheets.length;
@@ -62,7 +62,12 @@ async function processClaimedJob(config, job, hooks = {}) {
   const checkPrinter = !skipPrint && Array.isArray(config.statusCommand);
   const requireCupsJobId = checkPrinter && (usesMacPrintScript(config.command)
     || config.statusCommand.some((part) => part.includes('{jobId}')));
-  let completedSheets = startAt;
+  const recovery = hooks.recovery;
+  let record = hooks.record;
+  if (record && !matchesSheets(record, sheets)) throw new Error('工单打印清单已变化，请联系运营核对');
+  if (recovery && !record) record = recovery.begin(job, sheets, startAt, hooks.row);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `print-job-${job.id}-`));
+  let completedSheets = record ? record.sheets.filter(sheet => sheet.state === 'DONE').length : startAt;
   let printerSummary = '';
   const fileCache = new Map();
 
@@ -72,8 +77,9 @@ async function processClaimedJob(config, job, hooks = {}) {
       : Math.min(Number(config.printerSettleMs) || 30000, 10000);
 
   try {
-    for (let index = startAt; index < sheets.length; index += 1) {
+    for (let index = record ? 0 : startAt; index < sheets.length; index += 1) {
       const item = sheets[index];
+      if (record?.sheets[index].state === 'DONE') continue;
       const printer = resolvePrinter(config, item.kind);
       let cached = fileCache.get(item.fileUrl);
       if (!cached) {
@@ -84,35 +90,48 @@ async function processClaimedJob(config, job, hooks = {}) {
         cached = { file };
         fileCache.set(item.fileUrl, cached);
       }
+      let verified = skipPrint;
       if (skipPrint) {
         usedPrinters.push({ kind: item.kind, printer: `${printer || 'dry'}(skip-print)` });
-        completedSheets = index + 1;
       } else {
         if (checkPrinter) await assertPrinterReady(config, printer, { ignorePaperOut });
         const submittedAt = Date.now();
-        const { cupsJobId } = await runPrintCommand(config, item, cached.file, printer);
+        if (record) record = recovery.beforeSubmit(record, index, printer, item.kind);
+        const documentName = record?.sheets[index].documentName;
+        const windowsScript = config.command.some(part => /(?:^|[\\/])print-image\.ps1$/i.test(part));
+        const { cupsJobId } = await runPrintCommand(config, item, cached.file, printer, documentName);
+        if (record && cupsJobId != null) record = recovery.mark(record, index, { spoolId: cupsJobId });
         usedPrinters.push({ kind: item.kind, printer });
         if (checkPrinter) {
           try {
             if (requireCupsJobId && cupsJobId == null) throw new Error('系统已受理，但未返回可核对的 CUPS 作业编号');
-            await watchAfterSubmit(config, [printer], submittedAt, {
+            verified = await watchAfterSubmit(config, [printer], submittedAt, {
               ...hooks.watchOptions,
               settleMs: sheetSettleMs,
               ignorePaperOut,
               cupsJobId: requireCupsJobId ? cupsJobId : undefined,
+              documentName: windowsScript ? documentName : undefined,
+              onJobId(id) {
+                if (record && windowsScript && record.sheets[index].spoolId !== id) {
+                  record = recovery.mark(record, index, { spoolId: id });
+                }
+              },
             });
           } catch (error) {
             let cancellation = '';
             if (!requireCupsJobId || cupsJobId != null) {
-              const { cancelled } = await cancelPendingLvpaiJobs(config, printer, requireCupsJobId ? cupsJobId : undefined)
+              const { cancelled } = await cancelPendingLvpaiJobs(config, printer,
+                requireCupsJobId ? cupsJobId : undefined, windowsScript ? documentName : undefined)
                 .catch(() => ({ cancelled: 0 }));
               if (requireCupsJobId) cancellation = `。CUPS 作业 ${cupsJobId}${cancelled ? '已受理取消' : '未确认取消'}`;
             }
             throw new Error(`${error.message}${cancellation}。${CHECK_PAPER_HINT}`);
           }
         }
-        completedSheets = index + 1;
       }
+      // 队列消失或只有系统受理时，闪退恢复仍须核对纸面。
+      if (record && verified) record = recovery.mark(record, index, { state: 'DONE' });
+      completedSheets += 1;
       if (typeof hooks.onItemPrinted === 'function') {
         hooks.onItemPrinted({
           jobId: job.id,
@@ -131,12 +150,21 @@ async function processClaimedJob(config, job, hooks = {}) {
       totalSheets > 0 ? `（已完成${completedSheets}/${totalSheets}张，待继续）` : '';
     const reason = `${error.message}${progress}`.slice(0, 480);
     printerSummary = summarizePrinters(usedPrinters) || (config.defaultPrinter || '');
-    await reportResult(config, job.id, {
+    const result = {
+      attempt: job.attempt,
       status: 'FAILED',
       printer: printerSummary,
       reason,
       completedSheets,
-    });
+    };
+    if (record && record.sheets.some((sheet, index) => sheet.state === 'UNCERTAIN'
+        || (index >= completedSheets && sheet.state === 'DONE'))) {
+      throw new Error(`${error.message}。本机已保留逐张记录，请核对中断工单`);
+    }
+    if (record) record = recovery.seal(record, result);
+    const written = await reportResult(config, job.id, result);
+    if (record && written?.status !== result.status) throw new Error('服务端未确认打印结果');
+    if (record) recovery.remove(record.id);
     return {
       state: 'FAILED',
       jobId: job.id,
@@ -149,11 +177,16 @@ async function processClaimedJob(config, job, hooks = {}) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 
-  await reportResult(config, job.id, {
+  const result = {
+    attempt: job.attempt,
     status: 'PRINTED',
     printer: printerSummary,
     completedSheets: totalSheets,
-  });
+  };
+  if (record) record = recovery.seal(record, result);
+  const written = await reportResult(config, job.id, result);
+  if (record && written?.status !== result.status) throw new Error('服务端未确认打印结果');
+  if (record) recovery.remove(record.id);
   return {
     state: 'PRINTED',
     jobId: job.id,

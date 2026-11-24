@@ -502,7 +502,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
           children: [
             if (widget.inline)
               const Text(
-                '照片批次矫正',
+                '照片归属',
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
                   color: WorkstationStyle.ink,

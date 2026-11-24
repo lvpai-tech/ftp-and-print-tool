@@ -46,7 +46,7 @@ const JOB_FAULTS = {
 const CUPS_JOB_FAULTS = { ...PRINTER_FAULTS, ...JOB_FAULTS, Unconfirmed: '已转交设备，无法确认出纸' };
 
 /** 队列中单个打印作业的已结束状态。 */
-const JOB_DONE = new Set(['Complete', 'Printed']);
+const JOB_DONE = new Set(['Complete', 'Completed', 'Printed']);
 
 function splitFlags(value) {
   return String(value || '')
@@ -169,6 +169,7 @@ async function watchAfterSubmit(config, printers, sinceMs, options = {}) {
   const startedAt = now();
   const settledSince = new Map();
   const pending = new Set(printers);
+  const verified = new Set();
 
   while (pending.size) {
     for (const printer of [...pending]) {
@@ -177,7 +178,9 @@ async function watchAfterSubmit(config, printers, sinceMs, options = {}) {
       const ours = exactJob
         ? snapshot.jobs.filter((job) => job.id === options.cupsJobId)
         : snapshot.jobs.filter((job) =>
-          String(job.documentName || '').startsWith('lvpai-') && Date.parse(job.submittedAt) >= sinceMs - 5000);
+          options.documentName ? job.documentName === options.documentName
+            : String(job.documentName || '').startsWith('lvpai-') && Date.parse(job.submittedAt) >= sinceMs - 5000);
+      if (!exactJob && ours.length === 1 && Number.isInteger(ours[0].id)) options.onJobId?.(ours[0].id);
       for (const job of ours) {
         faults.push(...describe(splitFlags(job.status), jobFaults).map((text) => `作业${text}`));
       }
@@ -188,6 +191,7 @@ async function watchAfterSubmit(config, printers, sinceMs, options = {}) {
       const jobsDone = (!exactJob || ours.length === 1)
         && ours.every((job) => splitFlags(job.status).some((flag) => JOB_DONE.has(flag)));
       const busy = splitFlags(snapshot.printerStatus).some((flag) => PRINTER_BUSY.has(flag));
+      if (jobsDone && ours.length === 1 && (exactJob || options.documentName)) verified.add(printer);
       if (!jobsDone || busy) {
         settledSince.delete(printer);
       } else if (!settledSince.has(printer)) {
@@ -197,7 +201,7 @@ async function watchAfterSubmit(config, printers, sinceMs, options = {}) {
         pending.delete(printer);
       }
     }
-    if (!pending.size) return;
+    if (!pending.size) return printers.every(printer => verified.has(printer));
     if (now() - startedAt >= maxMs) {
       const jobLabel = options.cupsJobId == null ? '' : `，CUPS 作业 ${options.cupsJobId}`;
       throw new Error(`等待打印机完成超时（${Math.round(maxMs / 1000)}秒${jobLabel}）：${[...pending].join('、')}`);
@@ -206,11 +210,25 @@ async function watchAfterSubmit(config, printers, sinceMs, options = {}) {
   }
 }
 
+function recoveryQueueState(snapshot, documentName, jobId) {
+  const matches = snapshot.jobs.filter(job => job.documentName === documentName
+    && (jobId == null || job.id === jobId));
+  if (matches.length !== 1) return matches.length ? 'ACTIVE' : 'UNAVAILABLE';
+  const flags = splitFlags(matches[0].status);
+  if (flags.some(flag => JOB_DONE.has(flag))) {
+    const blocked = printerFaults(snapshot).length || describe(flags, CUPS_JOB_FAULTS).length
+      || splitFlags(snapshot.printerStatus).some(flag => PRINTER_BUSY.has(flag));
+    return blocked ? 'UNAVAILABLE' : 'DONE';
+  }
+  if (flags.includes('Deleted') || flags.includes('Unconfirmed')) return 'UNAVAILABLE';
+  return 'ACTIVE';
+}
+
 /**
  * macOS 按 CUPS 作业 ID 取消，Windows 沿用 lvpai-* 过滤。
  * 取消失败不覆盖送打后的原始异常。
  */
-async function cancelPendingLvpaiJobs(config, printer, cupsJobId) {
+async function cancelPendingLvpaiJobs(config, printer, cupsJobId, documentName) {
   if (!printer || !Array.isArray(config.statusCommand)) return { cancelled: 0 };
   if (cupsJobId != null) {
     const cancelled = await cancelMacJob(printer, cupsJobId).catch(() => false);
@@ -219,10 +237,13 @@ async function cancelPendingLvpaiJobs(config, printer, cupsJobId) {
   const platform = config.platform || process.platform;
   if (platform !== 'win32') return { cancelled: 0 };
   const safe = String(printer).replace(/'/g, "''");
+  const match = documentName
+    ? `-eq '${documentName.replace(/'/g, "''")}'`
+    : "-like 'lvpai-*'";
   const script = [
     `$ErrorActionPreference='SilentlyContinue'`,
     `$jobs = @(Get-PrintJob -PrinterName '${safe}' | Where-Object {`,
-    `  $_.DocumentName -like 'lvpai-*' -and`,
+    `  $_.DocumentName ${match} -and`,
     `  ($_.JobStatus -notmatch 'Completed|Printed|Deleted|Deleting')`,
     `})`,
     `$n = 0`,
@@ -254,5 +275,6 @@ module.exports = {
   isOnlyPaperOut,
   assertPrinterReady,
   watchAfterSubmit,
+  recoveryQueueState,
   cancelPendingLvpaiJobs,
 };

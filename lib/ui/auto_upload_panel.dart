@@ -37,7 +37,6 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
   String get _folder => station.folder;
   bool _picking = false;
   bool _dragging = false;
-  bool? _showQueue;
   bool? _scanExisting;
   bool get _canDrop =>
       widget.allowDrop &&
@@ -199,11 +198,6 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
         )
         .length;
     final failed = jobs.where((job) => job.state == 'failed').length;
-    final batchTimeline = widget.batchTimeline;
-    final showQueue =
-        (_showQueue ?? uploader.sourcesNeedingOrder.isNotEmpty) ||
-        batchTimeline == null;
-
     final identity = Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       spacing: 12,
@@ -524,109 +518,40 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
             ),
           ),
         ),
-        if (batchTimeline != null)
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.only(top: 20, bottom: 12),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _sectionChip(
-                    label: '取片批次',
-                    icon: Icons.view_timeline_outlined,
-                    queue: false,
-                    selected: !showQueue,
-                  ),
-                  _sectionChip(
-                    label: '上传队列',
-                    icon: Icons.cloud_upload_outlined,
-                    queue: true,
-                    selected: showQueue,
-                  ),
-                ],
-              ),
-            ),
-          )
-        else
-          const SliverToBoxAdapter(child: SizedBox(height: 20)),
-        if (batchTimeline != null)
-          TickerMode(
-            enabled: !showQueue && widget.allowDrop,
-            child: SliverVisibility(
-              visible: !showQueue,
-              maintainState: true,
-              sliver: batchTimeline,
-            ),
+        const SliverToBoxAdapter(child: SizedBox(height: 20)),
+        UploadTaskList(
+          folder: _folder,
+          waiting: uploader.waitingSources,
+          needingOrder: uploader.sourcesNeedingOrder,
+          jobs: jobs,
+          batchTimeline: widget.batchTimeline,
+          onDiscard: uploader.running ? uploader.discardWaitingSource : null,
+          onConfirmNext: uploader.running ? uploader.confirmNextSource : null,
+          onReview: (job) => showCardTailDialog(
+            context,
+            readPhoto: job.readPhotoForReview,
+            guidance: [
+              if (job.captureMetadata != null) job.captureMetadata!.description,
+              '请根据候选尾号核对卡面。归集由服务端识别结束照。',
+            ].join('\n'),
           ),
-        SliverVisibility(
-          visible: showQueue,
-          sliver: SliverMainAxisGroup(
-            slivers: [
-              UploadTaskList(
-                folder: _folder,
-                waiting: uploader.waitingSources,
-                needingOrder: uploader.sourcesNeedingOrder,
-                jobs: jobs,
-                onDiscard: uploader.running
-                    ? uploader.discardWaitingSource
-                    : null,
-                onConfirmNext: uploader.running
-                    ? uploader.confirmNextSource
-                    : null,
-                onReview: (job) => showCardTailDialog(
-                  context,
-                  readPhoto: job.readPhotoForReview,
-                  guidance: [
-                    if (job.captureMetadata != null)
-                      job.captureMetadata!.description,
-                    '请根据候选尾号核对卡面。归集由服务端识别结束照。',
-                  ].join('\n'),
-                ),
+        ),
+        const SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.only(top: 12),
+            child: Text(
+              '支持 JPEG、PNG、MPO、HEIF、RAW / DNG、TIFF、WebP 和 AVIF。按发现顺序排队，前一张入库后继续。',
+              style: TextStyle(
+                fontSize: 12,
+                color: WorkstationStyle.muted,
+                height: 1.4,
               ),
-              const SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.only(top: 12),
-                  child: Text(
-                    '支持 JPEG、PNG、MPO、HEIF、RAW / DNG、TIFF、WebP 和 AVIF。按发现顺序排队，前一张入库后继续。',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: WorkstationStyle.muted,
-                      height: 1.4,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ],
     );
   }
-
-  Widget _sectionChip({
-    required String label,
-    required IconData icon,
-    required bool queue,
-    required bool selected,
-  }) => ChoiceChip(
-    label: Text(label),
-    avatar: Icon(icon, size: 18),
-    selected: selected,
-    showCheckmark: false,
-    labelStyle: TextStyle(
-      fontWeight: FontWeight.w700,
-      color: selected ? WorkstationStyle.accent : WorkstationStyle.ink,
-    ),
-    selectedColor: WorkstationStyle.accentSoft,
-    backgroundColor: WorkstationStyle.card,
-    side: BorderSide(
-      color: selected ? WorkstationStyle.accent : WorkstationStyle.line,
-    ),
-    onSelected: (selected) {
-      if (selected) setState(() => _showQueue = queue);
-    },
-  );
 }
 
 class _Stat extends StatelessWidget {

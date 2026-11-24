@@ -4,7 +4,7 @@
  * 打印代理运行时：配置、单实例锁、调度、历史、日志。
  * CLI 与 Electron 共用，避免两套逻辑。
  */
-const { loadConfig, resolveConfigPath, saveConfig, redactConfig, normalizeConfig, toWritableConfig } = require('./config');
+const { loadConfig, resolveConfigPath, saveConfig: writeConfig, redactConfig, normalizeConfig, toWritableConfig } = require('./config');
 const { createHistory } = require('./history');
 const { createLogBuffer } = require('./log-buffer');
 const { createScheduler } = require('./scheduler');
@@ -18,7 +18,8 @@ const { acquireLock } = require('./single-instance');
  */
 async function createRuntime(options = {}) {
   const configPathArg = options.configPath;
-  let config = loadConfig({ configPath: configPathArg, lockDir: options.lockDir });
+  const saveConfig = next => writeConfig(next, next.configPath, options.transformSavedConfig);
+  let config = loadConfig({ configPath: configPathArg, lockDir: options.lockDir, transformRaw: options.transformRaw });
   if (options.forceManualStart) config.autoPrint = false;
   let lock = null;
   if (!options.skipLock) {
@@ -419,8 +420,12 @@ async function createRuntime(options = {}) {
 
   async function addScenicProfile(body = {}) {
     const token = String(body.token || '').trim();
-    if (!token) throw new Error('请输入景区打印密钥');
+    if (!token) throw new Error('缺少打印设备凭据');
     const current = toWritableConfig(runtime.getConfig());
+    const assignedId = String(body.id || '');
+    if (assignedId && current.scenicProfiles.some(profile => profile.id === assignedId && profile.token === token)) {
+      return snapshot();
+    }
     if ((current.scenicProfiles || []).some((p) => p.token === token)) {
       throw new Error('该密钥已在档案列表中');
     }
@@ -428,9 +433,13 @@ async function createRuntime(options = {}) {
     if (body.scenicId && !bound.scenicIds.includes(body.scenicId)) {
       throw new Error('该打印密钥不属于此机位的景区');
     }
-    const id = `scenic-${Date.now()}`;
-    const profiles = [...(current.scenicProfiles || []), { id, ...bound }];
-    const activate = Boolean(body.activate) || profiles.length === 1;
+    const id = assignedId || `scenic-${Date.now()}`;
+    const replaces = assignedId
+      ? current.scenicProfiles.filter(profile => profile.scenicIds.some(id => bound.scenicIds.includes(id)))
+      : [];
+    const activeReplaced = replaces.some(profile => profile.id === current.activeScenicProfileId);
+    const profiles = [...current.scenicProfiles.filter(profile => !replaces.includes(profile)), { id, ...bound }];
+    const activate = Boolean(body.activate) || activeReplaced || profiles.length === 1;
     if (activate) assertCanSwitchScenic();
     const next = withNorm({
       scenicProfiles: profiles,

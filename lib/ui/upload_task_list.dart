@@ -130,7 +130,7 @@ class UploadTaskList extends StatelessWidget {
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           const Text(
-            '任务列表',
+            '上传队列',
             style: TextStyle(
               fontWeight: FontWeight.w700,
               color: WorkstationStyle.ink,
@@ -274,6 +274,8 @@ class UploadTaskList extends StatelessWidget {
     return SliverMainAxisGroup(
       slivers: [
         SliverList.list(children: incoming),
+        if (batchTimeline != null)
+          const SliverToBoxAdapter(child: SizedBox(height: 12)),
         ?batchTimeline,
         SliverList.builder(
           itemCount: dated.length,

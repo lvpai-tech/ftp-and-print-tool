@@ -39,7 +39,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('上传页使用机位所属档案并保留上传队列入口', (tester) async {
+  testWidgets('上传队列内同时显示照片归属，无需切换页签', (tester) async {
     tester.view.physicalSize = const Size(1280, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -59,16 +59,23 @@ void main() {
     await showUpload(tester, bridge: bridge);
     await tester.tap(find.text('A08'));
     await tester.pumpAndSettle();
-    expect(find.text('照片批次矫正'), findsOneWidget);
-    expect(find.text('取片卡 6969'), findsOneWidget);
-    expect(bridge.calls, ['listBatchStations', 'listPhotoBatches']);
-    await tester.tap(find.text('上传队列'));
-    await tester.pumpAndSettle();
+    expect(find.text('上传队列'), findsOneWidget);
     expect(find.text('本机暂无上传任务'), findsOneWidget);
-    await tester.tap(find.text('取片批次'));
+    expect(find.text('取片批次'), findsNothing);
+    expect(find.text('照片归属缺少景区档案'), findsOneWidget);
+    expect(find.text('添加打印密钥'), findsNothing);
+    expect(bridge.calls, isEmpty);
+
+    bridge.setMatchingScenic(true);
     await tester.pumpAndSettle();
+    expect(find.text('上传队列'), findsOneWidget);
+    expect(find.text('照片归属'), findsOneWidget);
     expect(find.text('取片卡 6969'), findsOneWidget);
-    expect(bridge.calls, hasLength(2));
+    await tester.tap(find.byKey(const ValueKey('photo-actions-209')));
+    await tester.pumpAndSettle();
+    expect(find.text('查看图片'), findsOneWidget);
+    expect(find.text('查询拍摄信息'), findsOneWidget);
+    expect(bridge.calls, ['listBatchStations', 'listPhotoBatches']);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -265,6 +272,10 @@ void main() {
 class _BatchBridge extends PrintBridge {
   _BatchBridge() {
     connected = true;
+    setMatchingScenic(false);
+  }
+
+  void setMatchingScenic(bool available) {
     snapshot = {
       'configured': true,
       'config': {
@@ -275,14 +286,16 @@ class _BatchBridge extends PrintBridge {
             'scenicIds': ['1'],
             'scenicName': '蓝月谷',
           },
-          {
-            'id': 'upload-scenic',
-            'scenicIds': ['5'],
-            'scenicName': '汉京中心',
-          },
+          if (available)
+            {
+              'id': 'upload-scenic',
+              'scenicIds': ['5'],
+              'scenicName': '汉京中心',
+            },
         ],
       },
     };
+    notifyListeners();
   }
 
   final calls = <String>[];

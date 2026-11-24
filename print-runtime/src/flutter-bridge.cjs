@@ -9,7 +9,7 @@ const { promisify } = require('node:util');
 const { createRuntime } = require('./runtime');
 const { normalizeConfig, saveConfig, DEFAULT_OPERATION_BASE } = require('./config');
 const { fetchMe, listBatchStations, listPhotoBatches, correctPhotoBatch, removeBatchPhoto,
-  getBatchPhotoCapture } = require('./api');
+  getBatchPhotoCapture, sendCrashReport } = require('./api');
 const { CUPS_SOCKET } = require('./mac-printer');
 
 const execute = promisify(execFile);
@@ -44,18 +44,32 @@ async function serve({ input = process.stdin, send, configPath, root }) {
     configured: false, config: {}, state: {}, logs: [], history: [],
   };
   const emit = () => send({ event: 'snapshot', data: snapshot() });
+  const credentials = new Map();
+  const authorizedBase = process.env.PRINT_AGENT_BASE || DEFAULT_OPERATION_BASE;
+  let initialized = false;
+  const stored = () => fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
+  const stripCredentials = ({ token, ...payload }) => ({
+    ...payload,
+    scenicProfiles: payload.scenicProfiles.map(({ token: secret, ...profile }) => profile),
+  });
+  const authorizedProfiles = raw => (raw.scenicProfiles || [])
+    .filter(profile => credentials.has(profile.id))
+    .map(profile => ({ ...profile, token: credentials.get(profile.id) }));
   async function boot() {
     bridge = await createRuntime({ configPath,
       lockDir: path.join(path.dirname(configPath), '.runtime'), skipLock: true,
+      transformSavedConfig: stripCredentials,
+      transformRaw(raw) {
+        const profiles = authorizedProfiles(raw);
+        return { ...raw, base: authorizedBase, token: profiles[0].token, scenicProfiles: profiles };
+      },
       forceManualStart: true, includePrintIssues: true, onStateChange: emit });
-    // 每次启动均须现场主动开启自动打印，避免重启即出纸。
     bridge.start();
   }
-  if (fs.existsSync(configPath)) await boot();
   const read = readline.createInterface({ input, crlfDelay: Infinity });
-  const mutations = new Set(['configure', 'saveConfig', 'autoPrint', 'printJobs', 'continueJobs',
-    'markUnprinted', 'confirmPrinted', 'queryJobs', 'refreshJobs', 'trialPrintItem', 'downloadJobZip',
-    'addScenicProfile', 'activateScenicProfile', 'deleteScenicProfile', 'updateScenicProfile',
+  const mutations = new Set(['initialize', 'installPrintAuthorization', 'saveConfig', 'autoPrint', 'printJobs', 'continueJobs',
+    'markUnprinted', 'confirmPrinted', 'recoverPrintJob', 'queryJobs', 'refreshJobs', 'trialPrintItem', 'downloadJobZip',
+    'activateScenicProfile', 'deleteScenicProfile',
     'correctPhotoBatch', 'removeBatchPhoto']);
   function batchConfig(scope) {
     const config = bridge.runtime.getConfig();
@@ -70,18 +84,14 @@ async function serve({ input = process.stdin, send, configPath, root }) {
   async function dispatch(method, args) {
     if (method === 'snapshot') return snapshot();
     if (method === 'listPrinters') return listPrinters();
-    // 仅本机界面显式索取；不进常规 snapshot，避免日志/状态页带出明文。
-    if (method === 'revealToken') {
-      if (!bridge) throw new Error('请先验证景区打印密钥');
-      return { token: String(bridge.runtime.getConfig().token || '') };
-    }
-    if (method === 'revealScenicProfileToken') {
-      if (!bridge) throw new Error('请先验证景区打印密钥');
-      const id = String(args[0]?.id || '').trim();
-      const profile = (bridge.runtime.getConfig().scenicProfiles || [])
-        .find((p) => p.id === id);
-      if (!profile) throw new Error('景区档案不存在');
-      return { token: String(profile.token || '') };
+    if (method === 'initialize') {
+      if (initialized) return snapshot();
+      for (const [id, token] of Object.entries(args[0] || {})) {
+        if (/^[a-f0-9-]{36}$/.test(id) && /^[a-f0-9]{64}$/.test(token)) credentials.set(id, token);
+      }
+      if (authorizedProfiles(stored()).length) await boot();
+      initialized = true;
+      return snapshot();
     }
     if (method === 'printerStatus') {
       if (!bridge) throw new Error('请先连接景区');
@@ -104,57 +114,60 @@ async function serve({ input = process.stdin, send, configPath, root }) {
       read.close();
       return { stopped: true };
     }
-    if (method === 'configure') {
-      if (bridge) throw new Error('已配置，请使用设置保存');
-      const token = String(args[0]?.token || '').trim();
-      if (!token) throw new Error('请输入景区打印密钥');
-      const raw = JSON.parse(fs.readFileSync(path.join(root,
-        process.platform === 'darwin' ? 'config.mac.example.json' : 'config.example.json'), 'utf8'));
-      const meProbe = normalizeConfig({ ...raw, base: process.env.PRINT_AGENT_BASE || DEFAULT_OPERATION_BASE,
-        token, scenicIds: ['0'], printers: {}, autoPrint: false,
-        lockDir: path.join(path.dirname(configPath), '.runtime') },
-      { configPath, scriptDir: path.join(root, 'scripts') });
-      const me = await fetchMe(meProbe);
-      if (!me?.scenicId) throw new Error('密钥校验失败：缺少景区信息');
-      const scenicIds = (me.scenicIds?.length ? me.scenicIds : [me.scenicId]).map(String);
-      if (args[0]?.scenicId && !scenicIds.includes(args[0].scenicId)) {
-        throw new Error('该打印密钥不属于此机位的景区');
+    if (method === 'installPrintAuthorization') {
+      if (!initialized) throw new Error('打印内核尚未初始化');
+      const { id, token, scenicId } = args[0] || {};
+      if (!/^[a-f0-9-]{36}$/.test(id) || !/^[a-f0-9]{64}$/.test(token)) {
+        throw new Error('打印设备凭据无效');
       }
-      const scenicName = me.scenicName || '';
-      const scenicCode = me.scenicCode || '';
+      if (bridge) {
+        const result = await bridge.addScenicProfile({ id, token, scenicId });
+        credentials.set(id, token);
+        return result;
+      }
+      const defaults = JSON.parse(fs.readFileSync(path.join(root,
+        process.platform === 'darwin' ? 'config.mac.example.json' : 'config.example.json'), 'utf8'));
+      const me = await fetchMe({ base: authorizedBase, token });
+      if (!me?.scenicId || String(me.scenicId) !== scenicId) throw new Error('打印授权景区不一致');
+      const profile = { id, token, scenicIds: [scenicId], scenicName: me.scenicName, scenicCode: me.scenicCode };
       const config = normalizeConfig({
-        ...raw,
-        base: process.env.PRINT_AGENT_BASE || DEFAULT_OPERATION_BASE,
-        token,
-        scenicIds,
-        scenicName,
-        scenicCode,
-        scenicProfiles: [{ id: 'default', token, scenicIds, scenicName, scenicCode }],
-        activeScenicProfileId: 'default',
-        printers: {},
-        autoPrint: false,
+        ...defaults, printers: {}, ...stored(), ...profile, base: authorizedBase, scenicProfiles: [profile],
+        activeScenicProfileId: id, autoPrint: false,
         lockDir: path.join(path.dirname(configPath), '.runtime'),
       }, { configPath, scriptDir: path.join(root, 'scripts') });
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      saveConfig(config);
+      credentials.set(id, token);
+      saveConfig(config, configPath, stripCredentials);
       await boot();
       return snapshot();
     }
-    if (!bridge) throw new Error('请先验证景区打印密钥');
+    if (!bridge) throw new Error('请先申请打印权限');
+    if (method === 'recoveryDetails') return bridge.scheduler.recoveryDetails(args[0]);
+    if (method === 'recoverPrintJob') {
+      await bridge.scheduler.recoverPrintJob(args[0], args[1]);
+      return snapshot();
+    }
+    if (method === 'sendCrashReport') return sendCrashReport(batchConfig(), args[0]);
     if (method === 'listBatchStations') return listBatchStations(batchConfig(args[0]));
     if (method === 'listPhotoBatches') return listPhotoBatches(batchConfig(args[1]), args[0]);
     if (method === 'correctPhotoBatch') return correctPhotoBatch(batchConfig(args[2]), args[0], args[1]);
     if (method === 'removeBatchPhoto') return removeBatchPhoto(batchConfig(args[3]), args[0], args[1], args[2]);
     if (method === 'getBatchPhotoCapture') return getBatchPhotoCapture(batchConfig(args[2]), args[0], args[1]);
     if (method === 'saveConfig') {
-      await bridge.applyConfigPatch(args[0]);
+      const { printers, printDpi } = args[0] || {};
+      await bridge.applyConfigPatch({ printers, printDpi });
       return snapshot();
     }
-    if (method === 'addScenicProfile') return bridge.addScenicProfile(args[0] || {});
     if (method === 'activateScenicProfile') return bridge.activateScenicProfile(args[0] || {});
     if (method === 'deleteScenicProfile') return bridge.deleteScenicProfile(args[0] || {});
-    if (method === 'updateScenicProfile') return bridge.updateScenicProfile(args[0] || {});
-    if (method === 'autoPrint') return bridge.setAutoPrint(Boolean(args[0]));
+    if (method === 'autoPrint') {
+      const enabled = Boolean(args[0]);
+      const config = bridge.runtime.getConfig();
+      if (enabled && !config.skipPrint && !Object.values(config.printers).some(Boolean)
+          && !config.allowDefaultPrinter) {
+        throw new Error('请先在打印设置中选择并保存本机打印机');
+      }
+      return bridge.setAutoPrint(enabled);
+    }
     const methods = new Set(['printJobs', 'continueJobs', 'markUnprinted', 'confirmPrinted', 'queryJobs',
       'refreshJobs', 'previewJob', 'previewJobImage', 'trialPrintItem', 'downloadJobZip']);
     if (!methods.has(method)) throw new Error('不支持的操作');

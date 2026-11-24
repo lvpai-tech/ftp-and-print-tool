@@ -129,8 +129,8 @@ void main() {
       );
       await tester.pumpAndSettle();
       if (inline) {
-        expect(find.text('任务列表'), findsOneWidget);
-        expect(find.text('照片批次矫正'), findsOneWidget);
+        expect(find.text('上传队列'), findsOneWidget);
+        expect(find.text('照片归属'), findsOneWidget);
         expect(find.text('设置取片批次'), findsNothing);
         expect(find.byTooltip('选择机位'), findsNothing);
         expect(find.textContaining('A17'), findsOneWidget);
@@ -245,7 +245,7 @@ void main() {
       if (inline) {
         await tester.binding.setSurfaceSize(const Size(375, 650));
         await tester.pumpAndSettle();
-        expect(find.text('任务列表'), findsOneWidget);
+        expect(find.text('上传队列'), findsOneWidget);
         expect(find.text('取片卡 1234'), findsOneWidget);
         expect(find.text('批量归集'), findsOneWidget);
         expect(tester.takeException(), isNull);

@@ -278,7 +278,7 @@ function loadConfig(options = {}) {
   } else {
     throw new Error(`找不到配置文件：${configPath}（可复制 config.example.json 为 config.json）`);
   }
-  const merged = applyEnvOverrides(raw, env);
+  const merged = options.transformRaw ? options.transformRaw(raw) : applyEnvOverrides(raw, env);
   return normalizeConfig(merged, {
     configPath,
     platform: proc.platform,
@@ -380,9 +380,9 @@ function toWritableConfig(config) {
   };
 }
 
-function saveConfig(config, configPath = config.configPath) {
+function saveConfig(config, configPath = config.configPath, transform = payload => payload) {
   if (!configPath) throw new Error('无配置路径，无法保存');
-  const payload = toWritableConfig(config);
+  const payload = transform(toWritableConfig(config));
   const dir = path.dirname(configPath);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = `${configPath}.${process.pid}.tmp`;

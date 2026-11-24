@@ -13,7 +13,6 @@ import '../auto_upload/upload_slots.dart';
 import '../branding.dart';
 import '../printing/print_bridge.dart';
 import '../printing/ui/photo_batch_page.dart';
-import '../printing/ui/scenic_key_dialog.dart';
 import '../profile_store.dart';
 import '../workstation_session.dart';
 import 'app_dialogs.dart';
@@ -518,18 +517,16 @@ class _TransferPageState extends State<TransferPage>
         if (!bridge.connected) {
           return const SliverToBoxAdapter(
             child: _BatchAccessNotice(
-              title: '打印服务未连接',
-              message: '请在打印照片页检查打印服务状态，连接后即可查看取片批次。',
+              title: '照片归属暂不可用',
+              message: '请在打印照片页检查打印服务状态。',
             ),
           );
         }
         if (!bridge.configured || matching == null) {
-          return SliverToBoxAdapter(
+          return const SliverToBoxAdapter(
             child: _BatchAccessNotice(
-              title: '添加景区打印密钥',
-              message: '使用该机位所属景区的打印密钥，即可查看取片批次和矫正照片归属。',
-              onAdd: () => _addBatchScenicKey(bridge, scenicId),
-              busy: bridge.busy,
+              title: '照片归属缺少景区档案',
+              message: '请在「打印照片」申请对应景区的打印权限。',
             ),
           );
         }
@@ -547,39 +544,28 @@ class _TransferPageState extends State<TransferPage>
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    PopupMenuButton<String>(
-                      tooltip: '选择取片批次的景区档案',
-                      onSelected: (id) =>
-                          setState(() => _legacyBatchProfileId = id),
-                      itemBuilder: (_) => [
-                        for (final entry in profiles)
-                          CheckedPopupMenuItem(
-                            value: entry['id'] as String,
-                            checked: entry['id'] == profileId,
-                            child: Text(_batchScenicLabel(entry)),
-                          ),
-                      ],
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 12,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: PopupMenuButton<String>(
+                    tooltip: '选择取片批次的景区档案',
+                    onSelected: (id) =>
+                        setState(() => _legacyBatchProfileId = id),
+                    itemBuilder: (_) => [
+                      for (final entry in profiles)
+                        CheckedPopupMenuItem(
+                          value: entry['id'] as String,
+                          checked: entry['id'] == profileId,
+                          child: Text(_batchScenicLabel(entry)),
                         ),
-                        child: Text('选择景区档案 ▾'),
+                    ],
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 12,
                       ),
+                      child: Text('选择景区档案 ▾'),
                     ),
-                    TextButton.icon(
-                      onPressed: bridge.busy
-                          ? null
-                          : () => _addBatchScenicKey(bridge, null),
-                      icon: const Icon(Icons.key_outlined, size: 18),
-                      label: const Text('添加打印密钥'),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -588,42 +574,6 @@ class _TransferPageState extends State<TransferPage>
         );
       },
     );
-  }
-
-  Future<void> _addBatchScenicKey(PrintBridge bridge, String? scenicId) async {
-    final token = await showScenicKeyDialog(context);
-    if (!mounted || token == null) return;
-    try {
-      if (token.isEmpty) throw StateError('请输入景区打印密钥');
-      final adding = bridge.configured;
-      final existing = bridge.config['scenicProfiles'] as List? ?? const [];
-      final result = await bridge.run(
-        adding ? 'addScenicProfile' : 'configure',
-        [
-          {'token': token, 'scenicId': ?scenicId},
-        ],
-      );
-      if (mounted && adding && scenicId == null) {
-        final previousIds = existing
-            .whereType<Map>()
-            .map((entry) => entry['id'])
-            .toSet();
-        final profiles = (result['config']['scenicProfiles'] as List)
-            .whereType<Map>();
-        final added = profiles
-            .where((entry) => !previousIds.contains(entry['id']))
-            .single;
-        setState(() => _legacyBatchProfileId = added['id'] as String);
-      }
-    } catch (error) {
-      if (mounted) {
-        await showAppMessage(
-          context,
-          title: '无法添加景区密钥',
-          message: appErrorMessage(error),
-        );
-      }
-    }
   }
 
   @override
@@ -659,16 +609,9 @@ String _batchScenicLabel(Map profile) {
 }
 
 class _BatchAccessNotice extends StatelessWidget {
-  const _BatchAccessNotice({
-    required this.title,
-    required this.message,
-    this.onAdd,
-    this.busy = false,
-  });
+  const _BatchAccessNotice({required this.title, required this.message});
 
   final String title, message;
-  final VoidCallback? onAdd;
-  final bool busy;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -681,14 +624,6 @@ class _BatchAccessNotice extends StatelessWidget {
         Text(title, style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 6),
         Text(message, style: const TextStyle(color: WorkstationStyle.muted)),
-        if (onAdd != null) ...[
-          const SizedBox(height: 12),
-          FilledButton.icon(
-            onPressed: busy ? null : onAdd,
-            icon: const Icon(Icons.key_outlined, size: 18),
-            label: const Text('添加打印密钥'),
-          ),
-        ],
       ],
     ),
   );
