@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/app.dart';
 import 'package:lvpai_ftp_client/desktop_lifecycle.dart';
+import 'package:lvpai_ftp_client/ui/dropdown_field.dart';
 import 'package:lvpai_ftp_client/ui/transfer_page.dart';
 import 'package:lvpai_ftp_client/workstation_session.dart';
 import 'package:material_ui/material_ui.dart';
@@ -143,7 +144,7 @@ void main() {
     await tester.pumpAndSettle();
     await open(tester, 'open-print');
     await open(tester, 'print-open-config');
-    final field = find.byType(DropdownMenu<String>).first;
+    final field = find.byType(DropdownField<String>).first;
     final arrow = find.descendant(
       of: field,
       matching: find.byIcon(Icons.keyboard_arrow_down_rounded),
@@ -164,6 +165,15 @@ void main() {
     );
     await tester.tap(arrow);
     await tester.pumpAndSettle();
+    final search = find.byWidgetPredicate(
+      (widget) => widget is TextField && widget.decoration?.hintText == '搜索打印机',
+    );
+    await tester.enterText(search, '备用');
+    await tester.pumpAndSettle();
+    expect(
+      find.widgetWithText(ListTile, WorkstationBridge.printer),
+      findsNothing,
+    );
     await tester.tap(
       find.text(WorkstationBridge.alternatePrinter).hitTestable(),
     );

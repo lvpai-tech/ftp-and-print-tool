@@ -7,6 +7,8 @@ import 'package:material_ui/material_ui.dart';
 import '../auto_upload/workstation_enrollment.dart';
 import '../profile_store.dart';
 import 'design.dart';
+import 'dropdown_field.dart';
+import 'workstation_form_dialog.dart';
 
 class WorkstationEnrollmentPanel extends StatefulWidget {
   const WorkstationEnrollmentPanel({
@@ -321,10 +323,8 @@ class _EnrollmentDialog extends StatefulWidget {
 
 class _EnrollmentDialogState extends State<_EnrollmentDialog> {
   final _location = TextEditingController();
-  final _scenicFocus = FocusNode();
   late Future<List<EnrollmentScenic>> _scenics;
   EnrollmentScenic? _scenic;
-  bool _scenicOpen = false;
   bool _missingLocation = false;
 
   @override
@@ -336,7 +336,6 @@ class _EnrollmentDialogState extends State<_EnrollmentDialog> {
   @override
   void dispose() {
     _location.dispose();
-    _scenicFocus.dispose();
     super.dispose();
   }
 
@@ -376,176 +375,43 @@ class _EnrollmentDialogState extends State<_EnrollmentDialog> {
           ],
         );
       }
-      return _scenicPicker(context, scenics);
+      return DropdownField<EnrollmentScenic>(
+        label: '景区',
+        placeholder: '请选择景区',
+        options: scenics,
+        labelFor: (scenic) => scenic.name,
+        value: _scenic,
+        onChanged: (scenic) => setState(() => _scenic = scenic),
+      );
     },
   );
 
-  Widget _scenicPicker(BuildContext context, List<EnrollmentScenic> scenics) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-    final radius = BorderRadius.circular(8);
-    final listHeight = (MediaQuery.sizeOf(context).height * 0.32).clamp(
-      96.0,
-      248.0,
-    );
-    return CallbackShortcuts(
-      bindings: {
-        if (_scenicOpen)
-          const SingleActivator(LogicalKeyboardKey.escape): () {
-            setState(() => _scenicOpen = false);
-            _scenicFocus.requestFocus();
-          },
-      },
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('景区', style: theme.textTheme.labelLarge),
-          const SizedBox(height: 4),
-          Semantics(
-            label: '景区',
-            expanded: _scenicOpen,
-            child: OutlinedButton(
-              focusNode: _scenicFocus,
-              onPressed: () {
-                _scenicFocus.requestFocus();
-                setState(() => _scenicOpen = !_scenicOpen);
-              },
-              style:
-                  OutlinedButton.styleFrom(
-                    minimumSize: const Size(0, 48),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    backgroundColor: colors.surface,
-                    foregroundColor: colors.onSurface,
-                    shape: RoundedRectangleBorder(borderRadius: radius),
-                  ).copyWith(
-                    side: WidgetStateProperty.resolveWith(
-                      (states) =>
-                          _scenicOpen || states.contains(WidgetState.focused)
-                          ? BorderSide(color: colors.primary)
-                          : BorderSide(color: colors.outlineVariant),
-                    ),
-                  ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _scenic?.name ?? '请选择景区',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: _scenic == null
-                            ? colors.onSurfaceVariant
-                            : colors.onSurface,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Icon(
-                    _scenicOpen
-                        ? Icons.keyboard_arrow_up_rounded
-                        : Icons.keyboard_arrow_down_rounded,
-                    size: 20,
-                    color: _scenicOpen
-                        ? colors.primary
-                        : colors.onSurfaceVariant,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (_scenicOpen) ...[
-            const SizedBox(height: 6),
-            Material(
-              color: colors.surface,
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: radius,
-                side: BorderSide(color: colors.outlineVariant),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: listHeight),
-                child: ListView.builder(
-                  primary: false,
-                  shrinkWrap: true,
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  itemCount: scenics.length,
-                  itemBuilder: (context, index) {
-                    final scenic = scenics[index];
-                    final selected = _scenic?.id == scenic.id;
-                    return ListTile(
-                      title: Text(
-                        scenic.name,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: selected ? colors.primary : colors.onSurface,
-                          fontWeight: selected ? FontWeight.w600 : null,
-                        ),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                      ),
-                      minTileHeight: 48,
-                      selected: selected,
-                      selectedColor: colors.primary,
-                      selectedTileColor: colors.primary.withValues(alpha: 0.08),
-                      trailing: selected
-                          ? const Icon(Icons.check_rounded, size: 18)
-                          : null,
-                      onTap: () {
-                        setState(() {
-                          _scenic = scenic;
-                          _scenicOpen = false;
-                        });
-                        _scenicFocus.requestFocus();
-                      },
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('申请机位'),
-    content: SizedBox(
-      width: 420,
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _scenicField(),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _location,
-              maxLength: 100,
-              onTap: () {
-                if (_scenicOpen) setState(() => _scenicOpen = false);
-              },
-              decoration: InputDecoration(
-                labelText: '具体点位',
-                errorText: _missingLocation ? '请填写具体点位' : null,
-              ),
-              onChanged: (value) {
-                if (_missingLocation && value.trim().isNotEmpty) {
-                  setState(() => _missingLocation = false);
-                }
-              },
-            ),
-          ],
+  Widget build(BuildContext context) => WorkstationFormDialog(
+    title: '申请机位',
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _scenicField(),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _location,
+          maxLength: 100,
+          decoration: InputDecoration(
+            labelText: '具体点位',
+            errorText: _missingLocation ? '请填写具体点位' : null,
+          ),
+          onChanged: (value) {
+            if (_missingLocation && value.trim().isNotEmpty) {
+              setState(() => _missingLocation = false);
+            }
+          },
         ),
-      ),
+      ],
     ),
     actions: [
-      TextButton(
+      OutlinedButton(
         onPressed: () => Navigator.of(context).pop(),
         child: const Text('取消'),
       ),

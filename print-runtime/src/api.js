@@ -62,6 +62,24 @@ function correctPhotoBatch(config, stationId, correction) {
     AbortSignal.timeout(120000));
 }
 
+function previewPhotoBatchSplit(config, { stationId, from, to, beforePhotoId, afterPhotoId }) {
+  const params = new URLSearchParams({ from, to, beforePhotoId, afterPhotoId });
+  return callJson(config, 'GET', `${batchStationRoute(stationId)}/split-preview?${params}`,
+    undefined, AbortSignal.timeout(30000));
+}
+
+function savePhotoBatchSplit(config, { stationId, from, to }, split) {
+  const params = new URLSearchParams({ from, to });
+  return callJson(config, 'POST', `${batchStationRoute(stationId)}/splits?${params}`, split,
+    AbortSignal.timeout(120000));
+}
+
+function movePhotoBatchPhoto(config, { stationId, from, to }, move) {
+  const params = new URLSearchParams({ from, to });
+  return callJson(config, 'POST', `${batchStationRoute(stationId)}/moves?${params}`, move,
+    AbortSignal.timeout(30000));
+}
+
 function batchPhotoRoute(stationId, photoId) {
   if (typeof photoId !== 'string' || !/^[1-9]\d*$/.test(photoId)) throw new Error('照片编号无效');
   return `${batchStationRoute(stationId)}/photos/${photoId}`;
@@ -224,6 +242,9 @@ module.exports = {
   listBatchStations,
   listPhotoBatches,
   correctPhotoBatch,
+  previewPhotoBatchSplit,
+  savePhotoBatchSplit,
+  movePhotoBatchPhoto,
   removeBatchPhoto,
   getBatchPhotoCapture,
   generatingThumbnailPath,

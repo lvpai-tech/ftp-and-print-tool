@@ -40,6 +40,26 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
       let data;
       if (req.url === '/print-agents/me') data = { scenicId: '2', scenicName: '第二景区' };
       else if (req.url === '/print-agents/photo-batches/stations') data = [{ id: '27' }];
+      else if (req.url.startsWith('/print-agents/photo-batches/stations/27/split-preview?')) {
+        const params = new URL(req.url, 'http://localhost').searchParams;
+        assert.equal(req.method, 'GET');
+        assert.equal(params.get('beforePhotoId'), '31');
+        assert.equal(params.get('afterPhotoId'), '32');
+        data = { managementOnly: true };
+      }
+      else if (req.url.startsWith('/print-agents/photo-batches/stations/27/moves?')) {
+        assert.equal(req.method, 'POST');
+        const params = new URL(req.url, 'http://localhost').searchParams;
+        assert.equal(params.get('from'), '2026-11-23T16:00:00Z');
+        let body = '';
+        req.setEncoding('utf8');
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+          const { photoId, targetPhotoId } = JSON.parse(body);
+          res.end(JSON.stringify({ code: 200, data: { photoId, targetPhotoId } }));
+        });
+        return;
+      }
       else if (req.url === '/print-agents/photo-batches/stations/27/photos/31/capture') {
         assert.equal(req.method, 'GET');
         data = { collected: true, cameraMake: 'Canon' };
@@ -120,6 +140,12 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   const scope = { profileId: second.id, scenicId: '2' };
   assert.match((await call('listBatchStations', { ...scope, scenicId: '1' })).error, /档案已变更/);
   assert.deepEqual((await call('listBatchStations', scope)).data, [{ id: '27' }]);
+  const range = { stationId: '27', from: '2026-11-23T16:00:00Z', to: '2026-11-24T16:00:00Z' };
+  assert.deepEqual((await call('previewPhotoBatchSplit', { ...range, beforePhotoId: '31', afterPhotoId: '32' }, scope)).data,
+    { managementOnly: true });
+  const move = { photoId: '31', targetPhotoId: '32', revision: 0, targetRevision: 0 };
+  assert.match((await call('movePhotoBatchPhoto', range, move, { ...scope, scenicId: '1' })).error, /档案已变更/);
+  assert.deepEqual((await call('movePhotoBatchPhoto', range, move, scope)).data, { photoId: '31', targetPhotoId: '32' });
   assert.deepEqual((await call('getBatchPhotoCapture', '27', '31', scope)).data,
     { collected: true, cameraMake: 'Canon' });
   assert.match((await call('getBatchPhotoCapture', '27', '31', { ...scope, scenicId: '1' })).error, /档案已变更/);

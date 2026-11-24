@@ -19,6 +19,7 @@ import 'app_dialogs.dart';
 import 'auto_upload_panel.dart';
 import 'cos_upload_dialog.dart';
 import 'design.dart';
+import 'dropdown_field.dart';
 import 'update_button.dart';
 import 'workstation_enrollment_panel.dart';
 
@@ -464,7 +465,12 @@ class _TransferPageState extends State<TransferPage>
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
                     onPressed: () => setState(() => _selected = null),
-                    icon: const Icon(Icons.arrow_back, size: 18),
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, 40),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      foregroundColor: WorkstationStyle.muted,
+                    ),
+                    icon: const Icon(Icons.arrow_back_rounded, size: 18),
                     label: const Text('返回机位列表'),
                   ),
                 ),
@@ -546,24 +552,18 @@ class _TransferPageState extends State<TransferPage>
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: PopupMenuButton<String>(
-                    tooltip: '选择取片批次的景区档案',
-                    onSelected: (id) =>
-                        setState(() => _legacyBatchProfileId = id),
-                    itemBuilder: (_) => [
-                      for (final entry in profiles)
-                        CheckedPopupMenuItem(
-                          value: entry['id'] as String,
-                          checked: entry['id'] == profileId,
-                          child: Text(_batchScenicLabel(entry)),
-                        ),
-                    ],
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 12,
+                  child: SizedBox(
+                    width: 236,
+                    child: DropdownField<Map>(
+                      label: '选择取片批次的景区档案',
+                      showLabel: false,
+                      placeholder: '选择景区档案',
+                      options: profiles,
+                      value: matching,
+                      labelFor: _batchScenicLabel,
+                      onChanged: (profile) => setState(
+                        () => _legacyBatchProfileId = profile['id'] as String,
                       ),
-                      child: Text('选择景区档案 ▾'),
                     ),
                   ),
                 ),
@@ -594,7 +594,12 @@ class _TransferPageState extends State<TransferPage>
             maxWidth: _selected == null ? 1120 : 1320,
           ),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
+            padding: EdgeInsets.fromLTRB(
+              16,
+              _selected == null ? 20 : 8,
+              16,
+              24,
+            ),
             child: _body(),
           ),
         ),

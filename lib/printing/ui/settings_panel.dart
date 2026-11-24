@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../ui/app_dialogs.dart';
+import '../../ui/dropdown_field.dart';
 import '../print_bridge.dart';
 import 'design.dart';
 import 'print_enrollment_panel.dart';
@@ -303,8 +304,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                         Padding(
                           padding: const EdgeInsets.only(top: 16),
                           child: _PrinterDropdown(
-                            // 不要把当前选中值放进 Key，否则一点选就重建，表现为要点两次。
-                            key: ValueKey('${entry.key}-${printers.join('|')}'),
+                            key: ValueKey(entry.key),
                             label: entry.value,
                             value: routes[entry.key]?.isNotEmpty == true
                                 ? routes[entry.key]
@@ -312,7 +312,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                             options: _options(entry.key).toList(),
                             enabled: !widget.bridge.busy,
                             onChanged: (value) =>
-                                setState(() => routes[entry.key] = value ?? ''),
+                                setState(() => routes[entry.key] = value),
                             onOpenPreferences:
                                 widget.bridge.busy ||
                                     routes[entry.key]?.isNotEmpty != true
@@ -476,8 +476,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
   }
 }
 
-/// 菜单在输入框下方展开，不盖住触发框描边。
-class _PrinterDropdown extends StatefulWidget {
+class _PrinterDropdown extends StatelessWidget {
   const _PrinterDropdown({
     super.key,
     required this.label,
@@ -492,92 +491,30 @@ class _PrinterDropdown extends StatefulWidget {
   final String? value;
   final List<String> options;
   final bool enabled;
-  final ValueChanged<String?> onChanged;
+  final ValueChanged<String> onChanged;
   final VoidCallback? onOpenPreferences;
 
   @override
-  State<_PrinterDropdown> createState() => _PrinterDropdownState();
-}
-
-class _PrinterDropdownState extends State<_PrinterDropdown> {
-  static const _pickerColor = Color(0xff6741a5);
-  late final TextEditingController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(text: widget.value ?? '');
-  }
-
-  @override
-  void didUpdateWidget(covariant _PrinterDropdown oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final next = widget.value ?? '';
-    if (_controller.text != next) _controller.text = next;
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, bounds) {
-        final menuWidth = (bounds.maxWidth - 48).clamp(160.0, bounds.maxWidth);
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: DropdownMenu<String>(
-                enabled: widget.enabled,
-                // 桌面端默认先抢焦点再开菜单；打开后一次点击即可选中。
-                requestFocusOnTap: true,
-                controller: _controller,
-                width: menuWidth > 0 ? menuWidth : null,
-                initialSelection: widget.value,
-                label: Text(widget.label),
-                hintText: '选择打印机',
-                expandedInsets: EdgeInsets.zero,
-                menuHeight: 320,
-                trailingIcon: const Icon(Icons.keyboard_arrow_down_rounded),
-                selectedTrailingIcon: const Icon(
-                  Icons.keyboard_arrow_up_rounded,
-                ),
-                inputDecorationTheme: Theme.of(context).inputDecorationTheme,
-                dropdownMenuEntries: [
-                  for (final name in widget.options)
-                    DropdownMenuEntry<String>(
-                      value: name,
-                      label: name,
-                      leadingIcon: const Icon(
-                        Icons.print_outlined,
-                        size: 18,
-                        color: _pickerColor,
-                      ),
-                      trailingIcon: name == widget.value
-                          ? const Icon(
-                              Icons.check_rounded,
-                              size: 18,
-                              color: _pickerColor,
-                            )
-                          : null,
-                    ),
-                ],
-                onSelected: widget.enabled ? widget.onChanged : null,
-              ),
-            ),
-            const SizedBox(width: 4),
-            IconButton(
-              tooltip: '打开系统打印偏好设置',
-              onPressed: widget.onOpenPreferences,
-              icon: const Icon(Icons.settings_outlined, size: 18),
-            ),
-          ],
-        );
-      },
-    );
-  }
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.end,
+    children: [
+      Expanded(
+        child: DropdownField<String>(
+          label: label,
+          placeholder: '选择打印机',
+          searchHint: '搜索打印机',
+          options: options,
+          labelFor: (name) => name,
+          value: value,
+          onChanged: enabled ? onChanged : null,
+        ),
+      ),
+      const SizedBox(width: 4),
+      IconButton(
+        tooltip: '打开系统打印偏好设置',
+        onPressed: onOpenPreferences,
+        icon: const Icon(Icons.settings_outlined, size: 18),
+      ),
+    ],
+  );
 }

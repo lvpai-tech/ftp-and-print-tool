@@ -123,22 +123,24 @@ class UploadTaskList extends StatelessWidget {
       for (final group in dated)
         _FileSpan(group.map((job) => _fileStamp(job.signature))),
     ];
+    final empty = waiting.isEmpty && needingOrder.isEmpty && jobs.isEmpty;
     final incoming = <Widget>[
       Wrap(
-        spacing: 10,
+        spacing: 12,
         runSpacing: 4,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           const Text(
             '上传队列',
             style: TextStyle(
+              fontSize: 16,
               fontWeight: FontWeight.w700,
               color: WorkstationStyle.ink,
             ),
           ),
-          const Text(
-            '文件修改时间 · 北京时间',
-            style: TextStyle(color: WorkstationStyle.muted, fontSize: 12),
+          Text(
+            empty ? '本机暂无上传任务' : '文件修改时间 · 北京时间',
+            style: const TextStyle(color: WorkstationStyle.muted, fontSize: 12),
           ),
         ],
       ),
@@ -310,18 +312,6 @@ class UploadTaskList extends StatelessWidget {
             ],
           ),
         ),
-        if (waiting.isEmpty && needingOrder.isEmpty && jobs.isEmpty)
-          const SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.symmetric(vertical: 28),
-              child: Center(
-                child: Text(
-                  '本机暂无上传任务',
-                  style: TextStyle(color: WorkstationStyle.muted),
-                ),
-              ),
-            ),
-          ),
       ],
     );
   }

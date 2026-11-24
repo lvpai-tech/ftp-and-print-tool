@@ -7,6 +7,7 @@ Future<String?> showCardTailDialog(
   BuildContext context, {
   required Future<Uint8List> Function() readPhoto,
   required String guidance,
+  String? sourcePath,
   bool allowUse = false,
   String useLabel = '核对后用于补录',
 }) => showDialog<String>(
@@ -14,6 +15,7 @@ Future<String?> showCardTailDialog(
   builder: (_) => _CardTailDialog(
     readPhoto: readPhoto,
     guidance: guidance,
+    sourcePath: sourcePath,
     allowUse: allowUse,
     useLabel: useLabel,
   ),
@@ -23,12 +25,14 @@ class _CardTailDialog extends StatefulWidget {
   const _CardTailDialog({
     required this.readPhoto,
     required this.guidance,
+    required this.sourcePath,
     required this.allowUse,
     required this.useLabel,
   });
 
   final Future<Uint8List> Function() readPhoto;
   final String guidance;
+  final String? sourcePath;
   final bool allowUse;
   final String useLabel;
 
@@ -46,7 +50,11 @@ class _CardTailDialogState extends State<_CardTailDialog> {
 
   Future<(Uint8List, Uint8List, Size)> _loadPhoto() async {
     final bytes = await widget.readPhoto();
-    final (preview, size) = await compute(cardTailPreview, bytes);
+    final sourcePath = widget.sourcePath;
+    final (preview, size) = await compute(
+      (bytes) => cardTailPreview(bytes, sourcePath: sourcePath),
+      bytes,
+    );
     return (bytes, preview, size);
   }
 
@@ -62,8 +70,12 @@ class _CardTailDialogState extends State<_CardTailDialog> {
     String? tail;
     try {
       final (bytes, _, _) = await _photo;
-      tail = await CardTailRecognizer.shared.recognize(bytes, selection);
-      result = tail == null ? '未能确认四位尾号，请调整选区后重试' : '候选尾号 $tail';
+      tail = await CardTailRecognizer.shared.recognize(
+        bytes,
+        selection,
+        sourcePath: widget.sourcePath,
+      );
+      result = tail == null ? '未能确认尾号，请调整选区后重试' : '候选尾号 $tail';
     } on StateError catch (error) {
       result = error.message;
     } catch (_) {
@@ -161,7 +173,7 @@ class _CardTailDialogState extends State<_CardTailDialog> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('拖动框住卡面上的四位数字。'),
+            const Text('拖动框住卡面上的完整六位尾号。'),
             const SizedBox(height: 8),
             Expanded(
               child: FutureBuilder(

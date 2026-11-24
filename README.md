@@ -111,6 +111,20 @@ Windows release 构建通过，EXE 为 `build/windows/x64/runner/Release/lvpai_f
 发布需打包整个 `build/windows/x64/runner/Release/`，不能只复制 exe。
 macOS / iPad 的构建、签名及真机验证需在 Mac 上完成；当前未验证苹果端。
 
+## 表单组件
+
+上传与打印工作台的表单弹窗使用 [WorkstationFormDialog](lib/ui/workstation_form_dialog.dart)。标题和关闭按钮位于顶部，次要操作和主操作在底部靠右。短窗口滚动正文，标题和操作区保持可用。保存期间需要阻止退出时，同时关闭标题栏按钮并沿用路由的退出保护。
+
+上传与打印工作台的单选字段统一使用 [DropdownField](lib/ui/dropdown_field.dart)。打印机选择启用搜索。带翻月控件的收图日期复用 [AnchoredDropdown](lib/ui/anchored_dropdown.dart) 的浮层定位。照片和工单的动作使用操作菜单。
+
+改动下拉选择时，在默认和窄窗口下验证以下行为。
+
+- 浮层与触发框同宽，优先从下方展开。空间不足时向上展开或限高滚动，始终与触发框留出间距。
+- 展开和收起时，弹窗尺寸、输入框和提交按钮的位置保持稳定。长列表能滚到最后一项并选中。
+- 选择、按 Esc 或点击浮层外部时收起列表。外部点击仍交给原控件处理，已填写的内容保留。
+
+回归用例见[公共浮层](test/dropdown_field_test.dart)、[打印权限申请](test/printing_workstation_test.dart)、[机位申请](test/workstation_enrollment_test.dart)、[照片归集与筛选](test/photo_batch_page_test.dart)和[打印机设置](test/workstation_shell_test.dart)。
+
 ## Git 边界
 
 保留 lib、test、pubspec.yaml、pubspec.lock、analysis_options.yaml 及原生 runner 工程。

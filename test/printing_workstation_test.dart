@@ -1,7 +1,13 @@
+import 'dart:convert';
+
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:lvpai_ftp_client/printing/app.dart';
 import 'package:lvpai_ftp_client/printing/print_bridge.dart';
+import 'package:lvpai_ftp_client/ui/workstation_form_dialog.dart';
 
 class ControlledBridge extends PrintBridge {
   final calls = <String>[];
@@ -279,7 +285,107 @@ void main() {
     expect(find.text('暂无打印申请记录'), findsOneWidget);
   });
 
-  testWidgets('打印照片可以打开照片批次矫正并读取机位', (tester) async {
+  testWidgets('打印申请景区使用浮层，点外收起且不移动点位输入框', (tester) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    addTearDown(() => FlutterSecureStorage.setMockInitialValues({}));
+    final bridge = ControlledBridge(configured: false);
+    addTearDown(bridge.dispose);
+    Map<String, dynamic>? submitted;
+    final client = MockClient((request) async {
+      final Object data;
+      if (request.url.path == '/api/miniprogram/scenics') {
+        data = [
+          {'id': '1', 'name': '景区甲'},
+          {'id': '2', 'name': '景区乙'},
+          {'id': '3', 'name': '景区丙'},
+        ];
+      } else {
+        expect(
+          request.url.path,
+          '/api/operation/print-workstation-enrollment/applications',
+        );
+        expect(request.method, 'POST');
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        submitted = body;
+        data = {
+          'id': body['requestId'],
+          'scenicId': body['scenicId'],
+          'status': 'PENDING',
+        };
+      }
+      return http.Response(
+        jsonEncode({'code': 200, 'data': data}),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    });
+    await http.runWithClient(() async {
+      await tester.pumpWidget(MaterialApp(home: Workstation(bridge: bridge)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('申请打印权限'));
+      // The progress indicator behind the dialog animates until it closes.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      final dialog = find.byType(WorkstationFormDialog);
+      final picker = find.widgetWithText(OutlinedButton, '选择景区');
+      final location = find.descendant(
+        of: dialog,
+        matching: find.byType(TextField),
+      );
+      final submit = find.widgetWithText(FilledButton, '提交申请');
+      await tester.tap(submit);
+      await tester.pump();
+      expect(find.text('请选择景区').hitTestable(), findsWidgets);
+      expect(find.text('请填写点位或工作台名称'), findsOneWidget);
+      expect(submitted, isNull);
+
+      final fieldBefore = tester.getRect(location);
+      final buttonBefore = tester.getRect(submit);
+      final close = find.byTooltip('关闭弹窗');
+      expect(
+        tester.getRect(close).right,
+        greaterThan(tester.getRect(picker).center.dx),
+      );
+      expect(
+        tester.getRect(close).bottom,
+        lessThan(tester.getRect(picker).top),
+      );
+      await tester.tap(picker);
+      await tester.pump();
+      final lastOption = find.text('景区丙');
+      final menu = tester.getRect(
+        find.ancestor(of: lastOption, matching: find.byType(ListView)).first,
+      );
+      final trigger = tester.getRect(picker);
+      expect(menu.top, greaterThan(trigger.bottom));
+      expect(menu.left, trigger.left);
+      expect(menu.width, trigger.width);
+      expect(tester.getRect(location), fieldBefore);
+      expect(tester.getRect(submit), buttonBefore);
+      await tester.tap(find.text('申请打印权限').last);
+      await tester.pump();
+      expect(lastOption, findsNothing);
+      expect(location.hitTestable(), findsOneWidget);
+      await tester.enterText(location, '  东门前台  ');
+      await tester.tap(picker);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.tap(find.text('景区乙'));
+      await tester.pump();
+      await tester.tap(submit);
+      await tester.pumpAndSettle();
+
+      expect(dialog, findsNothing);
+      expect(submitted, containsPair('scenicId', '2'));
+      expect(submitted, containsPair('location', '东门前台'));
+      expect(find.text('待审核'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }, () => client);
+  });
+
+  testWidgets('查看批次在打印页标签栏内切换并读取机位', (tester) async {
     final bridge = ControlledBridge();
     addTearDown(bridge.dispose);
     await tester.pumpWidget(
@@ -287,9 +393,16 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('照片批次矫正'));
+    final tab = find.widgetWithText(TextButton, '查看批次');
+    final printed = find.widgetWithText(TextButton, '已打印');
+    expect(tester.getRect(printed).center.dy, tester.getRect(tab).center.dy);
+    expect(tester.getRect(tab).left, greaterThan(tester.getRect(printed).left));
+    expect(bridge.calls, isNot(contains('listBatchStations')));
+    await tester.tap(tab);
     await tester.pumpAndSettle();
-    expect(find.text('照片批次矫正'), findsOneWidget);
+    expect(find.text('打印记录'), findsOneWidget);
+    expect(find.byTooltip('刷新打印任务'), findsNothing);
+    expect(find.text('待打印'), findsOneWidget);
     expect(find.textContaining('A08'), findsOneWidget);
     expect(find.text('当天暂无收图'), findsOneWidget);
     expect(bridge.arguments['listBatchStations'], isEmpty);
@@ -297,6 +410,10 @@ void main() {
       bridge.arguments['listPhotoBatches']?.single,
       containsPair('stationId', '317'),
     );
+    await tester.tap(find.widgetWithText(TextButton, '待打印'));
+    await tester.pumpAndSettle();
+    expect(find.text('当天暂无收图'), findsNothing);
+    expect(find.byTooltip('刷新打印任务'), findsOneWidget);
   });
 
   testWidgets('自动打印必须经过实际出纸确认', (tester) async {

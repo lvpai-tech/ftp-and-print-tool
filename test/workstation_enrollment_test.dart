@@ -8,7 +8,9 @@ import 'package:http/testing.dart';
 import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
 import 'package:lvpai_ftp_client/auto_upload/workstation_enrollment.dart';
 import 'package:lvpai_ftp_client/profile_store.dart';
+import 'package:lvpai_ftp_client/ui/dropdown_field.dart';
 import 'package:lvpai_ftp_client/ui/workstation_enrollment_panel.dart';
+import 'package:lvpai_ftp_client/ui/workstation_form_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 
 void main() {
@@ -77,8 +79,12 @@ void main() {
       await tester.tap(find.text('重试'));
       await tester.pumpAndSettle();
       final locationField = find.byType(TextField);
-      final picker = find.byType(OutlinedButton);
+      final picker = find.descendant(
+        of: find.byType(DropdownField<EnrollmentScenic>),
+        matching: find.byType(OutlinedButton),
+      );
       final option = find.widgetWithText(ListTile, '景区乙');
+      final locationBefore = tester.getRect(locationField);
       await tester.tap(picker);
       await tester.pumpAndSettle();
       final options = tester.getRect(find.byType(ListView));
@@ -86,8 +92,7 @@ void main() {
       expect(options.top, greaterThan(anchor.bottom));
       expect(options.left, anchor.left);
       expect(options.width, anchor.width);
-      expect(options.bottom, lessThan(tester.getTopLeft(locationField).dy));
-      expect(locationField.hitTestable(), findsOneWidget);
+      expect(tester.getRect(locationField), locationBefore);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(option, findsNothing);
@@ -101,9 +106,10 @@ void main() {
       await tester.tap(picker);
       await tester.pumpAndSettle();
       expect(tester.widget<ListTile>(option).selected, isTrue);
-      await tester.tap(locationField);
+      await tester.tap(find.text('申请机位').last);
       await tester.pumpAndSettle();
       expect(option, findsNothing);
+      expect(locationField.hitTestable(), findsOneWidget);
       await tester.tap(submit);
       await tester.pumpAndSettle();
       expect(submitted, {
@@ -173,6 +179,28 @@ void main() {
       expect(find.byType(ListView), findsNothing);
       expect(find.widgetWithText(OutlinedButton, '景区 10'), findsOneWidget);
       expect(find.byType(TextField).hitTestable(), findsOneWidget);
+
+      tester.view.physicalSize = const Size(375, 225);
+      await tester.pumpAndSettle();
+      final close = find.byTooltip('关闭弹窗');
+      final submit = find.widgetWithText(FilledButton, '提交申请');
+      final closeBefore = tester.getRect(close);
+      final submitBefore = tester.getRect(submit);
+      final field = find.byType(TextField);
+      final fieldBefore = tester.getRect(field);
+      final bodyScroll = find.descendant(
+        of: find.byType(WorkstationFormDialog),
+        matching: find.byType(SingleChildScrollView),
+      );
+      await tester.drag(bodyScroll, const Offset(0, -100));
+      await tester.pumpAndSettle();
+      expect(tester.getRect(field).top, lessThan(fieldBefore.top));
+      expect(field.hitTestable(), findsOneWidget);
+      expect(tester.getRect(close), closeBefore);
+      expect(tester.getRect(submit), submitBefore);
+      await tester.tap(close);
+      await tester.pumpAndSettle();
+      expect(find.byType(WorkstationFormDialog), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
     }, () => client);
   });

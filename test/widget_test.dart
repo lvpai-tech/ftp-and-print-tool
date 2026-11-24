@@ -70,12 +70,32 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('上传队列'), findsOneWidget);
     expect(find.text('照片归属'), findsOneWidget);
+    expect(
+      tester.getCenter(find.text('照片归属')).dx,
+      lessThan(tester.getCenter(find.byTooltip('选择收图日期')).dx),
+    );
     expect(find.text('取片卡 6969'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('photo-actions-209')));
     await tester.pumpAndSettle();
     expect(find.text('查看图片'), findsOneWidget);
     expect(find.text('查询拍摄信息'), findsOneWidget);
     expect(bridge.calls, ['listBatchStations', 'listPhotoBatches']);
+    expect(tester.takeException(), isNull);
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+    tester.view.physicalSize = const Size(375, 812);
+    await tester.pumpAndSettle();
+    final heading = find.text('照片归属');
+    final date = find.byTooltip('选择收图日期');
+    await tester.ensureVisible(date);
+    await tester.pumpAndSettle();
+    expect(
+      tester.getBottomLeft(heading).dy,
+      lessThan(tester.getTopLeft(date).dy),
+    );
+    await tester.tap(date);
+    await tester.pumpAndSettle();
+    expect(find.textContaining(' · 今天'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -167,6 +187,10 @@ void main() {
     expect(find.text('test-inbox'), findsOneWidget);
     expect(find.text('更换收图文件夹'), findsOneWidget);
     expect(find.text('恢复旧目录监听'), findsOneWidget);
+    expect(find.byTooltip('打开收图文件夹'), findsOneWidget);
+    await tester.tap(find.byTooltip('文件夹操作'));
+    await tester.pumpAndSettle();
+    expect(find.text('复制路径'), findsOneWidget);
     await tester.tap(find.text('更新机位密钥'));
     await tester.pumpAndSettle();
     final fields = find.byType(TextField);

@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:lvpai_ftp_client/photo_normalizer.dart';
 import 'package:lvpai_ftp_client/manual_batch/batch_workspace.dart';
+import 'package:lvpai_ftp_client/manual_batch/card_tail_recognizer.dart';
 
 Uint8List primary() =>
     Uint8List.fromList(img.encodeJpg(img.Image(width: 32, height: 24)));
@@ -137,6 +138,23 @@ void main() {
     expect(
       () => normalizeJpegPrimary(
         Uint8List.fromList([255, 216, 255, 226, 255, 255]),
+      ),
+      throwsStateError,
+    );
+  });
+  test('OCR 预览使用 JPG 来源路径兼容过时 MPF 长度', () {
+    final original = mpo(primary(), firstSizeAdjustment: -23);
+    final (preview, size) = cardTailPreview(original, sourcePath: 'camera.JPG');
+    expect((size.width, size.height), (32, 24));
+    expect(img.decodeJpg(preview)!.width, 32);
+    expect(
+      () => cardTailPreview(original, sourcePath: 'camera.MPO'),
+      throwsStateError,
+    );
+    expect(
+      () => cardTailPreview(
+        Uint8List.sublistView(original, 0, original.length - 1),
+        sourcePath: 'camera.JPG',
       ),
       throwsStateError,
     );

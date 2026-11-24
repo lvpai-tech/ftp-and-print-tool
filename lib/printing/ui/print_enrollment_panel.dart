@@ -3,6 +3,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../auto_upload/workstation_enrollment.dart';
 import '../../ui/app_dialogs.dart';
+import '../../ui/dropdown_field.dart';
+import '../../ui/workstation_form_dialog.dart';
 import '../print_bridge.dart';
 import '../print_enrollment.dart';
 
@@ -174,8 +176,8 @@ class _PrintApplicationDialog extends StatefulWidget {
 
 class _PrintApplicationDialogState extends State<_PrintApplicationDialog> {
   final _form = GlobalKey<FormState>();
+  final _scenicField = GlobalKey<FormFieldState<EnrollmentScenic>>();
   final _location = TextEditingController();
-  EnrollmentScenic? _scenic;
 
   @override
   void dispose() {
@@ -184,38 +186,40 @@ class _PrintApplicationDialogState extends State<_PrintApplicationDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('申请打印权限'),
-    content: SizedBox(
-      width: 420,
-      child: Form(
-        key: _form,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            DropdownButtonFormField<EnrollmentScenic>(
-              decoration: const InputDecoration(labelText: '景区'),
-              isExpanded: true,
-              items: [
-                for (final scenic in widget.scenics)
-                  DropdownMenuItem(value: scenic, child: Text(scenic.name)),
-              ],
-              onChanged: (value) => _scenic = value,
-              validator: (value) => value == null ? '请选择景区' : null,
+  Widget build(BuildContext context) => WorkstationFormDialog(
+    title: '申请打印权限',
+    content: Form(
+      key: _form,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        spacing: 12,
+        children: [
+          FormField<EnrollmentScenic>(
+            key: _scenicField,
+            validator: (value) => value == null ? '请选择景区' : null,
+            builder: (field) => DropdownField<EnrollmentScenic>(
+              label: '景区',
+              placeholder: '选择景区',
+              options: widget.scenics,
+              labelFor: (scenic) => scenic.name,
+              value: field.value,
+              errorText: field.errorText,
+              onChanged: field.didChange,
             ),
-            TextFormField(
-              controller: _location,
-              maxLength: 100,
-              decoration: const InputDecoration(labelText: '打印点位或工作台名称'),
-              validator: (value) =>
-                  (value ?? '').trim().isEmpty ? '请填写点位或工作台名称' : null,
-            ),
-          ],
-        ),
+          ),
+          TextFormField(
+            controller: _location,
+            maxLength: 100,
+            decoration: const InputDecoration(labelText: '打印点位或工作台名称'),
+            validator: (value) =>
+                (value ?? '').trim().isEmpty ? '请填写点位或工作台名称' : null,
+          ),
+        ],
       ),
     ),
     actions: [
-      TextButton(
+      OutlinedButton(
         onPressed: () => Navigator.pop(context),
         child: const Text('取消'),
       ),
@@ -223,7 +227,7 @@ class _PrintApplicationDialogState extends State<_PrintApplicationDialog> {
         onPressed: () {
           if (_form.currentState!.validate()) {
             Navigator.pop(context, (
-              scenic: _scenic!,
+              scenic: _scenicField.currentState!.value!,
               location: _location.text.trim(),
             ));
           }

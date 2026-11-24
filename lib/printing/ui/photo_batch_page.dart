@@ -5,9 +5,12 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
 
+import '../../ui/anchored_dropdown.dart';
 import '../../ui/app_dialogs.dart';
 import '../../ui/card_tail_dialog.dart';
 import '../../ui/design.dart';
+import '../../ui/dropdown_field.dart';
+import '../../ui/workstation_form_dialog.dart';
 import '../job_query_time.dart';
 import '../print_bridge.dart';
 
@@ -15,6 +18,7 @@ enum _PhotoAction {
   recognize('识别取片码', Icons.document_scanner_outlined),
   remove('删除照片', Icons.delete_outline),
   capture('查询拍摄信息', Icons.info_outline),
+  move('移动到其他批次', Icons.drive_file_move_outline),
   preview('查看图片', Icons.image_outlined);
 
   const _PhotoAction(this.label, this.icon);
@@ -23,46 +27,9 @@ enum _PhotoAction {
   final IconData icon;
 }
 
-class PhotoBatchPage extends StatelessWidget {
-  const PhotoBatchPage({
-    super.key,
-    required this.call,
-    required this.scenicName,
-    this.initialStationId,
-  });
-
-  final Future<dynamic> Function(String, List<dynamic>) call;
-  final String scenicName;
-  final String? initialStationId;
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: WorkstationStyle.bg,
-    appBar: AppBar(
-      backgroundColor: WorkstationStyle.card,
-      surfaceTintColor: Colors.transparent,
-      title: const Text(
-        '照片批次矫正',
-        style: TextStyle(
-          color: WorkstationStyle.ink,
-          fontSize: 20,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    ),
-    body: SafeArea(
-      top: false,
-      child: PhotoBatchTimeline._(
-        call: call,
-        scenicName: scenicName,
-        initialStationId: initialStationId,
-      ),
-    ),
-  );
-}
-
 class PhotoBatchTimeline extends StatefulWidget {
-  const PhotoBatchTimeline._({
+  const PhotoBatchTimeline({
+    super.key,
     required this.call,
     required this.scenicName,
     this.initialStationId,
@@ -85,8 +52,15 @@ class PhotoBatchTimeline extends StatefulWidget {
   State<PhotoBatchTimeline> createState() => _PhotoBatchTimelineState();
 }
 
-const _batchThumbnailHeight = 84.0;
+const _batchThumbnailHeight = 100.0;
 const _maxSelection = 100;
+const _batchStatuses = {
+  'all': '全部状态',
+  'incoming': '未归集',
+  'aggregated': '已归集',
+  'suspicious': '可疑组',
+  'pending_claim': '待认领',
+};
 
 class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   final _selected = <String>{};
@@ -94,6 +68,9 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   final _selectionOverlay = OverlayPortalController();
   List<Json>? _stations;
   List<Json> _batches = [];
+  String _directory = 'all';
+  int? _intervalThreshold;
+  String? _draggingPhotoId;
   String? _station;
   String? _error;
   DateTime _day = _shanghaiToday();
@@ -104,6 +81,16 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   String? _candidate;
   String? _recognitionPhotoId;
   String? _selectionNotice;
+
+  List<Json> get _visibleBatches => _directory == 'all'
+      ? _batches
+      : _batches.where((batch) => batch['directory'] == _directory).toList();
+
+  Json get _range => {
+    'stationId': _station!,
+    'from': shanghaiDateTime(_day),
+    'to': shanghaiDateTime(_day.add(const Duration(days: 1))),
+  };
 
   @override
   void initState() {
@@ -138,15 +125,10 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       }
       final result = station == null
           ? null
-          : await widget.call('listPhotoBatches', [
-              {
-                'stationId': station,
-                'from': shanghaiDateTime(_day),
-                'to': shanghaiDateTime(_day.add(const Duration(days: 1))),
-              },
-            ]) as Json;
+          : await widget.call('listPhotoBatches', [_range]) as Json;
       if (mounted) {
         setState(() {
+          _intervalThreshold = result?['suspiciousIntervalSec'] as int?;
           _batches = result == null
               ? []
               : (result['batches'] as List).cast<Json>().reversed.toList();
@@ -160,45 +142,112 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   }
 
   bool _canDrop(_Dragged photo, Json target) =>
-      !_loading && !_working && !_selecting && _isTarget(photo.batch, target);
+      !_loading &&
+      !_working &&
+      !_selecting &&
+      photo.batch['id'] != target['id'];
 
-  Future<void> _move(_Dragged item, Json target) async {
-    if (!_canDrop(item, target)) return;
+  Future<void> _move(_Dragged item, [Json? initialTarget]) async {
+    final targets = _visibleBatches
+        .where((target) => _canDrop(item, target))
+        .toList();
+    if (targets.isEmpty) return;
     setState(() => _working = true);
     try {
+      var assignCard = false;
+      var target = initialTarget;
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('确认移动照片'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(width: 80, height: 70, child: _thumbnail(item.photo)),
-              const SizedBox(height: 10),
-              Text('从「${_label(item.batch)}」移出 1 张'),
-              Text('移入「${_label(target)}」'),
+        builder: (context) => StatefulBuilder(
+          builder: (context, update) => WorkstationFormDialog(
+            title: '确认移动照片',
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(width: 80, height: 70, child: _thumbnail(item.photo)),
+                const SizedBox(height: 10),
+                Text('从「${_label(item.batch)}」移出 1 张'),
+                DropdownField<Json>(
+                  label: '目标批次',
+                  placeholder: '选择目标批次',
+                  options: targets,
+                  value: target,
+                  labelFor: (batch) => '${_label(batch)} · ${_wall(batch)}',
+                  onChanged: (batch) => update(() {
+                    target = batch;
+                    assignCard = false;
+                  }),
+                ),
+                if (target != null &&
+                    _movable(item.photo) &&
+                    _isTarget(item.batch, target!))
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('同时归入目标取片卡'),
+                    value: assignCard,
+                    onChanged: (value) =>
+                        update(() => assignCard = value == true),
+                  ),
+                if (target != null)
+                  Text(
+                    assignCard ? '这张游客照将归入目标取片卡。' : '这次移动会调整照片管理中的分组，保留现有取片归属。',
+                  ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: target == null
+                    ? null
+                    : () => Navigator.pop(context, true),
+                child: const Text('确认移动'),
+              ),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('确认移动'),
-            ),
-          ],
         ),
       );
-      if (confirmed == true && mounted) {
-        await _submit(
-          [item.photo],
-          {
-            'targetPhotoId': target['targetPhotoId'],
-            'targetCardId': target['targetCardId'],
-          },
+      final chosen = target;
+      if (confirmed == true && mounted && chosen != null) {
+        if (assignCard) {
+          await _submit(
+            [item.photo],
+            {
+              'targetPhotoId': chosen['targetPhotoId'],
+              'targetCardId': chosen['targetCardId'],
+            },
+          );
+        } else {
+          final anchor = _photos(chosen).first;
+          final result = await widget.call('movePhotoBatchPhoto', [
+            _range,
+            {
+              'photoId': item.photo['id'],
+              'revision': item.photo['revision'],
+              'targetPhotoId': anchor['id'],
+              'targetRevision': anchor['revision'],
+            },
+          ]) as Json;
+          if (result['photoId'] != item.photo['id'] ||
+              result['targetPhotoId'] != anchor['id']) {
+            throw StateError('移动结果未确认，请刷新核对。');
+          }
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('已移动 1 张照片')));
+          await _load();
+        }
+      }
+    } catch (error) {
+      if (mounted) {
+        await showAppMessage(
+          context,
+          title: '无法确认移动结果',
+          message: appErrorMessage(error),
         );
       }
     } finally {
@@ -216,7 +265,11 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       source['targetCardId'] != target['targetCardId'];
 
   void _setSelectionMode(bool active) {
-    if (active) ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    if (active) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..removeCurrentSnackBar();
+    }
     if (widget.inline) {
       if (active) {
         _selectionOverlay.show();
@@ -372,31 +425,18 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
 
   Future<void> _removePhoto(Json photo) async {
     if (_loading || _working) return;
-    final blocked = photo['removalBlockedReason'];
-    if (photo['ending'] == true || blocked != '') {
-      await showAppMessage(
-        context,
-        title: '无法删除照片',
-        message: blocked is String && blocked.isNotEmpty
-            ? blocked
-            : photo['ending'] == true
-            ? '结束照和卡片素材仅供核对。'
-            : '当前照片不支持删除，请刷新后核对。',
-      );
-      return;
-    }
     setState(() => _working = true);
     try {
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('删除这张照片？'),
+        builder: (context) => WorkstationFormDialog(
+          title: '删除这张照片？',
           content: Column(
             mainAxisSize: MainAxisSize.min,
             spacing: 12,
             children: [
               SizedBox(width: 120, height: 96, child: _thumbnail(photo)),
-              const Text('照片将从批次和游客取片列表移除，系统会保留原图与操作记录。'),
+              const Text('照片将从照片管理移除。系统会保留原图、分批依据和已有的游客权益。'),
             ],
           ),
           actions: [
@@ -462,7 +502,8 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     final candidate = await showCardTailDialog(
       context,
       readPhoto: () => _readBatchPhoto(photo),
-      guidance: '条形码拍不全时，请框住卡面印刷的四位数字。',
+      sourcePath: Uri.tryParse(photo['previewUrl'] as String? ?? '')?.path,
+      guidance: '条形码拍不全时，请框住卡面上的完整六位尾号。',
       allowUse: canFill,
       useLabel: '核对后用于归集',
     );
@@ -486,100 +527,161 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     final selectedStation = stations
         .where((row) => row['id'] == _station)
         .firstOrNull;
+    final dateFilter = _BatchDayMenu(
+      day: _day,
+      width: widget.inline ? 176 : 216,
+      enabled: enabled,
+      onChanged: (day) {
+        if (day == _day) return;
+        setState(() => _day = day);
+        _load();
+      },
+    );
+    final statusFilter = SizedBox(
+      width: 138,
+      child: DropdownField<String>(
+        label: '状态',
+        showLabel: false,
+        placeholder: '全部状态',
+        options: _batchStatuses.keys.toList(),
+        value: _directory,
+        labelFor: (value) => _batchStatuses[value]!,
+        onChanged: enabled && !_selecting
+            ? (value) => setState(() => _directory = value)
+            : null,
+      ),
+    );
+    final refresh = IconButton(
+      tooltip: '刷新批次',
+      onPressed: enabled ? _load : null,
+      style: IconButton.styleFrom(
+        minimumSize: const Size(44, 44),
+        foregroundColor: WorkstationStyle.accent,
+        backgroundColor: WorkstationStyle.accentSoft,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+      icon: const Icon(Icons.refresh_rounded, size: 20),
+    );
+    final selection = OutlinedButton.icon(
+      onPressed:
+          enabled &&
+              _visibleBatches.any((batch) => _photos(batch).any(_movable))
+          ? () => _setSelectionMode(!_selecting)
+          : null,
+      style: widget.inline
+          ? OutlinedButton.styleFrom(
+              minimumSize: const Size(0, 44),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              foregroundColor: WorkstationStyle.ink,
+              side: const BorderSide(color: WorkstationStyle.line),
+              backgroundColor: _selecting ? WorkstationStyle.accentSoft : null,
+            )
+          : null,
+      icon: Icon(
+        _selecting ? Icons.close : Icons.checklist,
+        size: widget.inline ? 18 : null,
+      ),
+      label: Text(_selecting ? '退出批量归集' : '批量归集'),
+    );
+    final description = Text(
+      [
+        widget.scenicName,
+        if (widget.inline && selectedStation != null)
+          _stationName(selectedStation),
+        '最新批次在前',
+        '北京时间',
+      ].join(' · '),
+      style: const TextStyle(color: WorkstationStyle.muted, fontSize: 12),
+    );
+    final inlineControls = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final heading = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            spacing: 2,
+            children: [
+              const Text(
+                '照片归属',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: WorkstationStyle.ink,
+                ),
+              ),
+              description,
+            ],
+          );
+          final filters = Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [dateFilter, statusFilter, refresh, selection],
+          );
+          return constraints.maxWidth >= 600
+              ? Row(
+                  spacing: 12,
+                  children: [
+                    Expanded(child: heading),
+                    Flexible(
+                      flex: 2,
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: filters,
+                      ),
+                    ),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  spacing: 8,
+                  children: [heading, filters],
+                );
+        },
+      ),
+    );
     final controls = DecoratedBox(
       decoration: const BoxDecoration(
         color: WorkstationStyle.card,
         border: Border(bottom: BorderSide(color: WorkstationStyle.line)),
       ),
       child: Padding(
-        padding: widget.inline
-            ? const EdgeInsets.only(bottom: 10)
-            : const EdgeInsets.fromLTRB(20, 4, 20, 14),
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 14),
         child: Wrap(
           spacing: 12,
           runSpacing: 10,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            if (widget.inline)
-              const Text(
-                '照片归属',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: WorkstationStyle.ink,
-                ),
-              ),
-            if (!widget.inline && stations.isNotEmpty)
-              _BatchFilterMenu(
-                tooltip: '选择机位',
-                label: selectedStation == null
-                    ? '选择机位'
-                    : _stationName(selectedStation),
-                icon: Icons.videocam_outlined,
+            if (stations.isNotEmpty)
+              SizedBox(
                 width: 236,
-                enabled: enabled,
-                items: [
-                  for (final row in stations)
-                    MenuItemButton(
-                      onPressed: () {
-                        if (row['id'] == _station) return;
-                        setState(() => _station = row['id'] as String);
-                        _load();
-                      },
-                      trailingIcon: row['id'] == _station
-                          ? const Icon(Icons.check, size: 16)
-                          : null,
-                      child: Text(
-                        _stationName(row),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                ],
-              ),
-            _BatchDayMenu(
-              day: _day,
-              enabled: enabled,
-              onChanged: (day) {
-                if (day == _day) return;
-                setState(() => _day = day);
-                _load();
-              },
-            ),
-            IconButton(
-              tooltip: '刷新批次',
-              onPressed: enabled ? _load : null,
-              style: IconButton.styleFrom(
-                minimumSize: const Size(44, 44),
-                foregroundColor: WorkstationStyle.accent,
-                backgroundColor: WorkstationStyle.accentSoft,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+                child: Tooltip(
+                  message: '选择机位',
+                  child: DropdownField<Json>(
+                    label: '选择机位',
+                    showLabel: false,
+                    placeholder: '选择机位',
+                    icon: Icons.videocam_outlined,
+                    options: stations,
+                    value: selectedStation,
+                    labelFor: _stationName,
+                    onChanged: enabled
+                        ? (row) {
+                            if (row['id'] == _station) return;
+                            setState(() => _station = row['id'] as String);
+                            _load();
+                          }
+                        : null,
+                  ),
                 ),
               ),
-              icon: const Icon(Icons.refresh_rounded, size: 20),
-            ),
-            OutlinedButton.icon(
-              onPressed:
-                  enabled &&
-                      _batches.any((batch) => _photos(batch).any(_movable))
-                  ? () => _setSelectionMode(!_selecting)
-                  : null,
-              icon: Icon(_selecting ? Icons.close : Icons.checklist),
-              label: Text(_selecting ? '退出批量归集' : '批量归集'),
-            ),
-            Text(
-              [
-                widget.scenicName,
-                if (widget.inline && selectedStation != null)
-                  _stationName(selectedStation),
-                '最新批次在前',
-                '北京时间',
-              ].join(' · '),
-              style: const TextStyle(
-                color: WorkstationStyle.muted,
-                fontSize: 12,
-              ),
-            ),
+            dateFilter,
+            statusFilter,
+            refresh,
+            selection,
+            description,
           ],
         ),
       ),
@@ -587,7 +689,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     final header = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        controls,
+        widget.inline ? inlineControls : controls,
         if (_loading || _submitting)
           const LinearProgressIndicator(minHeight: 2),
       ],
@@ -609,7 +711,18 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
                             child: _selectionBar(),
                           ),
                         ),
-                  child: header,
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: DecoratedBox(
+                      decoration: WorkstationStyle.surface(),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(
+                          WorkstationStyle.radius,
+                        ),
+                        child: header,
+                      ),
+                    ),
+                  ),
                 ),
               ),
               timeline,
@@ -692,12 +805,15 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
         ),
       );
     }
-    if (_batches.isEmpty) {
+    final batches = _visibleBatches;
+    if (batches.isEmpty) {
       final label = _loading
           ? '正在读取照片批次…'
           : _station == null
           ? '当前景区暂无机位'
-          : '当天暂无收图';
+          : _directory == 'all'
+          ? '当天暂无收图'
+          : '当天没有符合所选状态的批次';
       return _timelineMessage(
         Padding(
           padding: const EdgeInsets.all(20),
@@ -721,8 +837,9 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
               ? const EdgeInsets.fromLTRB(0, 12, 0, 16)
               : EdgeInsets.fromLTRB(gutter, 18, gutter, 24),
           sliver: SliverList.builder(
-            itemCount: _batches.length,
-            itemBuilder: (context, index) => _timelineItem(index, wide: wide),
+            itemCount: batches.length,
+            itemBuilder: (context, index) =>
+                _timelineItem(batches, index, wide: wide),
           ),
         );
       },
@@ -736,14 +853,14 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
           child: Center(child: message),
         );
 
-  Widget _timelineItem(int index, {required bool wide}) {
-    final batch = _batches[index];
+  Widget _timelineItem(List<Json> batches, int index, {required bool wide}) {
+    final batch = batches[index];
     final first = index == 0;
-    final last = index == _batches.length - 1;
+    final last = index == batches.length - 1;
     final gap = last
         ? -1
         : _received(batch)
-              .difference(_received(_photos(_batches[index + 1]).last))
+              .difference(_received(_photos(batches[index + 1]).last))
               .inSeconds;
     final timestamp = _BatchTimestamp(wall: _wall(batch), wide: wide);
     return Stack(
@@ -813,17 +930,28 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   }
 
   Widget _batchCard(Json batch, bool hovering) {
-    final photos = _photos(batch);
+    final photos = [..._photos(batch)];
+    if (photos.every((photo) => _shotAt(photo) != null)) {
+      photos.sort((first, second) {
+        final time = _shotAt(first)!.compareTo(_shotAt(second)!);
+        return time != 0
+            ? time
+            : BigInt.parse(first['id'] as String)
+                  .compareTo(BigInt.parse(second['id'] as String));
+      });
+    }
     final status = batch['status'];
     final pending = _unassigned(batch);
     final canSelectGroup = _selecting && photos.any(_canSelect);
     final canReceive = batch['targetPhotoId'] != null;
-    final hasDestination = _batches.any((target) => _isTarget(batch, target));
+    final hasDestination = _visibleBatches.length > 1;
     final count = photos.where((photo) => photo['ending'] != true).length;
     final label = switch (status) {
       'MISSING_END' => '缺少结束照',
       'AFTER_END' => '结束照后收图',
-      'INVALID_END' => '结束照待核对',
+      'INVALID_END' => '结束照未匹配',
+      'REVIEW' when batch['directory'] == 'suspicious' => '可疑组',
+      'REVIEW' when batch['directory'] == 'pending_claim' => '待认领',
       'REVIEW' => '待复核组',
       _ when photos.any((photo) => photo['manuallyAssigned'] == true) =>
         '已人工调整',
@@ -933,15 +1061,19 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
           SizedBox(
             height:
                 _batchThumbnailHeight +
-                8 +
-                textScaler.scale(11) * 1.3 * captionLines +
-                (hasEstimatedTime ? textScaler.scale(10) * 1.3 : 0),
+                max(
+                  26.0,
+                  8 +
+                      textScaler.scale(11) * 1.3 * captionLines +
+                      (hasEstimatedTime ? textScaler.scale(10) * 1.3 : 0),
+                ),
             child: ListView.separated(
               key: PageStorageKey(batch['id']),
               primary: false,
               scrollDirection: Axis.horizontal,
               itemCount: photos.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 10),
+              separatorBuilder: (_, index) =>
+                  _interval(photos[index], photos[index + 1]),
               itemBuilder: (_, index) => _photoTile(
                 photos[index],
                 batch,
@@ -964,18 +1096,11 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     final ending = photo['ending'] == true;
     final time = _time(photo);
     final id = photo['id'] as String;
-    final canMove =
-        !_selecting &&
-        _movable(photo) &&
-        hasDestination &&
-        !_working &&
-        !_loading;
+    final canMove = !_selecting && hasDestination && !_working && !_loading;
     final checked = _selected.contains(id);
     final selectable = _canSelect(photo) && !_working && !_loading;
     final item = (photo: photo, batch: batch);
     final blocked = photo['blockedReason'] as String?;
-    final unavailable =
-        blocked ?? (!ending && !hasDestination ? '所选日期没有其他可接收批次' : null);
     final selectionReason = id == _recognitionPhotoId
         ? '识别来源照片仅供核对'
         : ending
@@ -997,7 +1122,11 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
           ),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
-            mouseCursor: canMove ? SystemMouseCursors.grab : null,
+            mouseCursor: canMove
+                ? _draggingPhotoId == id
+                      ? SystemMouseCursors.grabbing
+                      : SystemMouseCursors.grab
+                : null,
             onTap: _selecting
                 ? selectable
                       ? () => _selectPhoto(photo, !checked)
@@ -1006,49 +1135,10 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
             child: _thumbnail(photo),
           ),
         ),
-        if (!_selecting && !ending && (canMove || unavailable != null))
-          Positioned(
-            left: 4,
-            top: 4,
-            child: Material(
-              color: WorkstationStyle.card,
-              borderRadius: BorderRadius.circular(6),
-              child: canMove
-                  ? IconButton(
-                      key: ValueKey('move-photo-$id'),
-                      tooltip: '按住拖动 · 单击选择批次',
-                      mouseCursor: SystemMouseCursors.grab,
-                      onPressed: () => _chooseTarget(item),
-                      constraints: const BoxConstraints.tightFor(
-                        width: 32,
-                        height: 32,
-                      ),
-                      padding: EdgeInsets.zero,
-                      icon: const Icon(
-                        Icons.drag_indicator,
-                        color: WorkstationStyle.accent,
-                        size: 20,
-                      ),
-                    )
-                  : Tooltip(
-                      message: unavailable!,
-                      child: Padding(
-                        padding: const EdgeInsets.all(5),
-                        child: Icon(
-                          blocked != null
-                              ? Icons.lock_outline
-                              : Icons.drag_indicator,
-                          color: WorkstationStyle.muted,
-                          size: 16,
-                        ),
-                      ),
-                    ),
-            ),
-          ),
       ],
     );
     return SizedBox(
-      width: 100,
+      width: 136,
       child: Column(
         children: [
           SizedBox(
@@ -1058,9 +1148,12 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
               children: [
                 if (canMove)
                   Draggable<_Dragged>(
+                    key: ValueKey('drag-photo-$id'),
                     data: item,
                     maxSimultaneousDrags: 1,
                     dragAnchorStrategy: pointerDragAnchorStrategy,
+                    onDragStarted: () => setState(() => _draggingPhotoId = id),
+                    onDragEnd: (_) => setState(() => _draggingPhotoId = null),
                     feedback: Material(
                       elevation: 3,
                       child: SizedBox(
@@ -1089,32 +1182,33 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
                         padding: EdgeInsets.zero,
                         position: PopupMenuPosition.under,
                         enabled: !_working && !_loading,
-                        onSelected: (action) => _runPhotoAction(action, photo),
+                        onSelected: (action) => _runPhotoAction(action, item),
                         itemBuilder: (_) => [
                           for (final action in _PhotoAction.values)
-                            PopupMenuItem(
-                              value: action,
-                              child: Row(
-                                spacing: 10,
-                                children: [
-                                  Icon(
-                                    action.icon,
-                                    size: 17,
-                                    color: action == _PhotoAction.remove
-                                        ? WorkstationStyle.bad
-                                        : null,
-                                  ),
-                                  Text(
-                                    action.label,
-                                    style: TextStyle(
+                            if (action != _PhotoAction.move || canMove)
+                              PopupMenuItem(
+                                value: action,
+                                child: Row(
+                                  spacing: 10,
+                                  children: [
+                                    Icon(
+                                      action.icon,
+                                      size: 17,
                                       color: action == _PhotoAction.remove
                                           ? WorkstationStyle.bad
                                           : null,
                                     ),
-                                  ),
-                                ],
+                                    Text(
+                                      action.label,
+                                      style: TextStyle(
+                                        color: action == _PhotoAction.remove
+                                            ? WorkstationStyle.bad
+                                            : null,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
                         ],
                       ),
                     ),
@@ -1147,7 +1241,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
           ),
           const SizedBox(height: 4),
           Text(
-            ending ? '结束照 $time' : time,
+            ending ? '结束照 $time' : '游客照 $time',
             textAlign: TextAlign.center,
             maxLines: captionLines,
             overflow: TextOverflow.ellipsis,
@@ -1175,26 +1269,196 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     );
   }
 
-  Future<void> _chooseTarget(_Dragged item) async {
-    final targets = _batches.where((target) => _canDrop(item, target)).toList();
-    if (targets.isEmpty) return;
-    final target = await showDialog<Json>(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('选择目标批次'),
-        children: [
-          for (final target in targets)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, target),
-              child: Text('${_label(target)} · ${_wall(target)}'),
+  Widget _interval(Json before, Json after) {
+    final first = _shotAt(before);
+    final second = _shotAt(after);
+    final seconds = first == null || second == null
+        ? null
+        : second.difference(first).inSeconds.abs();
+    final threshold = _intervalThreshold;
+    final over = seconds != null && threshold != null && seconds > threshold;
+    final label = seconds == null ? '拍摄间隔未知' : '间隔 ${_gap(seconds)}';
+    return SizedBox(
+      width: 46,
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Padding(
+          padding: const EdgeInsets.only(top: _batchThumbnailHeight),
+          child: IconButton.outlined(
+            key: ValueKey('photo-interval-${before['id']}-${after['id']}'),
+            tooltip: over ? '$label，超过 $threshold 秒阈值' : label,
+            constraints: const BoxConstraints.tightFor(width: 26, height: 26),
+            style: IconButton.styleFrom(
+              padding: EdgeInsets.zero,
+              foregroundColor: over
+                  ? const Color(0xffaa7900)
+                  : WorkstationStyle.muted,
+              side: const BorderSide(color: WorkstationStyle.line),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
+            onPressed: _loading || _working
+                ? null
+                : () => _split(before, after, label),
+            icon: const Icon(Icons.schedule, size: 14),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _split(Json before, Json after, String label) async {
+    final first = before['shotAt']?.toString() ?? '拍摄时间未知';
+    final second = after['shotAt']?.toString() ?? '拍摄时间未知';
+    final interval = '$first → $second · $label';
+    setState(() => _working = true);
+    final point = {'beforePhotoId': before['id'], 'afterPhotoId': after['id']};
+    try {
+      final preview = await widget.call('previewPhotoBatchSplit', [
+        {..._range, ...point},
+      ]) as Json;
+      final parts = (preview['parts'] as List).cast<Json>();
+      final snapshot = preview['snapshot'];
+      final threshold = preview['thresholdSec'];
+      if (parts.length != 2 ||
+          snapshot is! String ||
+          !RegExp(r'^[a-f0-9]{64}$').hasMatch(snapshot) ||
+          threshold is! int ||
+          threshold < 30) {
+        throw StateError('切分预览响应不完整。');
+      }
+      if (!mounted) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => WorkstationFormDialog(
+          title: '切分结果预览',
+          width: 720,
+          content: Column(
+            spacing: 12,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(interval),
+              if (preview['managementOnly'] == true)
+                const Text('切分将保存到照片管理。照片的取片卡和游客权益会保留。'),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final sideBySide = constraints.maxWidth >= 480;
+                  return Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      for (var i = 0; i < parts.length; i++)
+                        SizedBox(
+                          width: sideBySide
+                              ? (constraints.maxWidth - 12) / 2
+                              : constraints.maxWidth,
+                          child: _splitPart(
+                            parts[i],
+                            i,
+                            preview['cardTail'] as String?,
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+          actions: [
+            OutlinedButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('保存切分'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      final result = await widget.call('savePhotoBatchSplit', [
+        _range,
+        {...point, 'snapshot': snapshot, 'thresholdSec': threshold},
+      ]) as Json;
+      final messages = (result['messages'] as List)
+          .whereType<String>()
+          .toList();
+      if (messages.isEmpty) throw StateError('切分结果未确认，请刷新核对。');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(messages.join(' · '))));
+      await _load();
+    } catch (error) {
+      if (mounted) {
+        await showAppMessage(
+          context,
+          title: '请核对切分结果',
+          message: appErrorMessage(error),
+        );
+        if (mounted) await _load();
+      }
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  Widget _splitPart(Json part, int index, String? tail) {
+    final photos = (part['photos'] as List).cast<Json>();
+    final count = photos.where((photo) => photo['ending'] != true).length;
+    final status = switch (part['directory']) {
+      'aggregated' => '已归集',
+      'pending_claim' => '待认领',
+      'suspicious' => '可疑组',
+      'incoming' => '未归集',
+      _ => throw StateError('切分预览状态无效。'),
+    };
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        border: Border.all(color: WorkstationStyle.line),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        spacing: 8,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('第 ${index + 1} 组 · $count 张游客照'),
+          Text(
+            photos.any((photo) => photo['ending'] == true)
+                ? '$status · ${tail == null ? '有结束照' : '取片卡 $tail'}'
+                : '$status · 无结束照',
+          ),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final photo in photos)
+                SizedBox(
+                  width: 104,
+                  child: Column(
+                    children: [
+                      SizedBox(height: 68, child: _thumbnail(photo)),
+                      Text(
+                        photo['shotAt']?.toString() ?? '拍摄时间未知',
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
         ],
       ),
     );
-    if (target != null && mounted) await _move(item, target);
   }
 
-  Future<void> _runPhotoAction(_PhotoAction action, Json photo) async {
+  DateTime? _shotAt(Json photo) {
+    final value = photo['shotAt'];
+    return value is String ? DateTime.tryParse(value) : null;
+  }
+
+  Future<void> _runPhotoAction(_PhotoAction action, _Dragged item) async {
+    final photo = item.photo;
     switch (action) {
       case _PhotoAction.recognize:
         if (photo['previewUrl'] is! String || photo['previewUrl'] == '') {
@@ -1210,6 +1474,8 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
         await _removePhoto(photo);
       case _PhotoAction.capture:
         await _showCapture(photo);
+      case _PhotoAction.move:
+        await _move(item);
       case _PhotoAction.preview:
         await _preview(photo);
     }
@@ -1437,11 +1703,13 @@ class _BatchMessage extends StatelessWidget {
 class _BatchDayMenu extends StatefulWidget {
   const _BatchDayMenu({
     required this.day,
+    required this.width,
     required this.enabled,
     required this.onChanged,
   });
 
   final DateTime day;
+  final double width;
   final bool enabled;
   final ValueChanged<DateTime> onChanged;
 
@@ -1464,9 +1732,9 @@ class _BatchDayMenuState extends State<_BatchDayMenu> {
       tooltip: '选择收图日期',
       label: _dateLabel(widget.day),
       icon: Icons.calendar_today_outlined,
-      width: 176,
+      width: widget.width,
       enabled: widget.enabled,
-      items: [
+      items: (close) => [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
           child: Row(
@@ -1479,7 +1747,14 @@ class _BatchDayMenuState extends State<_BatchDayMenu> {
                     : null,
                 icon: const Icon(Icons.chevron_left, size: 20),
               ),
-              Text('${_month.year} 年 ${_month.month} 月'),
+              Expanded(
+                child: Text(
+                  '${_month.year}年${_month.month}月',
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
               IconButton(
                 tooltip: '下个月',
                 onPressed: _month.isBefore(currentMonth)
@@ -1491,7 +1766,11 @@ class _BatchDayMenuState extends State<_BatchDayMenu> {
           ),
         ),
         for (var number = days; number >= 1; number--)
-          _dayOption(DateTime.utc(_month.year, _month.month, number), today),
+          _dayOption(
+            DateTime.utc(_month.year, _month.month, number),
+            today,
+            close,
+          ),
       ],
     );
   }
@@ -1499,15 +1778,23 @@ class _BatchDayMenuState extends State<_BatchDayMenu> {
   void _changeMonth(int offset) =>
       setState(() => _month = DateTime.utc(_month.year, _month.month + offset));
 
-  Widget _dayOption(DateTime date, DateTime today) => MenuItemButton(
-    key: ValueKey(date),
-    onPressed: () => widget.onChanged(date),
-    trailingIcon: date == widget.day ? const Icon(Icons.check, size: 16) : null,
-    child: Text('${_dateLabel(date)}${date == today ? ' · 今天' : ''}'),
-  );
+  Widget _dayOption(DateTime date, DateTime today, VoidCallback close) =>
+      ListTile(
+        key: ValueKey(date),
+        dense: true,
+        selected: date == widget.day,
+        trailing: date == widget.day
+            ? const Icon(Icons.check_rounded, size: 17)
+            : null,
+        title: Text('${_dateLabel(date)}${date == today ? ' · 今天' : ''}'),
+        onTap: () {
+          close();
+          widget.onChanged(date);
+        },
+      );
 }
 
-class _BatchFilterMenu extends StatefulWidget {
+class _BatchFilterMenu extends StatelessWidget {
   const _BatchFilterMenu({
     required this.tooltip,
     required this.label,
@@ -1522,62 +1809,55 @@ class _BatchFilterMenu extends StatefulWidget {
   final IconData icon;
   final double width;
   final bool enabled;
-  final List<Widget> items;
+  final List<Widget> Function(VoidCallback) items;
 
   @override
-  State<_BatchFilterMenu> createState() => _BatchFilterMenuState();
-}
-
-class _BatchFilterMenuState extends State<_BatchFilterMenu> {
-  final _buttonFocus = FocusNode();
-
-  @override
-  void dispose() {
-    _buttonFocus.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => MenuAnchor(
-    childFocusNode: _buttonFocus,
-    alignmentOffset: const Offset(0, 4),
-    style: MenuStyle(
-      alignment: AlignmentDirectional.bottomStart,
-      minimumSize: WidgetStatePropertyAll(Size(widget.width, 0)),
-      maximumSize: WidgetStatePropertyAll(Size(widget.width, 320)),
-      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 4)),
-    ),
-    menuChildren: widget.items,
-    builder: (context, controller, child) => SizedBox(
-      width: widget.width,
-      height: 44,
-      child: Tooltip(
-        message: widget.tooltip,
-        child: OutlinedButton(
-          focusNode: _buttonFocus,
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            foregroundColor: WorkstationStyle.ink,
-            backgroundColor: WorkstationStyle.bg,
-            side: const BorderSide(color: WorkstationStyle.line),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-          onPressed: !widget.enabled
-              ? null
-              : () =>
-                    controller.isOpen ? controller.close() : controller.open(),
-          child: Row(
-            children: [
-              Icon(widget.icon, size: 17, color: WorkstationStyle.muted),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(widget.label, overflow: TextOverflow.ellipsis),
+  Widget build(BuildContext context) => SizedBox(
+    width: width,
+    height: 44,
+    child: AnchoredDropdown(
+      enabled: enabled,
+      preferredHeight: 320,
+      menuBuilder: (context, close) => ListView(
+        primary: false,
+        shrinkWrap: true,
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        children: items(close),
+      ),
+      triggerBuilder: (context, focus, open, toggle) => Tooltip(
+        message: tooltip,
+        child: Semantics(
+          expanded: open,
+          child: OutlinedButton(
+            focusNode: focus,
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              foregroundColor: WorkstationStyle.ink,
+              backgroundColor: WorkstationStyle.bg,
+              side: BorderSide(
+                color: open
+                    ? Theme.of(context).colorScheme.primary
+                    : WorkstationStyle.line,
               ),
-              const SizedBox(width: 4),
-              const Icon(Icons.keyboard_arrow_down, size: 18),
-            ],
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            onPressed: enabled ? toggle : null,
+            child: Row(
+              children: [
+                Icon(icon, size: 17, color: WorkstationStyle.muted),
+                const SizedBox(width: 8),
+                Expanded(child: Text(label, overflow: TextOverflow.ellipsis)),
+                const SizedBox(width: 4),
+                Icon(
+                  open
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                  size: 18,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1622,7 +1902,7 @@ class _AssignmentDialogState extends State<_AssignmentDialog> {
 
   Json? get _fields {
     if (_byCode) {
-      return RegExp(r'^(?:[0-9]{4}|[A-Z0-9]{12})$').hasMatch(_code)
+      return RegExp(r'^(?:[0-9]{6}|[A-Z0-9]{12})$').hasMatch(_code)
           ? {'cardCode': _code}
           : null;
     }
@@ -1674,134 +1954,115 @@ class _AssignmentDialogState extends State<_AssignmentDialog> {
     );
     return PopScope(
       canPop: !_saving,
-      child: AlertDialog(
-        title: const Text('设置取片批次'),
-        scrollable: true,
-        content: SizedBox(
-          width: 440,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            spacing: 12,
-            children: [
-              Text(
-                '${widget.station} · 已选 $count 张游客照',
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 190),
-                child: SingleChildScrollView(
-                  primary: false,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    spacing: 10,
-                    children: [
-                      for (final group in widget.groups)
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          spacing: 6,
-                          children: [
-                            Text(
-                              '${_label(group.batch)} · ${_wall(group.batch)} · ${group.photos.length} 张',
-                            ),
-                            Wrap(
-                              spacing: 6,
-                              runSpacing: 6,
-                              children: [
-                                for (final photo in group.photos)
-                                  Tooltip(
-                                    message:
-                                        "游客照 #${photo['id']} · ${_wall(photo)}",
-                                    child: SizedBox.square(
-                                      dimension: 52,
-                                      child: widget.thumbnail(photo),
-                                    ),
+      child: WorkstationFormDialog(
+        title: '设置取片批次',
+        width: 480,
+        canClose: !_saving,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          spacing: 12,
+          children: [
+            Text(
+              '${widget.station} · 已选 $count 张游客照',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 190),
+              child: SingleChildScrollView(
+                primary: false,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  spacing: 10,
+                  children: [
+                    for (final group in widget.groups)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        spacing: 6,
+                        children: [
+                          Text(
+                            '${_label(group.batch)} · ${_wall(group.batch)} · ${group.photos.length} 张',
+                          ),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              for (final photo in group.photos)
+                                Tooltip(
+                                  message:
+                                      "游客照 #${photo['id']} · ${_wall(photo)}",
+                                  child: SizedBox.square(
+                                    dimension: 52,
+                                    child: widget.thumbnail(photo),
                                   ),
-                              ],
-                            ),
-                          ],
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-              if (!available)
-                const Text('当前选择没有可接收的目标批次，请返回调整选中的照片。')
-              else ...[
-                DropdownButtonFormField<bool>(
-                  initialValue: _byCode,
-                  decoration: const InputDecoration(
-                    labelText: '归集方式',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: [
-                    if (widget.byCode)
-                      const DropdownMenuItem(value: true, child: Text('输入取片码')),
-                    if (widget.targets.isNotEmpty)
-                      const DropdownMenuItem(
-                        value: false,
-                        child: Text('选择已有批次'),
+                                ),
+                            ],
+                          ),
+                        ],
                       ),
                   ],
+                ),
+              ),
+            ),
+            if (!available)
+              const Text('当前选择没有可接收的目标批次，请返回调整选中的照片。')
+            else ...[
+              DropdownField<bool>(
+                label: '归集方式',
+                placeholder: '选择归集方式',
+                value: _byCode,
+                options: [
+                  if (widget.byCode) true,
+                  if (widget.targets.isNotEmpty) false,
+                ],
+                labelFor: (byCode) => byCode ? '输入取片码' : '选择已有批次',
+                onChanged: editable
+                    ? (value) => setState(() {
+                        _byCode = value;
+                        _error = null;
+                      })
+                    : null,
+              ),
+              if (_byCode)
+                TextFormField(
+                  initialValue: _code,
+                  enabled: editable,
+                  autofocus: widget.candidate != null,
+                  autocorrect: false,
+                  maxLength: 12,
+                  decoration: const InputDecoration(
+                    labelText: '取片码',
+                    helperText: '6 位卡尾号或 12 位完整取片码',
+                    counterText: '',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (value) => setState(() {
+                    _code = value.trim().toUpperCase();
+                    _error = null;
+                  }),
+                )
+              else
+                DropdownField<Json>(
+                  label: '目标批次',
+                  placeholder: '选择目标批次',
+                  value: _target,
+                  options: widget.targets,
+                  labelFor: (target) => '${_label(target)} · ${_wall(target)}',
                   onChanged: editable
-                      ? (value) => setState(() {
-                          _byCode = value!;
+                      ? (target) => setState(() {
+                          _target = target;
                           _error = null;
                         })
                       : null,
                 ),
-                if (_byCode)
-                  TextFormField(
-                    initialValue: _code,
-                    enabled: editable,
-                    autofocus: widget.candidate != null,
-                    autocorrect: false,
-                    maxLength: 12,
-                    decoration: const InputDecoration(
-                      labelText: '取片码',
-                      helperText: '4 位卡尾号或 12 位完整取片码',
-                      counterText: '',
-                      border: OutlineInputBorder(),
-                    ),
-                    onChanged: (value) => setState(() {
-                      _code = value.trim().toUpperCase();
-                      _error = null;
-                    }),
-                  )
-                else
-                  DropdownButtonFormField<Json>(
-                    initialValue: _target,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: '目标批次',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: [
-                      for (final target in widget.targets)
-                        DropdownMenuItem(
-                          value: target,
-                          child: Text('${_label(target)} · ${_wall(target)}'),
-                        ),
-                    ],
-                    onChanged: editable
-                        ? (target) => setState(() {
-                            _target = target;
-                            _error = null;
-                          })
-                        : null,
-                  ),
-              ],
-              if (_saving) const LinearProgressIndicator(minHeight: 2),
-              if (_error case final String error)
-                Text(
-                  error,
-                  style: const TextStyle(color: WorkstationStyle.bad),
-                ),
             ],
-          ),
+            if (_saving) const LinearProgressIndicator(minHeight: 2),
+            if (_error case final String error)
+              Text(error, style: const TextStyle(color: WorkstationStyle.bad)),
+          ],
         ),
         actions: [
-          TextButton(
+          OutlinedButton(
             onPressed: _saving ? null : () => Navigator.pop(context),
             child: Text(available ? '取消' : '关闭'),
           ),
@@ -1851,13 +2112,17 @@ String _gap(int seconds) {
   ].join(' ');
 }
 
-Widget _thumbnail(Json photo) => Image.network(
-  photo['thumbnailUrl'] as String,
-  fit: BoxFit.contain,
-  cacheWidth: 240,
-  errorBuilder: (_, _, _) =>
-      const Center(child: Icon(Icons.broken_image_outlined)),
-);
+Widget _thumbnail(Json photo) {
+  const unavailable = Center(child: Icon(Icons.broken_image_outlined));
+  final url = photo['thumbnailUrl'];
+  if (url is! String || url.isEmpty) return unavailable;
+  return Image.network(
+    url,
+    fit: BoxFit.contain,
+    cacheWidth: 240,
+    errorBuilder: (_, _, _) => unavailable,
+  );
+}
 
 Widget _previewImage(Json photo) => Image.network(
   photo['previewUrl'] as String,

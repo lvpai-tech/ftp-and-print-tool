@@ -32,6 +32,8 @@ class AutoUploadPanel extends StatefulWidget {
   State<AutoUploadPanel> createState() => _AutoUploadPanelState();
 }
 
+enum _FolderAction { copyPath, updateKey }
+
 class _AutoUploadPanelState extends State<AutoUploadPanel> {
   StationUpload get station => widget.station;
   String get _folder => station.folder;
@@ -169,6 +171,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
         context,
         readPhoto: () async =>
             normalizedCameraPhoto(await File(path).readAsBytes(), path),
+        sourcePath: path,
         guidance: '请根据候选尾号核对卡面。归集由服务端识别结束照。',
       );
     } catch (_) {
@@ -198,15 +201,32 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
         )
         .length;
     final failed = jobs.where((job) => job.state == 'failed').length;
+    final status = station.status;
+    final (statusColor, statusBackground) = switch (status) {
+      '授权失效' => (WorkstationStyle.bad, WorkstationStyle.badSoft),
+      '需要处理' ||
+      '待确认顺序' ||
+      '有异常' => (WorkstationStyle.warn, WorkstationStyle.warnSoft),
+      '监听中' || '上传中' => (WorkstationStyle.ok, WorkstationStyle.okSoft),
+      _ => (WorkstationStyle.muted, WorkstationStyle.bg),
+    };
+    final actionShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(8),
+    );
+    final secondaryAction = OutlinedButton.styleFrom(
+      minimumSize: const Size(0, 44),
+      shape: actionShape,
+      foregroundColor: WorkstationStyle.ink,
+      side: const BorderSide(color: WorkstationStyle.line),
+    );
     final identity = Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      spacing: 12,
+      spacing: 14,
       children: [
         Container(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: WorkstationStyle.accentSoft,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(12),
           ),
           child: const Icon(
             Icons.photo_camera_outlined,
@@ -218,20 +238,35 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
             crossAxisAlignment: CrossAxisAlignment.start,
             spacing: 4,
             children: [
-              Text(
-                station.name.isEmpty
-                    ? '机位 ${station.profile.stationId}'
-                    : station.name,
-                style: const TextStyle(
-                  color: WorkstationStyle.ink,
-                  fontSize: 24,
-                  fontWeight: FontWeight.w800,
-                ),
+              Wrap(
+                spacing: 10,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    station.name.isEmpty
+                        ? '机位 ${station.profile.stationId}'
+                        : station.name,
+                    style: const TextStyle(
+                      color: WorkstationStyle.ink,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  StatusTag(
+                    label: status,
+                    color: statusColor,
+                    soft: statusBackground,
+                  ),
+                ],
               ),
               if (station.profile.scenicName case final name?)
                 Text(
                   name,
-                  style: const TextStyle(color: WorkstationStyle.muted),
+                  style: const TextStyle(
+                    color: WorkstationStyle.muted,
+                    fontSize: 13,
+                  ),
                 ),
             ],
           ),
@@ -252,7 +287,11 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                 ),
           style: FilledButton.styleFrom(
             minimumSize: const Size(0, 44),
-            backgroundColor: active ? WorkstationStyle.ink : null,
+            shape: actionShape,
+            backgroundColor: active
+                ? WorkstationStyle.ink
+                : WorkstationStyle.accent,
+            foregroundColor: WorkstationStyle.card,
           ),
           icon: Icon(
             uploader.running ? Icons.pause : Icons.play_arrow,
@@ -272,7 +311,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
           onPressed: working || !supported || !station.canImport
               ? null
               : _importPhotos,
-          style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+          style: secondaryAction,
           icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
           label: Text(_picking ? '正在处理…' : '导入照片'),
         ),
@@ -281,16 +320,13 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
             onPressed: active && !working ? uploader.retryFailed : null,
             style: OutlinedButton.styleFrom(
               minimumSize: const Size(0, 44),
+              shape: actionShape,
               foregroundColor: WorkstationStyle.bad,
+              side: const BorderSide(color: WorkstationStyle.line),
             ),
             icon: const Icon(Icons.refresh, size: 18),
             label: const Text('重试失败任务'),
           ),
-        StatusTag(
-          label: station.status,
-          color: active ? WorkstationStyle.ok : WorkstationStyle.muted,
-          soft: active ? WorkstationStyle.okSoft : WorkstationStyle.bg,
-        ),
       ],
     );
     final folderPath = Row(
@@ -300,7 +336,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
         const Icon(
           Icons.folder_outlined,
           size: 20,
-          color: WorkstationStyle.muted,
+          color: WorkstationStyle.accent,
         ),
         Expanded(
           child: Column(
@@ -314,7 +350,10 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
               if (station.hasFolder)
                 SelectableText(
                   _folder,
-                  style: const TextStyle(color: WorkstationStyle.muted),
+                  style: const TextStyle(
+                    color: WorkstationStyle.muted,
+                    fontSize: 13,
+                  ),
                 )
               else
                 const Text('选择相机照片的导出目录。'),
@@ -323,35 +362,53 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
         ),
       ],
     );
-    final folderControls = Wrap(
-      spacing: 8,
-      runSpacing: 4,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        TextButton(
-          onPressed: working || !supported ? null : _pickFolder,
-          child: Text(station.hasFolder ? '更换收图文件夹' : '选择收图文件夹'),
+    final folderActions = <Widget>[
+      OutlinedButton(
+        onPressed: working || !supported ? null : _pickFolder,
+        style: secondaryAction.copyWith(
+          backgroundColor: const WidgetStatePropertyAll(WorkstationStyle.card),
         ),
-        if (!Platform.isIOS && station.hasFolder)
-          TextButton(
-            onPressed: working || !supported ? null : _openFolder,
-            child: const Text('打开收图文件夹'),
-          ),
-        if (station.hasFolder)
-          TextButton(onPressed: _copyFolder, child: const Text('复制路径')),
-        TextButton(
-          onPressed: working ? null : widget.onConfigureCos,
-          child: const Text('更新机位密钥'),
+        child: Text(station.hasFolder ? '更换收图文件夹' : '选择收图文件夹'),
+      ),
+      if (!Platform.isIOS && station.hasFolder)
+        IconButton(
+          tooltip: '打开收图文件夹',
+          onPressed: working || !supported ? null : _openFolder,
+          icon: const Icon(Icons.folder_open_outlined, size: 20),
         ),
-        if ((station.legacy || station.custom) && !uploader.running)
-          FilterChip(
-            label: const Text('补扫目录已有照片'),
-            selected: _scanExisting ?? station.scanExisting,
-            onSelected: working
-                ? null
-                : (value) => setState(() => _scanExisting = value),
+      PopupMenuButton<_FolderAction>(
+        tooltip: '文件夹操作',
+        icon: const Icon(Icons.more_horiz, size: 20),
+        enabled: station.hasFolder || !working,
+        onSelected: (action) {
+          switch (action) {
+            case _FolderAction.copyPath:
+              _copyFolder();
+            case _FolderAction.updateKey:
+              widget.onConfigureCos();
+          }
+        },
+        itemBuilder: (_) => [
+          if (station.hasFolder)
+            const PopupMenuItem(
+              value: _FolderAction.copyPath,
+              child: Text('复制路径'),
+            ),
+          PopupMenuItem(
+            value: _FolderAction.updateKey,
+            enabled: !working,
+            child: const Text('更新机位密钥'),
           ),
-      ],
+        ],
+      ),
+    ];
+    final showScan = (station.legacy || station.custom) && !uploader.running;
+    final scanOption = FilterChip(
+      label: const Text('补扫目录已有照片'),
+      selected: _scanExisting ?? station.scanExisting,
+      onSelected: working
+          ? null
+          : (value) => setState(() => _scanExisting = value),
     );
     final dropTarget = desktop && station.canImport
         ? DropTarget(
@@ -361,10 +418,9 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
             onDragDone: _dropPhotos,
             child: OutlinedButton.icon(
               onPressed: working ? null : _importPhotos,
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size(0, 44),
+              style: secondaryAction.copyWith(
                 backgroundColor: _dragging && _canDrop
-                    ? WorkstationStyle.accentSoft
+                    ? const WidgetStatePropertyAll(WorkstationStyle.accentSoft)
                     : null,
               ),
               icon: const Icon(Icons.file_download_outlined, size: 18),
@@ -372,10 +428,8 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
             ),
           )
         : null;
-    final stats = Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
+    final stats = _UploadStats(
+      items: [
         _Stat(
           label: '待准备',
           value: uploader.settling,
@@ -394,21 +448,31 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
           child: DecoratedBox(
             decoration: WorkstationStyle.surface(),
             child: Padding(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(16),
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final wide = constraints.maxWidth >= 780;
+                  final wide = constraints.maxWidth >= 740;
+                  final scanInline = constraints.maxWidth >= 900;
+                  final folderControls = Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    alignment: wide ? WrapAlignment.end : WrapAlignment.start,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (scanInline && showScan) scanOption,
+                      ...folderActions,
+                    ],
+                  );
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
-                    spacing: 14,
+                    spacing: 12,
                     children: [
                       if (wide)
                         Row(
-                          spacing: 20,
+                          spacing: 16,
                           children: [
-                            Expanded(flex: 4, child: identity),
+                            Expanded(child: identity),
                             Flexible(
-                              flex: 5,
                               child: Align(
                                 alignment: Alignment.centerRight,
                                 child: actions,
@@ -421,19 +485,27 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                         actions,
                       ],
                       Container(
-                        padding: const EdgeInsets.all(12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
                         decoration: BoxDecoration(
                           color: _dragging && _canDrop
                               ? WorkstationStyle.accentSoft
-                              : WorkstationStyle.bg,
+                              : WorkstationStyle.bg.withValues(alpha: .65),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: constraints.maxWidth >= 980
-                            ? Row(
-                                spacing: 12,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          spacing: 4,
+                          children: [
+                            if (wide)
+                              Row(
+                                spacing: 16,
                                 children: [
                                   Expanded(child: folderPath),
                                   Flexible(
+                                    flex: 2,
                                     child: Align(
                                       alignment: Alignment.centerRight,
                                       child: folderControls,
@@ -441,19 +513,39 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                                   ),
                                 ],
                               )
-                            : Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                spacing: 6,
-                                children: [folderPath, folderControls],
+                            else ...[
+                              folderPath,
+                              folderControls,
+                            ],
+                            if (showScan && !scanInline)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 28),
+                                child: scanOption,
                               ),
+                          ],
+                        ),
                       ),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 8,
-                        alignment: WrapAlignment.spaceBetween,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [stats, ?dropTarget],
-                      ),
+                      if (wide && dropTarget != null)
+                        Row(
+                          spacing: 16,
+                          children: [
+                            Expanded(flex: 2, child: stats),
+                            Flexible(
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: dropTarget,
+                              ),
+                            ),
+                          ],
+                        )
+                      else ...[
+                        stats,
+                        if (dropTarget != null)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: dropTarget,
+                          ),
+                      ],
                       if (Platform.isIOS)
                         const Text(
                           'iPad 在前台收图，回到应用后会继续未完成任务。',
@@ -530,6 +622,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
           onReview: (job) => showCardTailDialog(
             context,
             readPhoto: job.readPhotoForReview,
+            sourcePath: job.source,
             guidance: [
               if (job.captureMetadata != null) job.captureMetadata!.description,
               '请根据候选尾号核对卡面。归集由服务端识别结束照。',
@@ -554,6 +647,42 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
   }
 }
 
+class _UploadStats extends StatelessWidget {
+  const _UploadStats({required this.items});
+
+  final List<_Stat> items;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+      final columns = (constraints.maxWidth / (82 * scale)).floor().clamp(
+        1,
+        items.length,
+      );
+      final width = constraints.maxWidth / columns;
+      return Wrap(
+        runSpacing: 10,
+        children: [
+          for (var index = 0; index < items.length; index++)
+            Container(
+              width: width,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                border: index % columns == 0
+                    ? null
+                    : const Border(
+                        left: BorderSide(color: WorkstationStyle.line),
+                      ),
+              ),
+              child: items[index],
+            ),
+        ],
+      );
+    },
+  );
+}
+
 class _Stat extends StatelessWidget {
   const _Stat({required this.label, required this.value, required this.color});
   final String label;
@@ -561,27 +690,23 @@ class _Stat extends StatelessWidget {
   final Color color;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-    decoration: BoxDecoration(
-      borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: WorkstationStyle.line),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      spacing: 8,
-      children: [
-        Text(label, style: const TextStyle(color: WorkstationStyle.muted)),
-        Text(
-          '$value',
-          style: TextStyle(
-            color: color,
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
-            fontFeatures: const [FontFeature.tabularFigures()],
-          ),
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    spacing: 2,
+    children: [
+      Text(
+        label,
+        style: const TextStyle(color: WorkstationStyle.muted, fontSize: 12),
+      ),
+      Text(
+        '$value',
+        style: TextStyle(
+          color: value == 0 ? WorkstationStyle.ink : color,
+          fontSize: 21,
+          fontWeight: FontWeight.w700,
+          fontFeatures: const [FontFeature.tabularFigures()],
         ),
-      ],
-    ),
+      ),
+    ],
   );
 }

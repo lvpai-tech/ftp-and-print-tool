@@ -229,6 +229,7 @@ class _ManualBatchPanelState extends State<ManualBatchPanel> {
                       : () => showCardTailDialog(
                           context,
                           readPhoto: File(photo.snapshot).readAsBytes,
+                          sourcePath: photo.source,
                           guidance: '上传批次需要可读条形码，请换一张清晰结束照或补拍。',
                         ),
                   child: const Text('识别尾号'),

@@ -14,10 +14,13 @@ void main() {
         for (var index = 0; index < labels.length; index++)
           index == winner ? confidence : 0.0,
     ];
-    expect(decodeCardTail(scores([1, 1, 0, 2, 0, 2, 1]), labels), '0550');
+    expect(decodeCardTail(scores([1, 1, 0, 2, 0, 2, 1, 2, 1]), labels), '055050');
+    expect(decodeCardTail(scores([1, 2, 1, 2, 1, 2]), labels), '050505');
+    expect(decodeCardTail(scores([1, 2, 1, 2]), labels), isNull);
+    expect(decodeCardTail(scores([1, 2, 1, 2, 1]), labels), isNull);
     expect(decodeCardTail(scores([1, 2, 0, 2, 3]), labels), isNull);
     expect(
-      decodeCardTail(scores([1, 2, 0, 2, 1], confidence: 0.6), labels),
+      decodeCardTail(scores([1, 2, 1, 2, 1, 2], confidence: 0.6), labels),
       isNull,
     );
     expect(decodeCardTail(scores([1, 2, 2, 1]), labels), isNull);

@@ -42,6 +42,7 @@ class _WorkstationState extends State<Workstation> {
   int _page = 0;
   int get page => widget.selectedPage ?? _page;
   String filter = 'UNPRINTED';
+  bool _viewingBatches = false;
   final selected = <String>{};
   DateTimeRange? dates;
   @override
@@ -630,7 +631,7 @@ class _WorkstationState extends State<Workstation> {
               children: [
                 ConstrainedBox(
                   constraints: const BoxConstraints(minHeight: 60),
-                  child: selected.isEmpty
+                  child: _viewingBatches || selected.isEmpty
                       ? _queueToolbar(number)
                       : _batchToolbar(
                           jobs
@@ -640,73 +641,87 @@ class _WorkstationState extends State<Workstation> {
                         ),
                 ),
                 const Divider(height: 1, color: WorkstationStyle.line),
-                if (pending && recoveryError.isNotEmpty)
+                if (_viewingBatches)
+                  Expanded(
+                    child: PhotoBatchTimeline(
+                      key: ValueKey(bridge.config['activeScenicProfileId']),
+                      call: bridge.call,
+                      scenicName: scenicLabel,
+                    ),
+                  )
+                else ...[
+                  if (pending && recoveryError.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                      child: Text(
+                        recoveryError,
+                        style: const TextStyle(color: WorkstationStyle.warn),
+                      ),
+                    ),
+                  if (pending && matchesFilter)
+                    _printIssueControls(state, number),
+                  ?header,
+                  Expanded(
+                    child: jobs.isEmpty
+                        ? Center(
+                            child: Text(
+                              _emptyQueueMessage(
+                                generating,
+                                loading,
+                                listError,
+                              ),
+                              style: const TextStyle(
+                                color: WorkstationStyle.muted,
+                              ),
+                            ),
+                          )
+                        : ListView.separated(
+                            key: PageStorageKey((
+                              filter,
+                              dates,
+                              number,
+                              bridge.config['activeScenicProfileId'],
+                            )),
+                            padding: EdgeInsets.zero,
+                            itemCount: jobs.length,
+                            separatorBuilder: (_, _) => const Divider(
+                              height: 1,
+                              color: WorkstationStyle.line,
+                            ),
+                            itemBuilder: (context, index) => generating
+                                ? _generatingRow(jobs[index], table: table)
+                                : _jobRow(jobs[index], table: table),
+                          ),
+                  ),
+                  const Divider(height: 1, color: WorkstationStyle.line),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                    child: Text(
-                      recoveryError,
-                      style: const TextStyle(color: WorkstationStyle.warn),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Wrap(
+                      alignment: WrapAlignment.end,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          '${pending ? '排队' : '共'} $total 单 · 第 $number 页',
+                          style: const TextStyle(color: WorkstationStyle.muted),
+                        ),
+                        IconButton(
+                          tooltip: '上一页',
+                          onPressed: number > 1 && !bridge.busy
+                              ? () => query(number: number - 1)
+                              : null,
+                          icon: const Icon(Icons.chevron_left),
+                        ),
+                        IconButton(
+                          tooltip: '下一页',
+                          onPressed: number * pageSize < total && !bridge.busy
+                              ? () => query(number: number + 1)
+                              : null,
+                          icon: const Icon(Icons.chevron_right),
+                        ),
+                      ],
                     ),
                   ),
-                if (pending && matchesFilter)
-                  _printIssueControls(state, number),
-                ?header,
-                Expanded(
-                  child: jobs.isEmpty
-                      ? Center(
-                          child: Text(
-                            _emptyQueueMessage(generating, loading, listError),
-                            style: const TextStyle(
-                              color: WorkstationStyle.muted,
-                            ),
-                          ),
-                        )
-                      : ListView.separated(
-                          key: PageStorageKey((
-                            filter,
-                            dates,
-                            number,
-                            bridge.config['activeScenicProfileId'],
-                          )),
-                          padding: EdgeInsets.zero,
-                          itemCount: jobs.length,
-                          separatorBuilder: (_, _) => const Divider(
-                            height: 1,
-                            color: WorkstationStyle.line,
-                          ),
-                          itemBuilder: (context, index) => generating
-                              ? _generatingRow(jobs[index], table: table)
-                              : _jobRow(jobs[index], table: table),
-                        ),
-                ),
-                const Divider(height: 1, color: WorkstationStyle.line),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Wrap(
-                    alignment: WrapAlignment.end,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      Text(
-                        '${pending ? '排队' : '共'} $total 单 · 第 $number 页',
-                        style: const TextStyle(color: WorkstationStyle.muted),
-                      ),
-                      IconButton(
-                        tooltip: '上一页',
-                        onPressed: number > 1 && !bridge.busy
-                            ? () => query(number: number - 1)
-                            : null,
-                        icon: const Icon(Icons.chevron_left),
-                      ),
-                      IconButton(
-                        tooltip: '下一页',
-                        onPressed: number * pageSize < total && !bridge.busy
-                            ? () => query(number: number + 1)
-                            : null,
-                        icon: const Icon(Icons.chevron_right),
-                      ),
-                    ],
-                  ),
-                ),
+                ],
               ],
             );
           },
@@ -739,45 +754,42 @@ class _WorkstationState extends State<Workstation> {
               _generatingFilter: '生成中',
               'PRINTED': '已打印',
             }.entries)
-              Semantics(
-                selected: filter == entry.key,
-                child: TextButton(
-                  style: _queueButtonStyle(
-                    foreground: filter == entry.key
-                        ? WorkstationStyle.accent
-                        : WorkstationStyle.muted,
-                    background: filter == entry.key
-                        ? WorkstationStyle.accentSoft
-                        : null,
-                  ),
-                  onPressed: bridge.busy
-                      ? null
-                      : () {
-                          setState(() => filter = entry.key);
-                          query();
-                        },
-                  child: Text(entry.value),
-                ),
+              _queueTab(
+                entry.value,
+                !_viewingBatches && filter == entry.key,
+                () {
+                  final changed = filter != entry.key;
+                  setState(() {
+                    _viewingBatches = false;
+                    filter = entry.key;
+                  });
+                  if (changed) query();
+                },
               ),
+            _queueTab('查看批次', _viewingBatches, () {
+              setState(() => _viewingBatches = true);
+            }),
           ],
         ),
         Wrap(
           spacing: 2,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            JobCreatedRangeField(
-              value: dates,
-              enabled: !bridge.busy,
-              onChanged: (range) {
-                setState(() => dates = range);
-                query();
-              },
-            ),
-            IconButton(
-              tooltip: filter == _generatingFilter ? '刷新生成中的任务' : '刷新打印任务',
-              onPressed: bridge.busy ? null : () => query(number: pageNumber),
-              icon: const Icon(Icons.refresh, size: 20),
-            ),
+            if (!_viewingBatches) ...[
+              JobCreatedRangeField(
+                value: dates,
+                enabled: !bridge.busy,
+                onChanged: (range) {
+                  setState(() => dates = range);
+                  query();
+                },
+              ),
+              IconButton(
+                tooltip: filter == _generatingFilter ? '刷新生成中的任务' : '刷新打印任务',
+                onPressed: bridge.busy ? null : () => query(number: pageNumber),
+                icon: const Icon(Icons.refresh, size: 20),
+              ),
+            ],
             if (widget.embedded)
               TextButton.icon(
                 style: _queueButtonStyle(),
@@ -785,26 +797,26 @@ class _WorkstationState extends State<Workstation> {
                 icon: const Icon(Icons.history, size: 18),
                 label: const Text('打印记录'),
               ),
-            FilledButton.icon(
-              onPressed: bridge.busy ? null : _openPhotoBatches,
-              icon: const Icon(Icons.view_timeline_outlined, size: 18),
-              label: const Text('照片批次矫正'),
-            ),
           ],
         ),
       ],
     ),
   );
 
-  Future<void> _openPhotoBatches() async {
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute(
-        builder: (_) =>
-            PhotoBatchPage(call: bridge.call, scenicName: scenicLabel),
-      ),
-    );
-    if (mounted && bridge.configured && !bridge.busy) await query();
-  }
+  Widget _queueTab(String label, bool active, VoidCallback onPressed) =>
+      Semantics(
+        selected: active,
+        child: TextButton(
+          style: _queueButtonStyle(
+            foreground: active
+                ? WorkstationStyle.accent
+                : WorkstationStyle.muted,
+            background: active ? WorkstationStyle.accentSoft : null,
+          ),
+          onPressed: bridge.busy ? null : onPressed,
+          child: Text(label),
+        ),
+      );
 
   List<Json> _pendingRows(Json state) {
     final issues = state['printIssues']?['list'] as List? ?? const [];

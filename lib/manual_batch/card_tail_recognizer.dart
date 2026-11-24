@@ -12,15 +12,17 @@ const _height = 48;
 const _model = 'assets/card-ocr/inference.onnx';
 const _dictionary = 'assets/card-ocr/characters.json';
 
-img.Image _decode(Uint8List bytes) {
-  final photo = img.decodeImage(normalizeJpegPrimary(bytes));
+img.Image _decode(Uint8List bytes, String? sourcePath) {
+  final photo = img.decodeImage(
+    normalizeJpegPrimary(bytes, sourcePath: sourcePath),
+  );
   if (photo == null) throw StateError('照片无法解码');
   return img.bakeOrientation(photo);
 }
 
 /// Preview and inference both use the EXIF-oriented pixel coordinates.
-(Uint8List, Size) cardTailPreview(Uint8List bytes) {
-  final photo = _decode(bytes);
+(Uint8List, Size) cardTailPreview(Uint8List bytes, {String? sourcePath}) {
+  final photo = _decode(bytes, sourcePath);
   final resized = photo.width <= 1000 && photo.height <= 1000
       ? photo
       : img.copyResize(
@@ -35,14 +37,14 @@ img.Image _decode(Uint8List bytes) {
   );
 }
 
-(Float32List, int) _input((Uint8List, Rect) request) {
-  final (bytes, selection) = request;
-  final photo = _decode(bytes);
+(Float32List, int) _input((Uint8List, Rect, String?) request) {
+  final (bytes, selection, sourcePath) = request;
+  final photo = _decode(bytes, sourcePath);
   final left = (selection.left * photo.width).floor();
   final top = (selection.top * photo.height).floor();
   final width = (selection.right * photo.width).ceil() - left;
   final height = (selection.bottom * photo.height).ceil() - top;
-  if (width < 12 || height < 8) throw StateError('请框住完整四位数字');
+  if (width < 12 || height < 8) throw StateError('请框住完整尾号');
   final crop = img.copyCrop(
     photo,
     x: left,
@@ -51,7 +53,7 @@ img.Image _decode(Uint8List bytes) {
     height: height,
   );
   final scaledWidth = (width * _height / height).ceil();
-  if (scaledWidth > 3200) throw StateError('选区过宽，请重新框选四位数字');
+  if (scaledWidth > 3200) throw StateError('选区过宽，请重新框选完整尾号');
   final resized = img.copyResize(
     crop,
     width: scaledWidth,
@@ -91,7 +93,7 @@ String? decodeCardTail(List<num> scores, List<String> labels) {
     previous = best;
   }
   final candidate = text.toString();
-  return RegExp(r'^[0-9]{4}$').hasMatch(candidate) ? candidate : null;
+  return RegExp(r'^[0-9]{6}$').hasMatch(candidate) ? candidate : null;
 }
 
 class CardTailRecognizer {
@@ -102,11 +104,19 @@ class CardTailRecognizer {
   List<String>? _labels;
   bool _running = false;
 
-  Future<String?> recognize(Uint8List bytes, Rect selection) async {
+  Future<String?> recognize(
+    Uint8List bytes,
+    Rect selection, {
+    String? sourcePath,
+  }) async {
     if (_running) throw StateError('上一张照片仍在识别，请稍后重试');
     _running = true;
     try {
-      final (data, width) = await compute(_input, (bytes, selection));
+      final (data, width) = await compute(_input, (
+        bytes,
+        selection,
+        sourcePath,
+      ));
       final labels = _labels ??= List<String>.from(
         jsonDecode(await rootBundle.loadString(_dictionary)) as List,
       );
