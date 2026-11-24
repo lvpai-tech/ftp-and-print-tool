@@ -5,6 +5,71 @@ import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  testWidgets('入库照片只出现在照片归属，传输中的任务仍可查阅', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1120, 950));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final folder = p.absolute('inbox');
+    AutoJob job(String state) => AutoJob(
+      id: state,
+      source: p.join(folder, '$state.jpg'),
+      relative: '$state.jpg',
+      signature: '',
+      digest: '',
+      snapshot: p.join(folder, '$state.snapshot'),
+      state: state,
+    );
+    final jobs = [
+      for (final state in [
+        'grouped',
+        'ingested',
+        'accepted',
+        'uploading',
+        'failed',
+        'pending',
+      ])
+        job(state),
+    ];
+
+    Future<void> render() => tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CustomScrollView(
+            slivers: [
+              UploadTaskList(
+                folder: folder,
+                waiting: const {},
+                needingOrder: const [],
+                jobs: jobs,
+                onConfirmNext: null,
+                onReview: (_) {},
+                batchTimeline: const SliverToBoxAdapter(
+                  child: Text('取片卡 394373'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    await render();
+    expect(find.text('取片卡 394373'), findsOneWidget);
+    expect(find.text('已入队任务'), findsNothing);
+    expect(find.text('grouped.jpg'), findsNothing);
+    expect(find.text('ingested.jpg'), findsNothing);
+    expect(find.text('已上传 · 等待入库'), findsOneWidget);
+    expect(find.text('上传中 0%'), findsOneWidget);
+    expect(find.text('上传失败'), findsOneWidget);
+    expect(find.text('等待上传'), findsOneWidget);
+
+    for (final job in jobs) {
+      job.state = 'grouped';
+    }
+    await render();
+    expect(find.text('取片卡 394373'), findsOneWidget);
+    expect(find.byTooltip('识别取片卡尾号'), findsNothing);
+  });
+
   testWidgets('确认顺序、待准备和已入队照片在同一列表显示', (tester) async {
     final folder = p.absolute('inbox');
     final first = p.join(folder, 'visitor-1.jpg');

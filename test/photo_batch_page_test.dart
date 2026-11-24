@@ -4,6 +4,7 @@ import 'dart:ui' show PictureRecorder, PointerDeviceKind;
 import 'package:flutter/foundation.dart' show SynchronousFuture;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/printing/ui/photo_batch_page.dart';
+import 'package:lvpai_ftp_client/printing/ui/photo_batch_split_dialog.dart';
 import 'package:lvpai_ftp_client/ui/upload_task_list.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -20,6 +21,151 @@ Widget _printBatchView({
 );
 
 void main() {
+  testWidgets('切分预览在宽窗并排，窄窗可滚动且保存按钮固定', (tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const parts = [
+      {
+        'directory': 'incoming',
+        'photos': [
+          {'id': '1', 'shotAt': '2026-11-24T23:59:53', 'ending': false},
+        ],
+      },
+      {
+        'directory': 'aggregated',
+        'photos': [
+          {'id': '2', 'shotAt': '2026-11-25T00:00:05', 'ending': true},
+        ],
+      },
+    ];
+    bool? confirmed;
+    await tester.binding.setSurfaceSize(const Size(1120, 800));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () async {
+                confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (_) => PhotoBatchSplitDialog(
+                    before: DateTime(2026, 11, 24, 23, 59, 53),
+                    after: DateTime(2026, 11, 25, 0, 0, 5),
+                    interval: '间隔 12 秒',
+                    parts: parts,
+                    cardTail: '394373',
+                    managementOnly: true,
+                    thumbnail: (_) => const Placeholder(),
+                  ),
+                );
+              },
+              child: const Text('打开预览'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开预览'));
+    await tester.pumpAndSettle();
+    final first = find.text('第 1 组');
+    final second = find.text('第 2 组');
+    expect(tester.getTopLeft(first).dy, tester.getTopLeft(second).dy);
+    expect(find.text('2026-11-24'), findsOneWidget);
+    expect(find.text('2026-11-25'), findsOneWidget);
+    expect(find.text('23:59:53'), findsNWidgets(2));
+    expect(find.text('结束照 · 00:00:05'), findsOneWidget);
+    expect(find.text('取片卡 394373'), findsOneWidget);
+
+    await tester.binding.setSurfaceSize(const Size(375, 580));
+    await tester.pumpAndSettle();
+    final save = find.text('保存切分');
+    final initialSave = tester.getCenter(save);
+    expect(tester.getTopLeft(first).dy, lessThan(tester.getTopLeft(second).dy));
+    await tester.drag(
+      find.byType(SingleChildScrollView),
+      const Offset(0, -450),
+    );
+    await tester.pumpAndSettle();
+    expect(second.hitTestable(), findsOneWidget);
+    expect(tester.getCenter(save), initialSave);
+
+    tester.platformDispatcher.textScaleFactorTestValue = 1.6;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await tester.binding.setSurfaceSize(const Size(667, 390));
+    await tester.pumpAndSettle();
+    expect(save.hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(confirmed, isTrue);
+  });
+
+  testWidgets('上传回执刷新当天归属并保留正在进行的批量选片', (tester) async {
+    var queries = 0;
+    Future<dynamic> call(String method, List<dynamic> args) async =>
+        switch (method) {
+          'listBatchStations' => [
+            {'id': '17', 'code': 'A17', 'name': '测试机位'},
+          ],
+          'listPhotoBatches' => {
+            'batches': [
+              {
+                'id': 'batch-1',
+                'receivedAt': '2026-11-24T08:33:58Z',
+                'status': 'CARD',
+                'directory': 'aggregated',
+                'cardTail': ++queries == 1 ? '394373' : '394374',
+                'targetPhotoId': '11',
+                'targetCardId': '99',
+                'photos': [
+                  {
+                    'id': '10',
+                    'ending': false,
+                    'revision': 0,
+                    'receivedAt': '2026-11-24T08:33:58Z',
+                  },
+                ],
+              },
+            ],
+          },
+          _ => throw StateError(method),
+        };
+    Future<void> render(int ingested, int grouped) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: CustomScrollView(
+              slivers: [
+                PhotoBatchTimeline.inline(
+                  call: call,
+                  scenicName: '测试景区',
+                  stationId: '17',
+                  uploadProgress: (ingested: ingested, grouped: grouped),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    await render(0, 0);
+    expect(find.text('取片卡 394373'), findsOneWidget);
+    await tester.tap(find.text('批量归集'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('select-photo-10')));
+    await tester.pumpAndSettle();
+    await render(0, 1);
+    expect(find.text('已选 1 张'), findsOneWidget);
+    expect(queries, 1);
+
+    await tester.tap(find.text('退出批量归集'));
+    await tester.pumpAndSettle();
+    expect(queries, 2);
+    expect(find.text('取片卡 394374'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final inline in [false, true]) {
     testWidgets('${inline ? '上传任务列表' : '打印查看批次'}中拖动和批量归集各自确认，取消时不写入', (
       tester,
@@ -42,6 +188,7 @@ void main() {
               'ending': false,
               'revision': 0,
               'receivedAt': '2026-11-22T02:01:00Z',
+              'assetRole': 'PHOTO',
               'shotAt': '2026-11-22T10:01:00',
               'thumbnailUrl': 'https://example.invalid/pending.jpg',
               'previewUrl': 'https://example.invalid/pending-preview.jpg',
@@ -74,6 +221,13 @@ void main() {
               'receivedAt': '2026-11-22T02:04:05Z',
               'thumbnailUrl': 'https://example.invalid/ending.jpg',
             },
+            {
+              'id': '4',
+              'ending': false,
+              'revision': 0,
+              'receivedAt': '2026-11-22T02:02:05Z',
+              'thumbnailUrl': 'https://example.invalid/visitor.jpg',
+            },
           ],
         },
       ];
@@ -98,6 +252,9 @@ void main() {
                 'requestId': request['requestId'],
                 'cardTail': '123456',
                 'assignedCount': 1,
+                'cardPhotoCount': (request['photos'] as List)
+                    .where((photo) => photo['touristPhoto'] == false)
+                    .length,
               };
             }(),
             'previewPhotoBatchSplit' => () {
@@ -198,12 +355,17 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      expect(find.text('照片归属'), inline ? findsNothing : findsOneWidget);
+      expect(
+        find.textContaining('最新批次在前'),
+        inline ? findsNothing : findsOneWidget,
+      );
+      expect(find.text('可接收游客照'), findsNothing);
       if (inline) {
         expect(find.text('上传队列'), findsOneWidget);
-        expect(find.text('照片归属'), findsOneWidget);
         expect(find.text('设置取片批次'), findsNothing);
         expect(find.byTooltip('选择机位'), findsNothing);
-        expect(find.textContaining('A17'), findsOneWidget);
+        expect(find.textContaining('A17'), findsNothing);
       }
       await tester.tap(find.text('全部状态'));
       await tester.pumpAndSettle();
@@ -247,12 +409,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('切分已保存'), findsOneWidget);
 
-      Future<void> dragToCard(Finder source) async {
+      Finder batchTarget(Finder label) => find.ancestor(
+        of: label,
+        matching: find.byWidgetPredicate((widget) => widget is DragTarget),
+      );
+
+      Future<void> dragToBatch(Finder source, Finder batchLabel) async {
         final from = tester.getCenter(source);
-        final target = find.ancestor(
-          of: find.text('取片卡 123456'),
-          matching: find.byWidgetPredicate((widget) => widget is DragTarget),
-        );
+        final target = batchTarget(batchLabel);
         final to = Offset(
           tester.getCenter(newer).dx,
           tester.getCenter(target).dy,
@@ -265,24 +429,33 @@ void main() {
         await tester.pump();
         await gesture.moveTo(to);
         await tester.pump();
+        expect(find.text('松开后确认移动'), findsOneWidget);
         await gesture.up();
         await tester.pumpAndSettle();
       }
 
-      await dragToCard(movablePhoto);
+      final cardLabel = find.text('取片卡 123456');
+      await dragToBatch(find.byKey(const ValueKey('drag-photo-4')), older);
+      expect(find.text('确认移动照片'), findsOneWidget);
+      expect(find.text('同时归入目标取片卡'), findsNothing);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(moved, isEmpty);
+
+      await dragToBatch(movablePhoto, cardLabel);
       expect(find.text('确认移动照片'), findsOneWidget);
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
       expect(writes, isEmpty);
 
-      await dragToCard(movablePhoto);
+      await dragToBatch(movablePhoto, cardLabel);
       await tester.tap(find.text('同时归入目标取片卡'));
       await tester.pump();
       await tester.tap(find.text('确认移动'));
       await tester.pumpAndSettle();
       expect(writes.single['targetPhotoId'], '2');
       expect(writes.single['targetCardId'], '99');
-      await dragToCard(find.byKey(const ValueKey('drag-photo-3')));
+      await dragToBatch(find.byKey(const ValueKey('drag-photo-3')), cardLabel);
       await tester.tap(find.text('确认移动'));
       await tester.pumpAndSettle();
       expect(moved, hasLength(1));
@@ -323,7 +496,12 @@ void main() {
             .onChanged,
         isNull,
       );
-      await tester.tap(find.text('选中本组可处理照片'));
+      await tester.tap(
+        find.descendant(
+          of: batchTarget(older),
+          matching: find.text('选中本组可处理照片'),
+        ),
+      );
       await tester.pumpAndSettle();
       expect(find.text('已选 1 张'), findsOneWidget);
       final assign = find.widgetWithText(FilledButton, '设置取片批次');
@@ -353,11 +531,16 @@ void main() {
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).last, '123456');
       await tester.pumpAndSettle();
+      final visitor = find.byKey(const ValueKey('assignment-visitor-1'));
+      await tester.ensureVisible(visitor);
+      await tester.tap(visitor);
+      await tester.pumpAndSettle();
+      expect(find.text('0 张游客照 · 1 张卡片照'), findsOneWidget);
       await tester.tap(find.text('确认归集'));
       await tester.pumpAndSettle();
       expect(writes.last['cardCode'], '123456');
       expect(writes.last['photos'], [
-        {'photoId': '1', 'revision': 0},
+        {'photoId': '1', 'revision': 0, 'touristPhoto': false},
       ]);
       if (inline) {
         await tester.binding.setSurfaceSize(const Size(375, 650));
@@ -391,7 +574,16 @@ void main() {
       await tester.pumpAndSettle();
       await selectPhotoAction('1', '识别取片码');
       expect(find.text('识别取片码'), findsOneWidget);
+      expect(find.text('设置取片码'), findsNothing);
       await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
+      await selectPhotoAction('1', '设置取片码');
+      expect(find.text('设置取片码'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('assignment-visitor-1')),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
       await selectPhotoAction('2', '识别取片码');
       expect(find.text('当前照片没有可用于识别的大图。'), findsOneWidget);

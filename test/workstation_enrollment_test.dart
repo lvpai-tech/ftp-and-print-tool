@@ -118,6 +118,10 @@ void main() {
         'location': '东门观景台',
       });
       expect(find.text('待审核'), findsOneWidget);
+      expect(
+        find.widgetWithText(WorkstationFormDialog, '机位申请记录'),
+        findsOneWidget,
+      );
       expect(find.text('申请记录（1）'), findsOneWidget);
       await tester.pump(const Duration(minutes: 1));
       expect(refreshes, 0);
@@ -129,8 +133,67 @@ void main() {
       expect(find.text('请补充入口位置'), findsOneWidget);
       await tester.pump(const Duration(minutes: 1));
       expect(refreshes, 1);
+      await tester.tap(find.text('移除记录'));
+      await tester.pumpAndSettle();
+      expect(find.text('暂无机位申请记录'), findsOneWidget);
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
+      expect(find.byType(WorkstationFormDialog), findsNothing);
+      expect(find.text('申请记录（0）'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
     }, () => client);
+  });
+
+  testWidgets('窄窗口的申请记录在弹窗内滚动，底部关闭按钮固定', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(375, 300);
+    addTearDown(tester.view.reset);
+    for (var index = 1; index <= 6; index++) {
+      final id = 'application-$index';
+      await store.saveEnrollment(gateway, id, {
+        'draft': {
+          'requestId': id,
+          'scenicName': '测试景区',
+          'location': '点位 $index',
+        },
+        'createdAt': DateTime.utc(2026, 11, index).toIso8601String(),
+      });
+    }
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: WorkstationEnrollmentPanel(
+            api: gateway,
+            store: store,
+            onBound: () async {},
+            onManual: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final open = find.text('申请记录（6）');
+    expect(find.text('测试景区 · 点位 6'), findsNothing);
+    await tester.tap(open);
+    await tester.pumpAndSettle();
+    final dialog = find.byType(WorkstationFormDialog);
+    final close = find.widgetWithText(FilledButton, '关闭');
+    final closeBounds = tester.getRect(close);
+    final last = find.text('测试景区 · 点位 1');
+    expect(find.text('测试景区 · 点位 6').hitTestable(), findsOneWidget);
+    expect(last.hitTestable(), findsNothing);
+    final scrollable = find.descendant(
+      of: dialog,
+      matching: find.byType(Scrollable),
+    );
+    await tester.scrollUntilVisible(last, 100, scrollable: scrollable);
+    expect(last.hitTestable(), findsOneWidget);
+    expect(tester.getRect(close), closeBounds);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(dialog, findsNothing);
+    expect(open.hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('窄窗口可滚动选择更多景区', (tester) async {

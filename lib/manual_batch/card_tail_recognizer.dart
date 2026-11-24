@@ -37,9 +37,27 @@ img.Image _decode(Uint8List bytes, String? sourcePath) {
   );
 }
 
-(Float32List, int) _input((Uint8List, Rect, String?) request) {
+List<(Float32List, int)> _inputs((Uint8List, Rect?, String?) request) {
   final (bytes, selection, sourcePath) = request;
   final photo = _decode(bytes, sourcePath);
+  if (selection != null) return [_input(photo, selection)];
+
+  // The model reads one line. Scan overlapping bands at two scales so a
+  // printed line surrounded by the rest of the photo can still be read.
+  return [
+    _input(photo, const Rect.fromLTRB(0, 0, 1, 1), capWidth: true),
+    for (final left in [0.0, .2, .4])
+      for (var row = 8; row >= 0; row--)
+        if (photo.height * .2 >= 8 && photo.width * .6 >= 12)
+          _input(photo, Rect.fromLTWH(left, row / 10, .6, .2), capWidth: true),
+  ];
+}
+
+(Float32List, int) _input(
+  img.Image photo,
+  Rect selection, {
+  bool capWidth = false,
+}) {
   final left = (selection.left * photo.width).floor();
   final top = (selection.top * photo.height).floor();
   final width = (selection.right * photo.width).ceil() - left;
@@ -52,8 +70,11 @@ img.Image _decode(Uint8List bytes, String? sourcePath) {
     width: width,
     height: height,
   );
-  final scaledWidth = (width * _height / height).ceil();
-  if (scaledWidth > 3200) throw StateError('选区过宽，请重新框选完整尾号');
+  final naturalWidth = (width * _height / height).ceil();
+  if (naturalWidth > 3200 && !capWidth) {
+    throw StateError('选区过宽，请重新框选完整尾号');
+  }
+  final scaledWidth = math.min(naturalWidth, 3200);
   final resized = img.copyResize(
     crop,
     width: scaledWidth,
@@ -73,7 +94,11 @@ img.Image _decode(Uint8List bytes, String? sourcePath) {
 }
 
 /// Greedy CTC over the original vocabulary, then validate the complete string.
-String? decodeCardTail(List<num> scores, List<String> labels) {
+String? decodeCardTail(
+  List<num> scores,
+  List<String> labels, {
+  bool wholeImage = false,
+}) {
   final classes = labels.length;
   if (classes < 2 || scores.isEmpty || scores.length % classes != 0) {
     throw StateError('尾号模型输出尺寸不匹配');
@@ -93,7 +118,10 @@ String? decodeCardTail(List<num> scores, List<String> labels) {
     previous = best;
   }
   final candidate = text.toString();
-  return RegExp(r'^[0-9]{6}$').hasMatch(candidate) ? candidate : null;
+  final pattern = wholeImage
+      ? RegExp(r'^(?:[A-Z]{2,8}-)?([0-9]{6})$')
+      : RegExp(r'^([0-9]{6})$');
+  return pattern.firstMatch(candidate)?.group(1);
 }
 
 class CardTailRecognizer {
@@ -106,17 +134,13 @@ class CardTailRecognizer {
 
   Future<String?> recognize(
     Uint8List bytes,
-    Rect selection, {
+    Rect? selection, {
     String? sourcePath,
   }) async {
     if (_running) throw StateError('上一张照片仍在识别，请稍后重试');
     _running = true;
     try {
-      final (data, width) = await compute(_input, (
-        bytes,
-        selection,
-        sourcePath,
-      ));
+      final inputs = await compute(_inputs, (bytes, selection, sourcePath));
       final labels = _labels ??= List<String>.from(
         jsonDecode(await rootBundle.loadString(_dictionary)) as List,
       );
@@ -124,26 +148,38 @@ class CardTailRecognizer {
         _model,
         options: OrtSessionOptions(intraOpNumThreads: 1, interOpNumThreads: 1),
       );
-      final input = await OrtValue.fromList(data, [1, 3, _height, width]);
-      try {
-        final outputs = await session.run({session.inputNames.single: input});
+      String? candidate;
+      for (final (data, width) in inputs) {
+        final input = await OrtValue.fromList(data, [1, 3, _height, width]);
         try {
-          final output = outputs.values.single;
-          if (output.shape.length != 3 ||
-              output.shape.first != 1 ||
-              output.shape.last != labels.length) {
-            throw StateError('尾号模型输出格式不匹配');
+          final outputs = await session.run({session.inputNames.single: input});
+          try {
+            final output = outputs.values.single;
+            if (output.shape.length != 3 ||
+                output.shape.first != 1 ||
+                output.shape.last != labels.length) {
+              throw StateError('尾号模型输出格式不匹配');
+            }
+            final scores = (await output.asFlattenedList()).cast<num>();
+            final tail = decodeCardTail(
+              scores,
+              labels,
+              wholeImage: selection == null,
+            );
+            if (tail != null) {
+              if (candidate != null && candidate != tail) return null;
+              candidate = tail;
+            }
+          } finally {
+            for (final output in outputs.values) {
+              await output.dispose();
+            }
           }
-          final scores = (await output.asFlattenedList()).cast<num>();
-          return decodeCardTail(scores, labels);
         } finally {
-          for (final output in outputs.values) {
-            await output.dispose();
-          }
+          await input.dispose();
         }
-      } finally {
-        await input.dispose();
       }
+      return candidate;
     } finally {
       _running = false;
     }

@@ -14,7 +14,10 @@ void main() {
         for (var index = 0; index < labels.length; index++)
           index == winner ? confidence : 0.0,
     ];
-    expect(decodeCardTail(scores([1, 1, 0, 2, 0, 2, 1, 2, 1]), labels), '055050');
+    expect(
+      decodeCardTail(scores([1, 1, 0, 2, 0, 2, 1, 2, 1]), labels),
+      '055050',
+    );
     expect(decodeCardTail(scores([1, 2, 1, 2, 1, 2]), labels), '050505');
     expect(decodeCardTail(scores([1, 2, 1, 2]), labels), isNull);
     expect(decodeCardTail(scores([1, 2, 1, 2, 1]), labels), isNull);
@@ -24,6 +27,17 @@ void main() {
       isNull,
     );
     expect(decodeCardTail(scores([1, 2, 2, 1]), labels), isNull);
+  });
+
+  test('整图识别保留卡面前缀之后的六位尾号', () {
+    final labels = ['', ...'HJZX-0123456789'.split('')];
+    final text = 'HJZX-012345';
+    final scores = [
+      for (final character in text.split(''))
+        for (final label in labels) label == character ? .99 : 0.0,
+    ];
+    expect(decodeCardTail(scores, labels, wholeImage: true), '012345');
+    expect(decodeCardTail(scores, labels), isNull);
   });
 
   test(

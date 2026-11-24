@@ -12,9 +12,9 @@ import 'ui/design.dart';
 import 'ui/job_thumbnails.dart';
 import 'ui/photo_batch_page.dart';
 import 'ui/preview_dialog.dart';
+import 'ui/print_locations_page.dart';
 import 'ui/print_recovery_dialog.dart';
 import 'ui/settings_panel.dart';
-import 'ui/print_enrollment_panel.dart';
 
 const _generatingFilter = 'GENERATING';
 
@@ -43,6 +43,9 @@ class _WorkstationState extends State<Workstation> {
   int get page => widget.selectedPage ?? _page;
   String filter = 'UNPRINTED';
   bool _viewingBatches = false;
+  bool _showQueue = false;
+  String? _queueLocation;
+  Object? _openingLocation;
   final selected = <String>{};
   DateTimeRange? dates;
   @override
@@ -114,6 +117,37 @@ class _WorkstationState extends State<Workstation> {
   }
 
   void openConfig() => _scaffoldKey.currentState?.openEndDrawer();
+
+  Future<void> _openLocation(String id, String? location) async {
+    if (_openingLocation != null) return;
+    final switched = bridge.config['activeScenicProfileId'] != id;
+    if (switched) {
+      if (printLocationSwitchLocked(bridge)) return;
+      final opening = _openingLocation = Object();
+      final activated = await perform('activateScenicProfile', [
+        {'id': id},
+      ]);
+      if (!mounted || _openingLocation != opening) return;
+      _openingLocation = null;
+      if (!activated || bridge.config['activeScenicProfileId'] != id) return;
+    }
+    setState(() {
+      if (switched) {
+        selected.clear();
+        _viewingBatches = false;
+      }
+      _queueLocation = location;
+      _showQueue = true;
+    });
+  }
+
+  void _showLocations() {
+    _openingLocation = null;
+    setState(() {
+      _queueLocation = null;
+      _showQueue = false;
+    });
+  }
 
   String get scenicLabel {
     final name = '${bridge.config['scenicName'] ?? ''}'.trim();
@@ -241,7 +275,25 @@ class _WorkstationState extends State<Workstation> {
   );
 
   Widget _embeddedShell() {
+    final showQueue = _showQueue && bridge.configured;
+    return PopScope(
+      canPop: !showQueue,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop || !showQueue) return;
+        final scaffold = _scaffoldKey.currentState;
+        if (scaffold?.isEndDrawerOpen ?? false) {
+          scaffold!.closeEndDrawer();
+        } else {
+          _showLocations();
+        }
+      },
+      child: _embeddedScaffold(showQueue),
+    );
+  }
+
+  Widget _embeddedScaffold(bool showQueue) {
     final putControlsInHeader =
+        showQueue &&
         widget.onBack != null &&
         MediaQuery.sizeOf(context).width >= 960 &&
         MediaQuery.textScalerOf(context).scale(14) <= 17;
@@ -258,11 +310,16 @@ class _WorkstationState extends State<Workstation> {
                 bottom: BorderSide(color: WorkstationStyle.line),
               ),
               leading: IconButton(
-                tooltip: '返回工作台',
+                tooltip: showQueue ? '返回打印点列表' : '返回工作台',
                 icon: const Icon(Icons.arrow_back),
                 onPressed: () {
                   _scaffoldKey.currentState?.closeEndDrawer();
-                  widget.onBack!();
+                  if (showQueue) {
+                    _showLocations();
+                  } else {
+                    _openingLocation = null;
+                    widget.onBack!();
+                  }
                 },
               ),
               title: Row(
@@ -306,12 +363,32 @@ class _WorkstationState extends State<Workstation> {
         backgroundColor: Colors.transparent,
         endDrawer: Drawer(
           width: MediaQuery.sizeOf(context).width.clamp(280, 560),
+          backgroundColor: WorkstationStyle.card,
           child: SafeArea(
-            child: SettingsPanel(
-              bridge: bridge,
-              perform: perform,
-              embedded: true,
-              session: widget.session,
+            child: Column(
+              children: [
+                ListTile(
+                  title: const Text(
+                    '打印设置',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+                  ),
+                  trailing: IconButton(
+                    tooltip: '关闭打印设置',
+                    onPressed: () =>
+                        _scaffoldKey.currentState?.closeEndDrawer(),
+                    icon: const Icon(Icons.close),
+                  ),
+                ),
+                const Divider(height: 1, color: WorkstationStyle.line),
+                Expanded(
+                  child: SettingsPanel(
+                    bridge: bridge,
+                    perform: perform,
+                    embedded: true,
+                    session: widget.session,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -321,15 +398,39 @@ class _WorkstationState extends State<Workstation> {
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(20),
-                    child: Text(
-                      bridge.error == null
-                          ? '正在连接打印内核…'
-                          : appErrorMessage(bridge.error!),
-                      textAlign: TextAlign.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          bridge.error == null
+                              ? '正在连接打印内核…'
+                              : appErrorMessage(bridge.error!),
+                          textAlign: TextAlign.center,
+                        ),
+                        if (bridge.storageUnavailable)
+                          TextButton(
+                            onPressed: widget.session?.startPrinting ??
+                                () => bridge.start(),
+                            child: const Text('重新检查打印存储'),
+                          ),
+                      ],
                     ),
                   ),
                 )
-              : _embeddedWorkspace(putControlsInHeader),
+              : IndexedStack(
+                  sizing: StackFit.expand,
+                  index: showQueue ? 1 : 0,
+                  children: [
+                    PrintLocationsPage(
+                      bridge: bridge,
+                      settingsButton: _printSettingsButton(),
+                      onOpen: _openLocation,
+                      perform: perform,
+                      session: widget.session,
+                    ),
+                    if (showQueue) _embeddedWorkspace(putControlsInHeader),
+                  ],
+                ),
         ),
       ),
     );
@@ -373,9 +474,7 @@ class _WorkstationState extends State<Workstation> {
               ),
             ),
           if (!putControlsInHeader) const SizedBox(height: 8),
-          Expanded(
-            child: bridge.configured ? jobsView(compact: true) : _needConfig(),
-          ),
+          Expanded(child: jobsView(compact: true)),
         ],
       ),
     );
@@ -383,15 +482,15 @@ class _WorkstationState extends State<Workstation> {
 
   Widget _printSettingsButton() => TextButton.icon(
     key: const ValueKey('print-settings-button'),
-    onPressed: openConfig,
+    onPressed: bridge.configured ? openConfig : null,
     style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
     icon: const Icon(Icons.tune_outlined, size: 18),
     label: const Text('打印设置'),
   );
 
   Widget _scenicControl() => TextButton(
-    key: const ValueKey('print-open-config'),
-    onPressed: openConfig,
+    key: const ValueKey('print-open-locations'),
+    onPressed: _showLocations,
     style: TextButton.styleFrom(
       foregroundColor: WorkstationStyle.ink,
       padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -407,12 +506,13 @@ class _WorkstationState extends State<Workstation> {
         const SizedBox(width: 6),
         Flexible(
           child: Text(
-            bridge.configured ? scenicLabel : '连接景区',
+            _queueLocation ?? scenicLabel,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        const Icon(Icons.keyboard_arrow_down, size: 18),
+        const SizedBox(width: 6),
+        const Icon(Icons.list_alt_outlined, size: 18),
       ],
     ),
   );
@@ -473,65 +573,6 @@ class _WorkstationState extends State<Workstation> {
       ],
     );
   }
-
-  Widget _needConfig() => DecoratedBox(
-    decoration: WorkstationStyle.surface(),
-    child: LayoutBuilder(
-      builder: (context, bounds) => SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(22, 20, 22, 24),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            minHeight: (bounds.maxHeight - 44).clamp(0, double.infinity),
-            maxWidth: 480,
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 72,
-                height: 72,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xff69489a), Color(0xff271b45)],
-                  ),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Icon(
-                  Icons.print_outlined,
-                  color: Colors.white,
-                  size: 34,
-                ),
-              ),
-              const SizedBox(height: 22),
-              const Text(
-                '开通打印工作台',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w800,
-                  color: WorkstationStyle.ink,
-                ),
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                '选择景区并提交申请。运营通过后，在本机刷新申请状态即可开通。',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: WorkstationStyle.muted,
-                  height: 1.55,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 24),
-              PrintEnrollmentPanel(bridge: bridge, session: widget.session),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
 
   Widget header() => Container(
     color: Colors.white,

@@ -103,9 +103,14 @@ class UploadTaskList extends StatelessWidget {
     final preparing = waiting.keys
         .where((source) => !unordered.contains(source))
         .toList();
+    final transferJobs = batchTimeline == null
+        ? jobs
+        : jobs.where(
+            (job) => job.state != 'ingested' && job.state != 'grouped',
+          );
     // Group nearby file timestamps for display while preserving queue order.
     final dated = <List<AutoJob>>[];
-    for (final job in jobs) {
+    for (final job in transferJobs) {
       final stamp = _fileStamp(job.signature);
       final prior = dated.isEmpty
           ? null
@@ -123,7 +128,7 @@ class UploadTaskList extends StatelessWidget {
       for (final group in dated)
         _FileSpan(group.map((job) => _fileStamp(job.signature))),
     ];
-    final empty = waiting.isEmpty && needingOrder.isEmpty && jobs.isEmpty;
+    final empty = waiting.isEmpty && needingOrder.isEmpty && dated.isEmpty;
     final incoming = <Widget>[
       Wrap(
         spacing: 12,
@@ -276,28 +281,24 @@ class UploadTaskList extends StatelessWidget {
     return SliverMainAxisGroup(
       slivers: [
         SliverList.list(children: incoming),
-        if (batchTimeline != null)
-          const SliverToBoxAdapter(child: SizedBox(height: 12)),
-        ?batchTimeline,
         SliverList.builder(
           itemCount: dated.length,
           itemBuilder: (context, group) => Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (group > 0 || batchTimeline == null)
-                _TimeGap(
-                  between:
-                      (group > 0
-                              ? jobSpans[group - 1]
-                              : preparing.isNotEmpty
-                              ? waitingSpan
-                              : orderSpan)
-                          .gapTo(jobSpans[group]),
-                ),
+              _TimeGap(
+                between:
+                    (group > 0
+                            ? jobSpans[group - 1]
+                            : preparing.isNotEmpty
+                            ? waitingSpan
+                            : orderSpan)
+                        .gapTo(jobSpans[group]),
+              ),
               _TaskGroup(
                 key: ObjectKey(dated[group].last),
                 stamp: jobSpans[group].latest,
-                title: '已入队任务',
+                title: '上传任务',
                 note: '最近入队在前',
                 count: dated[group].length,
                 photoBuilder: (context, index) {
@@ -312,6 +313,9 @@ class UploadTaskList extends StatelessWidget {
             ],
           ),
         ),
+        if (batchTimeline != null)
+          const SliverToBoxAdapter(child: SizedBox(height: 12)),
+        ?batchTimeline,
       ],
     );
   }

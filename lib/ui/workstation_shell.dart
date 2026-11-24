@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart';
 
@@ -27,6 +28,7 @@ class WorkstationShell extends StatefulWidget {
 }
 
 class _WorkstationShellState extends State<WorkstationShell> {
+  late final _packageInfo = PackageInfo.fromPlatform();
   WorkModule? _module;
 
   String get _uploadStatus {
@@ -199,6 +201,31 @@ class _WorkstationShellState extends State<WorkstationShell> {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
+                                FutureBuilder<PackageInfo>(
+                                  future: _packageInfo,
+                                  builder: (context, snapshot) {
+                                    if (snapshot.connectionState !=
+                                        ConnectionState.done) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    final info = snapshot.data;
+                                    final version = info?.version.trim() ?? '';
+                                    final build =
+                                        info?.buildNumber.trim() ?? '';
+                                    return Padding(
+                                      padding: const EdgeInsets.only(right: 8),
+                                      child: Text(
+                                        version.isEmpty || build.isEmpty
+                                            ? '版本不可用'
+                                            : 'v$version+$build',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(color: Colors.white70),
+                                      ),
+                                    );
+                                  },
+                                ),
                                 UpdateButton(session: session),
                                 if (session.identity case final identity?)
                                   PopupMenuButton<String>(

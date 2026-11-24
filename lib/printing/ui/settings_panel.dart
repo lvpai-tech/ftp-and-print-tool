@@ -242,33 +242,35 @@ class _SettingsPanelState extends State<SettingsPanel> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text(
-                      '景区档案',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
+                    if (!widget.embedded) ...[
+                      const Text(
+                        '景区档案',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      widget.bridge.configured
-                          ? '可申请多个景区，打印机路由共用。打印中或自动打印开启时不能切换。'
-                          : '通过审批并激活后，可选择本机打印机。',
-                      style: const TextStyle(color: muted),
-                    ),
-                    const SizedBox(height: 16),
-                    if (widget.bridge.configured) _profileList(),
-                    PrintEnrollmentPanel(
-                      bridge: widget.bridge,
-                      session: widget.session,
-                    ),
+                      const SizedBox(height: 8),
+                      Text(
+                        widget.bridge.configured
+                            ? '可申请多个景区，打印机路由共用。打印中或自动打印开启时不能切换。'
+                            : '通过审批并激活后，可选择本机打印机。',
+                        style: const TextStyle(color: muted),
+                      ),
+                      const SizedBox(height: 16),
+                      if (widget.bridge.configured) _profileList(),
+                      PrintEnrollmentPanel(
+                        bridge: widget.bridge,
+                        session: widget.session,
+                      ),
+                    ],
                     if (widget.bridge.configured) ...[
-                      const SizedBox(height: 28),
+                      if (!widget.embedded) const SizedBox(height: 28),
                       Row(
                         children: [
                           Expanded(
                             child: Text(
-                              widget.embedded ? '为照片选择打印机' : '打印机路由',
+                              '打印机路由',
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w700,

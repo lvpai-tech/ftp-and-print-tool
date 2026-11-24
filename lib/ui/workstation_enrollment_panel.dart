@@ -45,9 +45,18 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
     session: widget.session,
   );
   final _applications = <String, _Application>{};
+  final _history = ValueNotifier<List<MapEntry<String, _Application>>>(
+    const [],
+  );
   String? _error;
   bool _applying = false;
-  bool _showApplications = false;
+  bool _historyOpen = false;
+
+  void _updateApplications(VoidCallback update) => setState(() {
+    update();
+    _history.value = _applications.entries.toList()
+      ..sort((a, b) => b.value.sortTime.compareTo(a.value.sortTime));
+  });
 
   @override
   void initState() {
@@ -59,7 +68,7 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
     try {
       final applications = await widget.store.loadEnrollments(widget.api);
       if (!mounted) return;
-      setState(() {
+      _updateApplications(() {
         _error = null;
         for (final local in applications) {
           final draft = local['draft'] as Map<String, dynamic>;
@@ -107,12 +116,12 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
 
   Future<void> _refresh(String id, _Application app) async {
     if (app.busy || !mounted) return;
-    setState(() => app.busy = true);
+    _updateApplications(() => app.busy = true);
     try {
       final status = await _enrollment.refresh(
         id,
         onApproved: (status) {
-          if (mounted) setState(() => app.result = status);
+          if (mounted) _updateApplications(() => app.result = status);
         },
       );
       if (!mounted) return;
@@ -127,7 +136,7 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
       if (!mounted) return;
       app.error = error is EnrollmentError ? error.message : '连接或保存机位申请失败，请重试';
     } finally {
-      if (mounted) setState(() => app.busy = false);
+      if (mounted) _updateApplications(() => app.busy = false);
     }
   }
 
@@ -152,11 +161,9 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
         draft.location,
         createdAt: DateTime.now(),
       );
-      setState(() {
-        _applications[id] = app;
-        _showApplications = true;
-      });
+      _updateApplications(() => _applications[id] = app);
       unawaited(_refresh(id, app));
+      unawaited(_openHistory());
     } catch (_) {
       if (mounted) setState(() => _error = '无法保存新申请，请检查系统安全存储权限');
     } finally {
@@ -165,13 +172,13 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
   }
 
   Future<void> _dismiss(String id, _Application app) async {
-    setState(() => app.busy = true);
+    _updateApplications(() => app.busy = true);
     try {
       await widget.store.saveEnrollment(widget.api, id, null);
-      if (mounted) setState(() => _applications.remove(id));
+      if (mounted) _updateApplications(() => _applications.remove(id));
     } catch (_) {
       if (mounted) {
-        setState(() {
+        _updateApplications(() {
           app.busy = false;
           app.error = '无法移除本机申请记录';
         });
@@ -182,7 +189,59 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
   @override
   void dispose() {
     _client.close();
+    _history.dispose();
     super.dispose();
+  }
+
+  Future<void> _openHistory() async {
+    if (_historyOpen) return;
+    _historyOpen = true;
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => ValueListenableBuilder(
+          valueListenable: _history,
+          builder: (context, applications, _) => WorkstationFormDialog(
+            title: '机位申请记录',
+            width: 580,
+            content: applications.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Center(child: Text('暂无机位申请记录')),
+                  )
+                : Column(
+                    spacing: 12,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final entry in applications)
+                        _row(entry.key, entry.value),
+                    ],
+                  ),
+            actions: [
+              if (applications.isNotEmpty)
+                OutlinedButton.icon(
+                  onPressed:
+                      applications.any(
+                        (entry) =>
+                            !entry.value.busy &&
+                            entry.value.result?.terminal != true,
+                      )
+                      ? _refreshAll
+                      : null,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('刷新全部申请'),
+                ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('关闭'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      _historyOpen = false;
+    }
   }
 
   Widget _row(String id, _Application app) {
@@ -196,57 +255,51 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
       'EXPIRED' => '已过期',
       _ => app.busy ? '正在提交' : '待提交',
     };
-    return Padding(
+    return DecoratedBox(
       key: ValueKey(id),
-      padding: const EdgeInsets.only(top: 12),
-      child: DecoratedBox(
-        decoration: WorkstationStyle.surface(),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                [app.scenic, app.location].join(' · '),
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-              Text(label),
-              if (status?.binding?['stationCode'] case final String code)
-                Text('机位编码 $code'),
-              if (status?.reason case final String reason) Text(reason),
-              if (app.error case final String error)
-                Text(
-                  error,
-                  style: const TextStyle(color: WorkstationStyle.bad),
+      decoration: WorkstationStyle.surface(),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              [app.scenic, app.location].join(' · '),
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            Text(label),
+            if (status?.binding?['stationCode'] case final String code)
+              Text('机位编码 $code'),
+            if (status?.reason case final String reason) Text(reason),
+            if (app.error case final String error)
+              Text(error, style: const TextStyle(color: WorkstationStyle.bad)),
+            Wrap(
+              spacing: 8,
+              children: [
+                TextButton(
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: id));
+                    if (mounted) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(const SnackBar(content: Text('已复制申请编号')));
+                    }
+                  },
+                  child: const Text('复制申请编号'),
                 ),
-              Wrap(
-                spacing: 8,
-                children: [
+                if (status?.terminal == true)
                   TextButton(
-                    onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: id));
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('已复制申请编号')),
-                        );
-                      }
-                    },
-                    child: const Text('复制申请编号'),
+                    onPressed: app.busy ? null : () => _dismiss(id, app),
+                    child: const Text('移除记录'),
+                  )
+                else
+                  TextButton(
+                    onPressed: app.busy ? null : () => _refresh(id, app),
+                    child: const Text('刷新申请状态'),
                   ),
-                  if (status?.terminal == true)
-                    TextButton(
-                      onPressed: app.busy ? null : () => _dismiss(id, app),
-                      child: const Text('移除记录'),
-                    )
-                  else
-                    TextButton(
-                      onPressed: app.busy ? null : () => _refresh(id, app),
-                      child: const Text('刷新申请状态'),
-                    ),
-                ],
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -255,8 +308,6 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    final applications = _applications.entries.toList()
-      ..sort((a, b) => b.value.sortTime.compareTo(a.value.sortTime));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -271,12 +322,9 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
             ),
             TextButton(onPressed: widget.onManual, child: const Text('手动绑定机位')),
             TextButton.icon(
-              onPressed: () =>
-                  setState(() => _showApplications = !_showApplications),
-              icon: Icon(
-                _showApplications ? Icons.expand_less : Icons.expand_more,
-              ),
-              label: Text('申请记录（${applications.length}）'),
+              onPressed: _openHistory,
+              icon: const Icon(Icons.history),
+              label: Text('申请记录（${_applications.length}）'),
             ),
           ],
         ),
@@ -288,31 +336,6 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
               TextButton(onPressed: _load, child: const Text('重试')),
             ],
           ),
-        if (_showApplications) ...[
-          if (applications.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Text('暂无机位申请记录'),
-            )
-          else ...[
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed:
-                    applications.any(
-                      (entry) =>
-                          !entry.value.busy &&
-                          entry.value.result?.terminal != true,
-                    )
-                    ? _refreshAll
-                    : null,
-                icon: const Icon(Icons.refresh),
-                label: const Text('刷新全部申请'),
-              ),
-            ),
-            for (final entry in applications) _row(entry.key, entry.value),
-          ],
-        ],
       ],
     );
   }

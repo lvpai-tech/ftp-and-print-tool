@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -7,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:lvpai_ftp_client/printing/app.dart';
 import 'package:lvpai_ftp_client/printing/print_bridge.dart';
+import 'package:lvpai_ftp_client/printing/print_enrollment.dart';
 import 'package:lvpai_ftp_client/ui/workstation_form_dialog.dart';
 
 class ControlledBridge extends PrintBridge {
@@ -159,7 +161,183 @@ class GeneratingQueueBridge extends ControlledBridge {
   }
 }
 
+class LocationSwitchBridge extends ControlledBridge {
+  bool rejectSwitch = false;
+
+  LocationSwitchBridge() {
+    snapshot['config']['scenicProfiles'].add({
+      'id': 'other',
+      'scenicName': '另一景区',
+      'scenicCode': 'NEXT',
+    });
+    snapshot['state'] = {...state, 'autoPrint': true};
+  }
+
+  @override
+  Future<dynamic> call(String method, [List<dynamic> args = const []]) {
+    if (method == 'autoPrint') {
+      snapshot['state']['autoPrint'] = args.single;
+      notifyListeners();
+    }
+    if (method == 'activateScenicProfile') {
+      if (rejectSwitch) return Future.error(StateError('打印权限已撤销'));
+      snapshot['config']['activeScenicProfileId'] = args.single['id'];
+      snapshot['config']['scenicName'] = '另一景区';
+      notifyListeners();
+    }
+    return super.call(method, args);
+  }
+}
+
+Future<void> openCurrentPrintLocation(WidgetTester tester) async {
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const ValueKey('print-location-default')));
+  await tester.pumpAndSettle();
+}
+
 void main() {
+  testWidgets('打印点使用同一授权的点位名称，并在自动打印时只允许进入当前点', (tester) async {
+    tester.view.physicalSize = const Size(375, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    FlutterSecureStorage.setMockInitialValues({
+      '${PrintEnrollment.prefix}default': jsonEncode({
+        'id': 'default',
+        'location': '一楼取片区',
+        'createdAt': '2026-11-24T00:00:00Z',
+      }),
+    });
+    final bridge = LocationSwitchBridge();
+    addTearDown(bridge.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: const TextScaler.linear(1.4),
+            disableAnimations: true,
+          ),
+          child: child!,
+        ),
+        home: Workstation(bridge: bridge, embedded: true, onBack: () {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final other = find.byKey(const ValueKey('print-location-other'));
+    expect(find.text('打印点'), findsOneWidget);
+    expect(find.text('本机已开通 2 个打印点'), findsOneWidget);
+    expect(find.text('一楼取片区'), findsOneWidget);
+    expect(find.text('隔离测试景区'), findsOneWidget);
+    expect(find.text('另一景区 · NEXT'), findsOneWidget);
+    expect(find.text('请在当前打印点关闭自动打印后再切换。'), findsOneWidget);
+    expect(find.text('待打印'), findsNothing);
+    await tester.tap(other);
+    await tester.pumpAndSettle();
+    expect(bridge.calls, isNot(contains('activateScenicProfile')));
+    await openCurrentPrintLocation(tester);
+    expect(find.text('自动打印 开启'), findsOneWidget);
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('返回打印点列表'));
+    await tester.pumpAndSettle();
+    bridge.rejectSwitch = true;
+    await tester.tap(other);
+    await tester.pumpAndSettle();
+    expect(find.text('打印权限已撤销'), findsOneWidget);
+    await tester.tap(find.text('知道了'));
+    await tester.pumpAndSettle();
+    expect(find.text('待打印'), findsNothing);
+    bridge.rejectSwitch = false;
+    await tester.tap(other);
+    await tester.pumpAndSettle();
+    expect(bridge.arguments['activateScenicProfile'], [
+      {'id': 'other'},
+    ]);
+    expect(find.text('待打印'), findsOneWidget);
+    expect(find.text('另一景区'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('print-open-locations')));
+    await tester.pumpAndSettle();
+    final current = find.byKey(const ValueKey('print-location-other'));
+    expect(
+      find.descendant(of: current, matching: find.text('当前使用')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('首次进入打印点列表可申请或查记录', (tester) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final bridge = ControlledBridge(configured: false)
+      ..snapshot['config'] = <String, dynamic>{};
+    await tester.pumpWidget(
+      MaterialApp(home: Workstation(bridge: bridge, embedded: true)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('还没有打印点'), findsOneWidget);
+    expect(find.text('申请打印权限'), findsOneWidget);
+    await tester.tap(find.text('申请记录（0）'));
+    await tester.pumpAndSettle();
+    expect(find.text('打印申请记录'), findsOneWidget);
+    expect(find.text('暂无打印申请记录'), findsOneWidget);
+    expect(find.text('待打印'), findsNothing);
+    await tester.tap(find.widgetWithText(FilledButton, '关闭'));
+    await tester.pumpAndSettle();
+    expect(find.text('暂无打印申请记录'), findsNothing);
+    expect(find.text('还没有打印点'), findsOneWidget);
+  });
+
+  testWidgets('短窗口可滚动查看打印申请记录，关闭按钮位置固定', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(375, 300);
+    addTearDown(tester.view.reset);
+    FlutterSecureStorage.setMockInitialValues({
+      for (var index = 1; index <= 6; index++)
+        '${PrintEnrollment.prefix}print-$index': jsonEncode({
+          'id': 'print-$index',
+          'scenicName': '测试景区',
+          'location': '点位 $index',
+          'status': 'PENDING',
+          'createdAt': DateTime.utc(2026, 11, index).toIso8601String(),
+        }),
+    });
+    addTearDown(() => FlutterSecureStorage.setMockInitialValues({}));
+    final bridge = ControlledBridge();
+    addTearDown(bridge.dispose);
+    await tester.pumpWidget(
+      MaterialApp(home: Workstation(bridge: bridge, embedded: true)),
+    );
+    await tester.pumpAndSettle();
+
+    final open = find.text('申请记录（6）');
+    final printPoint = find.byKey(const ValueKey('print-location-default'));
+    final printPointBounds = tester.getRect(printPoint);
+    final newest = find.text('测试景区 · 点位 6');
+    final oldest = find.text('测试景区 · 点位 1');
+    expect(newest, findsNothing);
+    await tester.tap(open);
+    await tester.pumpAndSettle();
+    final dialog = find.byType(WorkstationFormDialog);
+    final close = find.widgetWithText(FilledButton, '关闭');
+    final closeBounds = tester.getRect(close);
+    expect(newest.hitTestable(), findsOneWidget);
+    expect(oldest.hitTestable(), findsNothing);
+    await tester.scrollUntilVisible(
+      oldest,
+      100,
+      scrollable: find
+          .descendant(of: dialog, matching: find.byType(Scrollable))
+          .first,
+    );
+    expect(oldest.hitTestable(), findsOneWidget);
+    expect(tester.getRect(close), closeBounds);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(dialog, findsNothing);
+    expect(open.hitTestable(), findsOneWidget);
+    expect(tester.getRect(printPoint), printPointBounds);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final (width, table) in [
     (375.0, false),
     (760.0, false),
@@ -175,7 +353,7 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(home: Workstation(bridge: bridge, embedded: true)),
       );
-      await tester.pumpAndSettle();
+      await openCurrentPrintLocation(tester);
       bridge.calls.clear();
       final queueColumns = {
         '取片卡尾号 / 工单': '取片卡尾号 / 小票',
@@ -288,7 +466,8 @@ void main() {
   testWidgets('打印申请景区使用浮层，点外收起且不移动点位输入框', (tester) async {
     FlutterSecureStorage.setMockInitialValues({});
     addTearDown(() => FlutterSecureStorage.setMockInitialValues({}));
-    final bridge = ControlledBridge(configured: false);
+    final bridge = ControlledBridge(configured: false)
+      ..snapshot['config'] = <String, dynamic>{};
     addTearDown(bridge.dispose);
     Map<String, dynamic>? submitted;
     final client = MockClient((request) async {
@@ -299,18 +478,29 @@ void main() {
           {'id': '2', 'name': '景区乙'},
           {'id': '3', 'name': '景区丙'},
         ];
-      } else {
+      } else if (request.method == 'POST') {
         expect(
           request.url.path,
           '/api/operation/print-workstation-enrollment/applications',
         );
-        expect(request.method, 'POST');
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         submitted = body;
         data = {
           'id': body['requestId'],
           'scenicId': body['scenicId'],
           'status': 'PENDING',
+        };
+      } else {
+        expect(request.method, 'GET');
+        expect(
+          request.url.path,
+          '/api/operation/print-workstation-enrollment/applications/${submitted!['requestId']}',
+        );
+        data = {
+          'id': submitted!['requestId'],
+          'scenicId': submitted!['scenicId'],
+          'status': 'REJECTED',
+          'reviewReason': '请核对打印点名称',
         };
       }
       return http.Response(
@@ -320,7 +510,9 @@ void main() {
       );
     });
     await http.runWithClient(() async {
-      await tester.pumpWidget(MaterialApp(home: Workstation(bridge: bridge)));
+      await tester.pumpWidget(
+        MaterialApp(home: Workstation(bridge: bridge, embedded: true)),
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.text('申请打印权限'));
       // The progress indicator behind the dialog animates until it closes.
@@ -376,10 +568,20 @@ void main() {
       await tester.tap(submit);
       await tester.pumpAndSettle();
 
-      expect(dialog, findsNothing);
+      expect(submit, findsNothing);
+      expect(dialog, findsOneWidget);
+      expect(find.text('打印申请记录'), findsOneWidget);
       expect(submitted, containsPair('scenicId', '2'));
       expect(submitted, containsPair('location', '东门前台'));
       expect(find.text('待审核'), findsOneWidget);
+      await tester.tap(find.text('刷新申请状态'));
+      await tester.pumpAndSettle();
+      expect(find.text('已驳回'), findsOneWidget);
+      expect(find.text('请核对打印点名称'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, '关闭'));
+      await tester.pumpAndSettle();
+      expect(dialog, findsNothing);
+      expect(find.text('申请记录（1）'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     }, () => client);
@@ -391,7 +593,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(home: Workstation(bridge: bridge, embedded: true)),
     );
-    await tester.pumpAndSettle();
+    await openCurrentPrintLocation(tester);
 
     final tab = find.widgetWithText(TextButton, '查看批次');
     final printed = find.widgetWithText(TextButton, '已打印');
@@ -443,7 +645,7 @@ void main() {
         home: Workstation(bridge: bridge, embedded: true, onBack: () {}),
       ),
     );
-    await tester.pumpAndSettle();
+    await openCurrentPrintLocation(tester);
     final tail = find.text('4987');
     final top = tester.getTopLeft(tail).dy;
     expect(find.text('自动打印 关闭'), findsOneWidget);
@@ -491,7 +693,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(home: Workstation(bridge: bridge, embedded: true)),
     );
-    await tester.pumpAndSettle();
+    await openCurrentPrintLocation(tester);
     await tester.tap(find.text('打印本单'));
     await tester.pumpAndSettle();
     expect(bridge.arguments['printJobs'], [
@@ -571,7 +773,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(home: Workstation(bridge: bridge, embedded: true)),
     );
-    await tester.pumpAndSettle();
+    await openCurrentPrintLocation(tester);
     expect(find.text('打印本单'), findsNothing);
     await tester.tap(find.text('核对打印'));
     await tester.pumpAndSettle();
@@ -610,7 +812,7 @@ void main() {
         home: Workstation(bridge: bridge, embedded: true, onBack: () {}),
       ),
     );
-    await tester.pumpAndSettle();
+    await openCurrentPrintLocation(tester);
     expect(find.text('缺纸'), findsOneWidget);
     await tester.tap(find.byTooltip('处理异常'));
     await tester.pumpAndSettle();

@@ -10,6 +10,7 @@ import 'package:lvpai_ftp_client/ui/transfer_page.dart';
 import 'package:lvpai_ftp_client/workstation_session.dart';
 import 'package:lvpai_ftp_client/workstation_storage.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:tray_manager/tray_manager.dart';
 
 import 'printing_workstation_test.dart' show ControlledBridge;
@@ -53,7 +54,16 @@ class WorkstationBridge extends ControlledBridge {
 }
 
 void main() {
-  setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+  setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
+    PackageInfo.setMockInitialValues(
+      appName: '帧集快拍',
+      packageName: 'ai.lvpai.lvpai_ftp_client',
+      version: '2.3.4',
+      buildNumber: '57',
+      buildSignature: '',
+    );
+  });
 
   testWidgets('上传存储检查失败时首页提示，重试通过后开放机位申请', (tester) async {
     var accessible = false;
@@ -78,6 +88,27 @@ void main() {
     expect(find.text('申请机位'), findsOneWidget);
   });
 
+  testWidgets('桌面最小窗口在检查更新左侧显示实际版本和构建号', (tester) async {
+    tester.view.physicalSize = const Size(820, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      PhotoFtpApp(session: WorkstationSession(WorkstationBridge())),
+    );
+    await tester.pumpAndSettle();
+
+    final version = find.text('v2.3.4+57');
+    final update = find.text('检查更新');
+    expect(version, findsOneWidget);
+    expect(
+      tester.getRect(version).right,
+      lessThan(tester.getRect(update).left),
+    );
+    expect(tester.getCenter(version).dy, tester.getCenter(update).dy);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final width in [420.0, 820.0, 1280.0, 1600.0]) {
     testWidgets('工作台 ${width.toInt()}：首页进出并保留上传页', (tester) async {
       tester.view.physicalSize = Size(width, 900);
@@ -91,6 +122,8 @@ void main() {
       expect(find.text('照片工作台'), findsOneWidget);
       expect(find.text('帧集快拍'), findsOneWidget);
       expect(find.text('一分钟拍大片'), findsOneWidget);
+      final version = find.text('v2.3.4+57');
+      expect(version, findsOneWidget);
       final background = find.image(
         const AssetImage('assets/branding/workstation-scenic.webp'),
       );
@@ -102,12 +135,21 @@ void main() {
       await open(tester, 'open-upload');
       expect(find.byType(TransferPage), findsOneWidget);
       expect(find.text('申请机位'), findsOneWidget);
+      expect(version, findsNothing);
       final transferState = tester.state(find.byType(TransferPage));
       await tester.tap(find.byTooltip('返回工作台'));
       await tester.pumpAndSettle();
       await open(tester, 'open-print');
+      expect(find.text('打印点'), findsOneWidget);
+      expect(find.text('#9007199254740993'), findsNothing);
+      await open(tester, 'print-location-default');
       expect(find.text('#9007199254740993'), findsOneWidget);
+      expect(version, findsNothing);
+      await tester.tap(find.byTooltip('返回打印点列表'));
+      await tester.pumpAndSettle();
       await open(tester, 'print-settings-button');
+      expect(find.text('景区档案'), findsNothing);
+      await tester.ensureVisible(keyed('print-inspect-printers'));
       await tester.tap(keyed('print-inspect-printers'));
       await tester.pumpAndSettle();
       expect(find.text('隔离测试打印机：正常（0 项任务）'), findsOneWidget);
@@ -116,6 +158,7 @@ void main() {
       expect(bridge.calls, isNot(contains('autoPrint')));
       await tester.tap(find.byTooltip('返回工作台'));
       await tester.pumpAndSettle();
+      expect(version, findsOneWidget);
       await open(tester, 'open-upload');
       expect(tester.state(find.byType(TransferPage)), same(transferState));
       expect(tester.takeException(), isNull);
@@ -167,7 +210,7 @@ void main() {
     await tester.pumpWidget(PhotoFtpApp(session: WorkstationSession(bridge)));
     await tester.pumpAndSettle();
     await open(tester, 'open-print');
-    await open(tester, 'print-open-config');
+    await open(tester, 'print-settings-button');
     final field = find.byType(DropdownField<String>).first;
     final arrow = find.descendant(
       of: field,
@@ -232,7 +275,11 @@ void main() {
     await tester.ensureVisible(keyed('open-print'));
     await tester.tap(keyed('open-print'));
     await tester.pump();
+    expect(find.text('当前正在打印，完成后可切换打印点。'), findsOneWidget);
+    await open(tester, 'print-location-default');
     expect(find.text('#9007199254740993'), findsOneWidget);
+    await tester.tap(find.byTooltip('返回打印点列表'));
+    await tester.pump();
     await tester.tap(find.byTooltip('返回工作台'));
     await tester.pump();
     await open(tester, 'open-upload');

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -94,6 +95,181 @@ void main() {
       expect(fixture.noticeAttempts, greaterThan(0));
       expect(fixture.notices, isEmpty);
       expect(fixture.uploaded, contains(uploader.jobs.single.id));
+    });
+  });
+
+  test('重复结束照在正式上传前和重启后都复用原上报与上传', () async {
+    final fixture = await _QueueFixture.open();
+    final uploader = fixture.uploader();
+    await fixture.run(() async {
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+      await File(p.join(fixture.inbox.path, 'tourist.png'))
+          .writeAsBytes(await _png());
+      await _until(() => fixture.prepared.length == 1, '游客照开始上传');
+      final ending = await samples.photo(
+        fixture.inbox,
+        'ending',
+        secret: 'ABCD12345678',
+      );
+      await _until(() => fixture.noticeAttempts == 1, '首次结束照上报');
+      final duplicate = await ending.copy(
+        p.join(fixture.inbox.path, 'duplicate.png'),
+      );
+      await _until(
+        () => uploader.waitingSources.containsKey(duplicate.path),
+        '发现复制的结束照',
+      );
+      await _until(() => uploader.waitingSources.isEmpty, '结束照队列处理完毕');
+      expect(fixture.noticeAttempts, 1);
+      expect(uploader.jobs, hasLength(2));
+
+      await ending.delete();
+      await duplicate.delete();
+      fixture.ingested.add(fixture.prepared.first);
+      await _until(() => fixture.uploaded.length == 2, '仅上传一张结束照');
+      final endingId = fixture.notices.keys.single;
+      expect(fixture.uploaded, contains(endingId));
+      fixture.ingested.add(endingId);
+      await _until(() => uploader.queueDrained, '原片和结束照已入库');
+
+      await uploader.stop();
+      await samples.photo(fixture.inbox, 'replayed', secret: 'ABCD12345678');
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+      expect(uploader.settling, 1);
+      await _until(() => uploader.queueDrained, '重启后识别重复结束照');
+      expect(fixture.prepared, hasLength(2));
+      expect(fixture.noticeAttempts, 1);
+    });
+  });
+
+  test('原片删除后续传，换监听目录改名重放复用服务器会话', () async {
+    final fixture = await _QueueFixture.open();
+    final original = File(p.join(fixture.inbox.path, 'camera.png'));
+    final uploader = fixture.uploader(
+      validateImage: (snapshot) async {
+        if (await original.exists()) await original.delete();
+        return img.decodePng(await snapshot.readAsBytes()) != null;
+      },
+    );
+    await fixture.run(() async {
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+      final image = img.Image(width: 12, height: 12, numChannels: 3);
+      final bytes = img.encodePng(image, level: 0);
+      image.setPixelRgb(0, 0, 255, 0, 0);
+      final replacement = img.encodePng(image, level: 0);
+      expect(replacement.length, bytes.length);
+      await original.writeAsBytes(bytes);
+      fixture.failNextUpload = true;
+      await _until(
+        () =>
+            uploader.jobs.singleOrNull?.state == 'pending' &&
+            uploader.jobs.single.attempts == 1,
+        '原片等待重试',
+      );
+      final id = uploader.jobs.single.id;
+      expect(await original.exists(), isFalse);
+      await uploader.stop();
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+      await _until(() => fixture.uploaded.contains(id), '从待传副本续传');
+      fixture.ingested.add(id);
+      await _until(() => uploader.queueDrained, '确认入库');
+
+      final movedInbox = await Directory(
+        p.join(fixture.scratch.path, 'new-inbox'),
+      ).create();
+      final replayed = await File(p.join(movedInbox.path, 'renamed.png'))
+          .writeAsBytes(bytes);
+      final modified = DateTime.utc(2026, 11, 24);
+      await replayed.setLastModified(modified);
+      await uploader.stop();
+      await uploader.start(
+        movedInbox,
+        null,
+        cosProfile: fixture.profile,
+        includeExisting: true,
+      );
+      await _until(() => uploader.queueDrained, '查询到原服务器会话');
+      expect(uploader.jobs.single.id, id);
+      expect(fixture.prepared.toSet(), {id});
+      expect(fixture.uploaded, {id});
+
+      await replayed.writeAsBytes(replacement);
+      await replayed.setLastModified(modified);
+      final stat = await replayed.stat();
+      expect(stat.size, bytes.length);
+      expect(stat.modified.toUtc(), modified);
+      await _until(() => fixture.uploaded.length == 2, '同名不同内容上传');
+      expect(uploader.jobs.first.source, replayed.path);
+      expect(uploader.jobs.first.id, isNot(id));
+    });
+  });
+
+  test('旧日志的结束照上报仍关联原会话，历史哈希过滤改名重放', () async {
+    final fixture = await _QueueFixture.open();
+    final uploader = fixture.uploader();
+    await fixture.run(() async {
+      final sample = await samples.photo(
+        fixture.inbox,
+        'ending',
+        secret: 'ABCD12345678',
+      );
+      final ending = File(p.normalize(sample.path));
+      final digest = sha256.convert(await ending.readAsBytes()).toString();
+      final oldRequest = sha256
+          .convert(utf8.encode('ending.png\u0000$digest'))
+          .toString();
+      final queueKey = sha256
+          .convert(
+            utf8.encode(
+              '${fixture.inbox.path}\u0000cos\u0000${fixture.profile.queueTarget}',
+            ),
+          )
+          .toString();
+      final journal = File(
+        p.join(uploader.storage.path, queueKey, 'queue.jsonl'),
+      );
+      await journal.parent.create(recursive: true);
+      final stat = await ending.stat();
+      final events = [
+        {'type': 'initialized', 'ignored': {}},
+        {'type': 'noticeBaseline', 'files': {}},
+        {
+          'type': 'arrival',
+          'groups': [
+            [ending.path],
+          ],
+        },
+        {
+          'type': 'noticeChecked',
+          'source': ending.path,
+          'signature': '${stat.size}:${stat.modified.microsecondsSinceEpoch}',
+        },
+      ];
+      await journal.writeAsString('${events.map(jsonEncode).join('\n')}\n');
+      fixture.notices[oldRequest] = 'ABCD12345678';
+
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+      await _until(
+        () => fixture.uploaded.contains(oldRequest),
+        '续用旧结束照请求',
+        describe: () =>
+            'expected=$oldRequest uploaded=${fixture.uploaded} '
+            'jobs=${uploader.jobs.map((job) => job.toJson())} '
+            'waiting=${uploader.waitingSources} issues=${uploader.issues}',
+      );
+      fixture.ingested.add(oldRequest);
+      await _until(() => uploader.queueDrained, '旧结束照入库');
+      await uploader.stop();
+
+      await ending.rename(p.join(fixture.inbox.path, 'duplicate.png'));
+      await File(p.join(fixture.inbox.path, 'new.png'))
+          .writeAsBytes(await _png());
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+      expect(uploader.sourcesNeedingOrder, hasLength(2));
+      await _until(() => fixture.uploaded.length == 2, '过滤旧照后上传新照片');
+      expect(fixture.noticeAttempts, 0);
+      expect(uploader.jobs, hasLength(2));
+      expect(uploader.jobs.first.relative, 'new.png');
     });
   });
 
@@ -611,13 +787,13 @@ void main() {
   test('慢写原片重启保序，重试和等待入库期间结束照不发送', () async {
     final fixture = await _QueueFixture.open();
     await fixture.run(() async {
-      final uploader = fixture.uploader();
+      final uploader = fixture.uploader(stableFor: const Duration(seconds: 1));
       final original = File(p.join(fixture.inbox.path, 'z-original.png'));
       final ending = File(p.join(fixture.inbox.path, 'a-ending.png'));
       await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
       await original.create();
       await _until(() => uploader.settling == 1, '发现原片');
-      await ending.writeAsBytes(await _png());
+      await ending.writeAsBytes(await _png(13));
       await _until(() => uploader.settling == 2, '发现结束照');
       await Future<void>.delayed(const Duration(milliseconds: 150));
       expect(fixture.prepared, isEmpty);
@@ -627,7 +803,7 @@ void main() {
       await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
       await original.delete();
       await _until(
-        () => uploader.orderWaitMessage?.contains('请将原片放回') == true,
+        () => uploader.orderWaitMessage?.contains('文件不在监听目录') == true,
         '提示队首原片移走',
       );
       expect(fixture.prepared, isEmpty);
@@ -665,6 +841,71 @@ void main() {
         uploader.jobs.singleWhere((job) => job.source == ending.path).id,
       );
       await _until(() => fixture.uploaded.length == 2, '结束照上传成功');
+    });
+  });
+
+  test('自动移除补扫组内已删除的原片，剩余照片继续上传且重启不再阻塞', () async {
+    final fixture = await _QueueFixture.open();
+    await fixture.run(() async {
+      final uploader = fixture.uploader();
+      final first = File(p.join(fixture.inbox.path, 'old-first.png'));
+      final second = File(p.join(fixture.inbox.path, 'old-second.png'));
+      final next = File(p.join(fixture.inbox.path, 'next.png'));
+      final bytes = await _png();
+      await first.create();
+      await second.create();
+      await next.writeAsBytes(bytes);
+      await uploader.start(
+        fixture.inbox,
+        null,
+        cosProfile: fixture.profile,
+        includeExisting: true,
+      );
+      expect(uploader.sourcesNeedingOrder, hasLength(3));
+
+      await uploader.stop();
+      await first.delete();
+      await second.delete();
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+
+      await _until(() => fixture.uploaded.length == 1, '跳过缺失原片并上传剩余照片');
+      expect(uploader.waitingSources, isEmpty);
+      expect(uploader.jobs.single.source, next.path);
+      expect(await next.exists(), isTrue);
+      fixture.ingested.add(uploader.jobs.single.id);
+
+      await uploader.stop();
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+      expect(uploader.waitingSources, isEmpty);
+      await first.writeAsBytes(await _png(13));
+      await _until(() => fixture.uploaded.length == 2, '同名文件重新放入后正常上传');
+      expect(uploader.jobs.first.source, first.path);
+    });
+  });
+
+  test('收图目录暂时不可读时保留待准备照片', () async {
+    final fixture = await _QueueFixture.open();
+    await fixture.run(() async {
+      final uploader = fixture.uploader();
+      final original = File(p.join(fixture.inbox.path, 'original.png'));
+      await uploader.start(fixture.inbox, null, cosProfile: fixture.profile);
+      await original.create();
+      await _until(
+        () => uploader.waitingSources.containsKey(original.path),
+        '发现原片',
+      );
+
+      final moved = await fixture.inbox.rename(
+        p.join(fixture.scratch.path, 'offline'),
+      );
+      await _until(() => uploader.message.contains('无法读取监听目录'), '目录不可读');
+      await Future<void>.delayed(uploader.stableFor + uploader.scanInterval);
+      await uploader.scanNow();
+      expect(uploader.waitingSources.keys, [original.path]);
+
+      await moved.rename(fixture.inbox.path);
+      await original.writeAsBytes(await _png());
+      await _until(() => fixture.uploaded.length == 1, '目录恢复后继续上传');
     });
   });
 
@@ -754,11 +995,11 @@ Future<void> _until(
   }
 }
 
-Future<List<int>> _png() async {
+Future<List<int>> _png([int width = 12]) async {
   final recorder = ui.PictureRecorder();
   ui.Canvas(recorder).drawColor(const ui.Color(0xff123456), ui.BlendMode.src);
   final picture = recorder.endRecording();
-  final image = await picture.toImage(12, 12);
+  final image = await picture.toImage(width, 12);
   try {
     return (await image.toByteData(format: ui.ImageByteFormat.png))!.buffer
         .asUint8List();
@@ -831,12 +1072,16 @@ class _QueueFixture {
         _LocalTransport(transport, server.port, closeTransport: false),
   );
 
-  FolderUploader uploader() {
+  FolderUploader uploader({
+    Duration stableFor = const Duration(milliseconds: 80),
+    Future<bool> Function(File)? validateImage,
+  }) {
     final uploader = FolderUploader(
       storage: Directory(p.join(scratch.path, 'state')),
-      stableFor: const Duration(milliseconds: 80),
+      stableFor: stableFor,
       scanInterval: const Duration(milliseconds: 30),
       retryDelay: const Duration(milliseconds: 300),
+      validateImage: validateImage,
     );
     addTearDown(() async {
       await uploader.stop();
@@ -893,7 +1138,7 @@ class _QueueFixture {
       final hint = payload['cardTailHint'];
       data = {
         if (hint is String && echoCardTail) 'cardTailHint': hint,
-        if (hint is String && ingested.contains(id))
+        if (ingested.contains(id))
           'status': 'INGESTED'
         else ...{
           'status': 'AWAITING_UPLOAD',

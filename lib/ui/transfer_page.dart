@@ -580,7 +580,7 @@ class _TransferPageState extends State<TransferPage>
                     station: station,
                     allowDrop: widget.visible,
                     onConfigureCos: () => _configure(station),
-                    batchTimeline: _batchTimeline(station.profile),
+                    batchTimeline: _batchTimeline(station),
                   ),
                 ),
               ],
@@ -590,11 +590,12 @@ class _TransferPageState extends State<TransferPage>
     );
   }
 
-  Widget? _batchTimeline(CosUploadProfile profile) {
+  Widget? _batchTimeline(StationUpload station) {
     final bridge = widget.printBridge;
     if (bridge == null) return null;
+    final profile = station.profile;
     return ListenableBuilder(
-      listenable: bridge,
+      listenable: Listenable.merge([bridge, station]),
       builder: (context, _) {
         final config = bridge.config;
         final scenicId = profile.scenicId;
@@ -637,11 +638,18 @@ class _TransferPageState extends State<TransferPage>
         }
         final profileId = matching['id'] as String;
         final scope = {'profileId': profileId, 'scenicId': ?scenicId};
+        var ingested = 0;
+        var grouped = 0;
+        for (final job in station.uploader.jobs) {
+          if (job.state == 'ingested') ingested++;
+          if (job.state == 'grouped') grouped++;
+        }
         final timeline = PhotoBatchTimeline.inline(
           key: ValueKey((bridge, profileId, scenicId, profile.stationId)),
           call: (method, args) => bridge.call(method, [...args, scope]),
           scenicName: _batchScenicLabel(matching),
           stationId: profile.stationId,
+          uploadProgress: (ingested: ingested, grouped: grouped),
         );
         if (scenicId != null) return timeline;
         return SliverMainAxisGroup(

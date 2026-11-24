@@ -6,6 +6,7 @@ class WorkstationFormDialog extends StatelessWidget {
     required this.title,
     required this.content,
     required this.actions,
+    this.titleLeading,
     this.width = 460,
     this.canClose = true,
   });
@@ -13,6 +14,7 @@ class WorkstationFormDialog extends StatelessWidget {
   final String title;
   final Widget content;
   final List<Widget> actions;
+  final Widget? titleLeading;
   final double width;
   final bool canClose;
 
@@ -42,6 +44,10 @@ class WorkstationFormDialog extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(20, 8, 12, 0),
             child: Row(
               children: [
+                if (titleLeading case final leading?) ...[
+                  leading,
+                  const SizedBox(width: 12),
+                ],
                 Expanded(
                   child: Semantics(
                     namesRoute: true,

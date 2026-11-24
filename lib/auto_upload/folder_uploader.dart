@@ -159,11 +159,14 @@ class FolderUploader extends ChangeNotifier {
   final UploadSlots? transferSlots;
   final UploadSlots? preparationSlots;
   final Map<String, AutoJob> _jobs = {};
+  final Map<String, AutoJob> _cosJobsByDigest = {};
   final Map<String, String> _seen = {}, _ignored = {};
   final Map<String, _Observation> _observations = {};
+  final Map<String, DateTime> _missingSince = {};
   // Singletons have a known position. Larger groups wait for an operator's order.
   final List<List<String>> _waiting = [];
   final Set<String> _fileEvents = {};
+  final Set<String> _changedFiles = {};
   String? _confirmedSource;
   String? _discardingSource;
   final Map<String, String> issues = {};
@@ -178,6 +181,9 @@ class FolderUploader extends ChangeNotifier {
   final Map<String, String> _noticeBaseline = {},
       _noticeChecked = {},
       _noticePending = {};
+  final Map<String, String> _legacyNoticeSignatures = {};
+  final Set<String> _reportedEndingRequests = {};
+  final Map<String, String> _duplicateSources = {};
   final Map<String, DateTime> _noticeRetryAt = {};
   final Map<String, String> noticeIssues = {};
   bool _noticeInitialized = false;
@@ -349,7 +355,14 @@ class FolderUploader extends ChangeNotifier {
     }
     if (signature != null) _seen[source] = signature;
     _observations.remove(source);
+    _duplicateSources.remove(source);
+    _missingSince.remove(source);
     issues.remove(source);
+    if (signature == null) {
+      _noticePending.remove(source);
+      _noticeRetryAt.remove(source);
+      noticeIssues.remove(source);
+    }
   }
 
   Future<void> discardWaitingSource(String source, String? signature) async {
@@ -382,11 +395,16 @@ class FolderUploader extends ChangeNotifier {
   }
 
   Future<void> _persistDiscard(String source, String? signature) async {
+    if (signature == null) await _noticeTask;
     final stat = await File(source).stat();
     final current = stat.type == FileSystemEntityType.file
         ? _signature(stat)
         : null;
     if (current != signature) throw StateError('文件有变化，请核对最新缩略图后再移除。');
+    await _recordDiscard(source, signature);
+  }
+
+  Future<void> _recordDiscard(String source, String? signature) async {
     await _append({
       'type': 'discardSource',
       'source': source,
@@ -468,16 +486,22 @@ class FolderUploader extends ChangeNotifier {
   void _resetQueue() {
     _jobs.clear();
     _seen.clear();
+    _cosJobsByDigest.clear();
     _ignored.clear();
     _observations.clear();
+    _missingSince.clear();
     _noticeBaseline.clear();
     _noticeChecked.clear();
     _noticePending.clear();
+    _legacyNoticeSignatures.clear();
+    _reportedEndingRequests.clear();
+    _duplicateSources.clear();
     _noticeRetryAt.clear();
     noticeIssues.clear();
     _noticeInitialized = false;
     _waiting.clear();
     _fileEvents.clear();
+    _changedFiles.clear();
     _confirmedSource = null;
     issues.clear();
     fatalError = null;
@@ -505,12 +529,22 @@ class FolderUploader extends ChangeNotifier {
               Map<String, String>.from(event['files'] as Map),
             );
           case 'noticePending':
-            _noticePending[event['source'] as String] =
-                event['signature'] as String;
+            final source = event['source'] as String;
+            final signature = event['signature'] as String;
+            _noticePending[source] = signature;
+            if (event['contentIdentity'] != true) {
+              _legacyNoticeSignatures[source] = signature;
+            }
           case 'noticeChecked':
-            _noticePending.remove(event['source']);
-            _noticeChecked[event['source'] as String] =
-                event['signature'] as String;
+            final source = event['source'] as String;
+            final signature = event['signature'] as String;
+            _noticePending.remove(source);
+            _noticeChecked[source] = signature;
+            if (event['contentIdentity'] != true) {
+              _legacyNoticeSignatures[source] = signature;
+            }
+            final requestId = event['reportedRequestId'];
+            if (requestId is String) _reportedEndingRequests.add(requestId);
           case 'ignore':
             _ignored[event['source'] as String] = event['signature'] as String;
           case 'arrival':
@@ -540,6 +574,12 @@ class FolderUploader extends ChangeNotifier {
               _seen[job.source] = job.signature;
             }
             _jobs[job.id] = job;
+            if (_cos != null) {
+              final existing = _cosJobsByDigest[job.digest];
+              if (existing == null || existing.id == job.id) {
+                _cosJobsByDigest[job.digest] = job;
+              }
+            }
           default:
             throw StateError('队列日志版本无法识别');
         }
@@ -556,7 +596,13 @@ class FolderUploader extends ChangeNotifier {
                 if (_cos != null && !event.isDirectory) {
                   if (event is FileSystemDeleteEvent ||
                       event is FileSystemMoveEvent) {
-                    _fileEvents.remove(p.canonicalize(event.path));
+                    final key = p.canonicalize(event.path);
+                    _fileEvents.remove(key);
+                    _changedFiles.remove(key);
+                  }
+                  if (event case FileSystemModifyEvent(contentChanged: true)
+                      when _isPhoto(event.path)) {
+                    _changedFiles.add(p.canonicalize(event.path));
                   }
                   final path = switch (event) {
                     FileSystemCreateEvent() => event.path,
@@ -645,6 +691,8 @@ class FolderUploader extends ChangeNotifier {
       }
     } on FileSystemException {
       _directoryReadable = false;
+      issues.removeWhere((source, _) => _missingSince.containsKey(source));
+      _missingSince.clear();
       message = '无法读取监听目录，等待恢复；请检查磁盘、目录和权限';
       _notify();
       return;
@@ -670,6 +718,7 @@ class FolderUploader extends ChangeNotifier {
     }
     final present = files.map((f) => f.path).toSet();
     _observations.removeWhere((path, _) => !present.contains(path));
+    _duplicateSources.removeWhere((path, _) => !present.contains(path));
     issues.removeWhere((path, _) => !present.contains(path));
     if (_cos != null) {
       if (!_noticeInitialized) {
@@ -725,9 +774,18 @@ class FolderUploader extends ChangeNotifier {
       if (!running) return;
       final key = p.canonicalize(file.path);
       listed.add(key);
+      final changed = _changedFiles.remove(key) || _fileEvents.contains(key);
       final stat = await file.stat();
       if (stat.type != FileSystemEntityType.file) continue;
       present.add(file.path);
+      if (changed) {
+        _seen.remove(file.path);
+        _ignored.remove(file.path);
+        _noticeBaseline.remove(file.path);
+        _noticeChecked.remove(file.path);
+        _observations.remove(file.path);
+        _duplicateSources.remove(file.path);
+      }
       final isReserved = reserved.contains(file.path);
       if (_observe(file.path, stat, reserved: isReserved)) {
         ready[file.path] = stat;
@@ -747,6 +805,14 @@ class FolderUploader extends ChangeNotifier {
           : [discovered.values.toList()];
       await _append({'type': 'arrival', 'groups': groups});
       _waiting.addAll(groups);
+    }
+    await _discardMissingSources(reserved, present);
+    for (final entry in ready.entries) {
+      if (!running) return;
+      final signature = _signature(entry.value);
+      if (_duplicateSources[entry.key] == signature) {
+        await _recordDiscard(entry.key, signature);
+      }
     }
     final confirmed = _confirmedSource;
     _confirmedSource = null;
@@ -775,10 +841,7 @@ class FolderUploader extends ChangeNotifier {
     }
     while (running && _waiting.isNotEmpty && _waiting.first.length == 1) {
       final source = _waiting.first.single;
-      if (!present.contains(source)) {
-        issues[source] = '文件不在监听目录，请将原片放回后继续上传';
-        break;
-      }
+      if (!present.contains(source)) break;
       final stat = ready[source];
       if (stat == null) break;
       final signature = _signature(stat);
@@ -795,6 +858,36 @@ class FolderUploader extends ChangeNotifier {
               () async => running && await _enqueue(File(source), stat),
             );
       if (!prepared) break;
+    }
+  }
+
+  Future<void> _discardMissingSources(
+    Set<String> reserved,
+    Set<String> present,
+  ) async {
+    final now = DateTime.now();
+    for (final source in reserved) {
+      if (!running) return;
+      if (present.contains(source)) {
+        _missingSince.remove(source);
+        continue;
+      }
+      issues[source] = '文件不在监听目录，持续缺失时将自动移出队列';
+      final since = _missingSince[source];
+      _missingSince[source] = since ?? now;
+      // Let any in-flight ending notice finish before discarding its local state.
+      if (since == null ||
+          now.difference(since) < stableFor ||
+          _noticeTask != null) {
+        continue;
+      }
+      final stat = await File(source).stat();
+      if (stat.type == FileSystemEntityType.file) {
+        _missingSince.remove(source);
+        issues.remove(source);
+        continue;
+      }
+      if (running) await _recordDiscard(source, null);
     }
   }
 
@@ -815,9 +908,11 @@ class FolderUploader extends ChangeNotifier {
       final snapshot = File(
         p.join(noticeDir.path, 'ending${photoUploadExtension(source)}'),
       );
+      final contentIdentity = _legacyNoticeSignatures[source] != signature;
       String? requestId;
       String? secret;
       var copied = false;
+      var duplicate = false;
       try {
         Future<void> recognize() async {
           if (!running) return;
@@ -828,11 +923,19 @@ class FolderUploader extends ChangeNotifier {
           }
           copied = true;
           await normalizePhotoSnapshot(snapshot, sourcePath: source);
+          final digest = (await sha256.bind(snapshot.openRead()).first)
+              .toString();
+          final existing = _cosJobsByDigest[digest];
+          if (existing != null &&
+              (existing.source != source ||
+                  _noticePending[source] != signature)) {
+            duplicate = true;
+            return;
+          }
           secret = await decodeEndingBarcode(snapshot);
           if (secret != null) {
-            final digest = (await sha256.bind(snapshot.openRead()).first)
-                .toString();
-            requestId = _photoRequestId(source, digest);
+            requestId =
+                existing?.id ?? _photoRequestId(source, signature, digest);
           }
         }
 
@@ -850,17 +953,22 @@ class FolderUploader extends ChangeNotifier {
       } finally {
         if (await snapshot.exists()) await snapshot.delete();
       }
-      if (requestId != null && secret != null) {
+      if (duplicate) _duplicateSources[source] = signature;
+      final endingRequestId = requestId;
+      if (endingRequestId != null &&
+          !_reportedEndingRequests.contains(endingRequestId)) {
         if (_noticePending[source] != signature) {
           await _append({
             'type': 'noticePending',
             'source': source,
             'signature': signature,
+            'contentIdentity': contentIdentity,
           });
           _noticePending[source] = signature;
         }
         try {
-          await cos.reportEnding(requestId!, secret!);
+          await cos.reportEnding(endingRequestId, secret!);
+          _reportedEndingRequests.add(endingRequestId);
         } catch (_) {
           noticeIssues[source] = '结束照上传状态上报失败，稍后重试';
           _noticeRetryAt[source] = DateTime.now().add(retryDelay);
@@ -873,6 +981,8 @@ class FolderUploader extends ChangeNotifier {
         'type': 'noticeChecked',
         'source': source,
         'signature': signature,
+        'contentIdentity': contentIdentity,
+        'reportedRequestId': ?endingRequestId,
       });
       _noticeChecked[source] = signature;
       _noticePending.remove(source);
@@ -888,8 +998,14 @@ class FolderUploader extends ChangeNotifier {
     ),
   );
 
-  String _photoRequestId(String source, String digest) =>
-      _hash('${_uploadRelative(source)}\u0000$digest');
+  String _photoRequestId(String source, String signature, String digest) {
+    // Reuse the legacy request ID if an older client may have reported this
+    // ending before the corresponding upload job was written.
+    if (_cos == null || _legacyNoticeSignatures[source] == signature) {
+      return _hash('${_uploadRelative(source)}\u0000$digest');
+    }
+    return _hash('cos-content-v1\u0000$digest');
+  }
 
   Future<bool> _enqueue(File file, FileStat stat) async {
     final signature = _signature(stat);
@@ -936,11 +1052,11 @@ class FolderUploader extends ChangeNotifier {
       final captureTime = _cos != null && (raw || isJpegCameraPhoto(file.path))
           ? await readJpegCaptureTime(snapshot)
           : null;
-      if (_signature(await file.stat()) != signature) {
+      if (_cos == null && _signature(await file.stat()) != signature) {
         _observations.remove(file.path);
         return false;
       }
-      final id = _photoRequestId(file.path, digest);
+      final id = _photoRequestId(file.path, signature, digest);
       final paired =
           captureTime != null &&
           _jobs.values.any(
@@ -954,7 +1070,9 @@ class FolderUploader extends ChangeNotifier {
                   p.withoutExtension(file.path),
                 ),
           );
-      if (_jobs.containsKey(id) || paired) {
+      if (_jobs.containsKey(id) ||
+          _cosJobsByDigest.containsKey(digest) ||
+          paired) {
         if (_cos != null) {
           await _append({
             'type': 'resolvedSource',
@@ -986,6 +1104,7 @@ class FolderUploader extends ChangeNotifier {
       // 复制文件的失败与日志写入失败分开处理，持久化失败必须中止。
       await _append(job.toJson());
       _jobs[id] = job;
+      if (_cos != null) _cosJobsByDigest[digest] = job;
       _resolveSource(file.path);
       _seen[file.path] = signature;
       _observations.remove(file.path);
