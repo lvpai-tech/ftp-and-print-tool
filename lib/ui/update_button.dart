@@ -32,7 +32,9 @@ class _UpdateButtonState extends State<UpdateButton> {
       final code = int.tryParse(info.buildNumber);
       if (code == null || code < 1) throw StateError('无法读取当前安装版本，请重新安装正式包');
       final setup = session != null && Platform.isWindows && windowsAutoUpdate;
-      service = UpdateService(windowsInstaller: setup);
+      service = UpdateService(
+        windowsInstaller: setup || (Platform.isWindows && updateChannel == 'prd'),
+      );
       final release = await service.check();
       if (!mounted) return;
       if (release.code <= code) {

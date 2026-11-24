@@ -153,26 +153,30 @@ FTP二进制的contentType为`application/octet-stream`。接口返回沿用项�
 
 ## 桌面自动更新发布
 
-在 `Build Windows` 或 `Build macOS` 手动运行表单选择 `dev/huangml`、`channel` 和 `publish_update`。`channel` 默认 `prd`，也可选 `test` 或 `local`。开启 `publish_update` 后，工作流签名并直接发布到对应通道的 COS。`channel` 同时决定客户端编译参数、应用名称和更新路径。`local` 发布使用 CDN 的 `local` 目录，可用于指定该通道的本地安装。
+在 `Build Windows` 或 `Build macOS` 手动运行表单选择 `dev/huangml`、`channel` 和 `publish_update`。`channel` 默认 `prd`，也可选 `test` 或 `local`。开启 `publish_update` 后，工作流直接发布到对应通道的 COS。`channel` 同时决定客户端编译参数、应用名称和更新路径。
+
+当前 `prd` 用于内测分发。Windows 使用未做 Authenticode 签名的 Setup.exe，Apple 芯片 Mac 使用临时签名的个人 DMG，所需 GitHub 环境只配置 COS 凭据。客户端「检查更新」可以发现、下载并校验新包，测试人员自行打开安装包，关闭旧工作台后覆盖安装。`test`、`local` 的签名更新开关使用下表的正式签名和公证材料。
 
 运营人员只需选择通道和发布开关。版本名称及构建号来自仓库 `pubspec.yaml`，例如 `0.4.5+9` 对应版本 `0.4.5`、构建号 `9`。每个平台、通道的新版构建号须高于该清单已发布版本。工作流核对打包元数据、安装包 SHA-256 和发布通道，分块上传并在 CDN 读回包大小后写清单，再读回核对清单。版本化对象禁止覆盖。重试已上传的同名安装包时使用与前次完全一致的制品。
 
 | 构建 | 更新入口 | 发布产物 |
 | --- | --- | --- |
-| Windows x64 | `ftp-client/{channel}/windows-x64/setup/latest.json` | Authenticode 签名的 `*-windows-x64-setup.exe` |
-| macOS Apple 芯片 | `ftp-client/{channel}/macos-arm64/appcast.xml` | Developer ID 签名、公证、Sparkle EdDSA 签名的 `*-macos-arm64.dmg` |
+| Windows x64 `prd` | `ftp-client/prd/windows-x64/setup/latest.json` | 内测 `*-windows-x64-setup.exe` |
+| macOS Apple 芯片 `prd` | `ftp-client/prd/macos-arm64/latest.json` | 内测 `*-macos-arm64.dmg` |
+| Windows x64 `test` / `local` | `ftp-client/{channel}/windows-x64/setup/latest.json` | Authenticode 签名的 `*-windows-x64-setup.exe` |
+| macOS Apple 芯片 `test` / `local` | `ftp-client/{channel}/macos-arm64/appcast.xml` | Developer ID 签名、公证、Sparkle EdDSA 签名的 `*-macos-arm64.dmg` |
 
-在 GitHub 对应的 `cos-prd`、`cos-test` 或 `cos-local` 环境配置下列参数，并允许 `dev/huangml`。COS 凭据按对应通道限制到 Windows `setup/` 及 macOS DMG、`appcast.xml`，允许读取、写清单和初始化、上传、完成及中止分块。发布桶须支持 `ForbidOverwrite`。macOS 个人包存档单独使用 `cos-test`，见 [COS 存档](#macos-内测-dmg-的-cos-存档)。
+在 GitHub 对应的 `cos-prd`、`cos-test` 或 `cos-local` 环境配置下列参数，并允许 `dev/huangml`。COS 凭据按对应通道限制到 Windows `setup/` 及 macOS DMG 和清单，允许读取、写清单和初始化、上传、完成及中止分块。发布桶须支持 `ForbidOverwrite`。macOS 个人包存档单独使用 `cos-test`，见 [COS 存档](#macos-内测-dmg-的-cos-存档)。
 
 | 范围 | Secrets | Variables |
 | --- | --- | --- |
-| COS | `COS_SECRET_ID`、`COS_SECRET_KEY` | `COS_BUCKET`、`COS_REGION` |
+| COS | `COS_SECRET_ID`、`COS_SECRET_KEY`，临时凭据另填 `COS_SESSION_TOKEN` | `COS_BUCKET`、`COS_REGION` |
 | Windows | `WINDOWS_SIGNING_PFX`（Base64）、`WINDOWS_SIGNING_PASSWORD` | |
 | macOS | `MACOS_SIGNING_P12`（Base64）、`MACOS_SIGNING_PASSWORD`、`MACOS_NOTARY_APPLE_ID`、`MACOS_NOTARY_PASSWORD`（应用专用密码）、`SPARKLE_PRIVATE_KEY`（`generate_keys -x` 导出的文本） | `MACOS_SIGN_IDENTITY`、`MACOS_NOTARY_TEAM_ID`、`SPARKLE_PUBLIC_KEY` |
 
-现场先手动装一版带更新器的签名包，再在同一通道发布更高构建号。`test` 显示「帧集快拍（测试版）」，`local` 显示「帧集快拍（本地版）」，`prd` 显示「帧集快拍」。Windows 沿用安装标识和数据路径，更新前后通过 Authenticode 验证且使用同一证书。更换证书时，先分发使用新证书的首装包。macOS 沿用应用标识和非沙箱数据目录，需核对新签名下的钥匙串、收图目录和队列访问。
+现场先手动装一版当前通道的安装包，再在同一通道发布更高构建号。`test` 显示「帧集快拍（测试版）」，`local` 显示「帧集快拍（本地版）」，`prd` 显示「帧集快拍」。Windows 沿用安装标识和数据路径。签名通道的 Windows 自动覆盖要求新旧版本使用同一 Authenticode 证书。macOS 沿用应用标识和非沙箱数据目录，需复核钥匙串、收图目录和队列访问。
 
-「检查更新」发现新版并确认后，应用下载和验证包，暂停接收新的上传任务并保留队列，等待当前上传与打印结束，再安装并重开工作台。复核版本、机位绑定、监听恢复、上传队列及打印档案。自动打印沿用每次启动需现场开启的规则。
+签名通道执行一键覆盖时，工作台下载、验证安装包，等待当前上传和打印结束，再安装并重开。内测手动覆盖前从托盘退出工作台。覆盖后复核版本、机位绑定、监听恢复、上传队列及打印档案。自动打印沿用每次启动需现场开启的规则。
 
 ## 下载页上线
 

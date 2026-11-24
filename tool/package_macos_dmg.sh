@@ -57,3 +57,25 @@ mounted=false
 
 (cd "$work" && shasum -a 256 "$image") | tee "$work/$image.sha256"
 mv "$work/$image" "$work/$image.sha256" "$output_dir/"
+
+if [[ "$channel" == prd && "$arch" == arm64 ]]; then
+  root="$(cd "$(dirname "$0")/.." && pwd)"
+  python3 - "$root" "$output_dir/$image" "$version" "$build" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+
+root, image, version, build = sys.argv[1:]
+sys.path.insert(0, str(Path(root) / "tool"))
+from package_release import write_release_info
+
+out = Path(root) / "build/releases/prd/macos-arm64"
+out.mkdir(parents=True, exist_ok=True)
+package = out / f"lvpai-ftp-{version}-{build}-macos-arm64.dmg"
+if package.exists():
+    raise FileExistsError(package)
+shutil.copyfile(image, package)
+write_release_info(out / "release-info.json", package, version=version, code=build,
+                   platform="macos-arm64", channel="prd")
+PY
+fi

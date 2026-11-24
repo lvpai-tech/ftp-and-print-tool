@@ -1,4 +1,4 @@
-"""Publish a signed desktop update to the channel embedded by the packager."""
+"""Publish a desktop installer to the channel embedded by the packager."""
 
 import argparse
 import base64
@@ -204,9 +204,9 @@ def main():
     parser.add_argument("--sparkle-sign-tool", type=Path)
     args = parser.parse_args()
     prefix, manifest = package_metadata(args.package, args.channel)
-    appcast = manifest["platform"] == "macos-arm64"
+    appcast = manifest["platform"] == "macos-arm64" and args.channel != "prd"
     if appcast != (args.sparkle_sign_tool is not None):
-        parser.error("macOS publication requires the Sparkle signing tool")
+        parser.error("Only signed local/test macOS publication uses the Sparkle signing tool")
     feed_key = f"{prefix}/" + ("appcast.xml" if appcast else "latest.json")
     required = ("COS_REGION", "COS_SECRET_ID", "COS_SECRET_KEY", "COS_BUCKET")
     missing = [name for name in required if not os.environ.get(name, "").strip()]
@@ -214,7 +214,8 @@ def main():
         parser.error(f"Missing COS configuration for {args.channel}: {', '.join(missing)}")
     client = CosS3Client(CosConfig(Region=os.environ["COS_REGION"],
                                  SecretId=os.environ["COS_SECRET_ID"],
-                                 SecretKey=os.environ["COS_SECRET_KEY"], Scheme="https",
+                                 SecretKey=os.environ["COS_SECRET_KEY"],
+                                 Token=os.environ.get("COS_SESSION_TOKEN"), Scheme="https",
                                  PoolConnections=PART_WORKERS, PoolMaxSize=PART_WORKERS))
     bucket = os.environ["COS_BUCKET"]
     previous, previous_body = read_current(client, bucket, feed_key, appcast)
