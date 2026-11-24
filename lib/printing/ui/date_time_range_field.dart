@@ -61,61 +61,65 @@ class _JobCreatedRangeFieldState extends State<JobCreatedRangeField> {
           key: _fieldKey,
           color: WorkstationStyle.card,
           borderRadius: BorderRadius.circular(4),
-          child: InkWell(
-            onTap: widget.enabled ? _toggle : null,
-            borderRadius: BorderRadius.circular(4),
-            child: Container(
-              height: 32,
-              padding: const EdgeInsets.only(left: 10, right: 8),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(
-                  color: _portal.isShowing
-                      ? WorkstationStyle.accent
-                      : const Color(0xffdcdfe6),
+          child: Tooltip(
+            message: '创建时间范围',
+            waitDuration: const Duration(milliseconds: 500),
+            child: InkWell(
+              onTap: widget.enabled ? _toggle : null,
+              borderRadius: BorderRadius.circular(4),
+              child: Container(
+                height: 32,
+                padding: const EdgeInsets.only(left: 10, right: 8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: _portal.isShowing
+                        ? WorkstationStyle.accent
+                        : const Color(0xffdcdfe6),
+                  ),
                 ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: maxLabel),
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: value == null
-                            ? WorkstationStyle.muted
-                            : WorkstationStyle.ink,
-                        fontFeatures: const [FontFeature.tabularFigures()],
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: maxLabel),
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: value == null
+                              ? WorkstationStyle.muted
+                              : WorkstationStyle.ink,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
                       ),
                     ),
-                  ),
-                  if (value != null) ...[
-                    const SizedBox(width: 4),
-                    GestureDetector(
-                      onTap: widget.enabled
-                          ? () {
-                              _close();
-                              widget.onChanged(null);
-                            }
-                          : null,
-                      child: const Icon(
-                        Icons.cancel,
-                        size: 14,
-                        color: WorkstationStyle.muted,
+                    if (value != null) ...[
+                      const SizedBox(width: 4),
+                      GestureDetector(
+                        onTap: widget.enabled
+                            ? () {
+                                _close();
+                                widget.onChanged(null);
+                              }
+                            : null,
+                        child: const Icon(
+                          Icons.cancel,
+                          size: 14,
+                          color: WorkstationStyle.muted,
+                        ),
                       ),
+                    ],
+                    const SizedBox(width: 6),
+                    const Icon(
+                      Icons.calendar_today_outlined,
+                      size: 14,
+                      color: WorkstationStyle.muted,
                     ),
                   ],
-                  const SizedBox(width: 6),
-                  const Icon(
-                    Icons.calendar_today_outlined,
-                    size: 14,
-                    color: WorkstationStyle.muted,
-                  ),
-                ],
+                ),
               ),
             ),
           ),

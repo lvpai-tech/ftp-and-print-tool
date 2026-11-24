@@ -158,4 +158,75 @@ void main() {
     expect(find.text('开始时间 至 结束时间'), findsOneWidget);
     expect(find.text('确定'), findsNothing);
   });
+
+  testWidgets('创建时间范围在队列页签之间切换时保留', (tester) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final bridge = ControlledBridge();
+    final now = DateTime.now();
+    await tester.pumpWidget(MaterialApp(home: Workstation(bridge: bridge)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('开始时间 至 结束时间'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(ValueKey('created-range-left-${now.year}-${now.month}-1')),
+    );
+    await tester.tap(
+      find.byKey(ValueKey('created-range-left-${now.year}-${now.month}-2')),
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('created-range-left-hour')),
+      '08',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('created-range-left-minute')),
+      '15',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('created-range-right-hour')),
+      '18',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('created-range-right-minute')),
+      '45',
+    );
+    await tester.tap(find.byKey(const ValueKey('created-range-confirm')));
+    await tester.pumpAndSettle();
+
+    final month = now.month.toString().padLeft(2, '0');
+    final from = '${now.year}-$month-01T08:15:00+08:00';
+    final to = '${now.year}-$month-02T18:45:59+08:00';
+    final label =
+        '${now.year}-$month-01 08:15:00 至 ${now.year}-$month-02 18:45:59';
+
+    Future<void> switchAndExpect(String tab, String printStatus) async {
+      await tester.tap(find.text(tab));
+      await tester.pumpAndSettle();
+      expect(find.text(label), findsOneWidget);
+      expect(
+        bridge.arguments['queryJobs']?.first,
+        {
+          'printStatus': printStatus,
+          'pageNum': 1,
+          'pageSize': 20,
+          'issuePage': 1,
+          'createdFrom': from,
+          'createdTo': to,
+        },
+      );
+    }
+
+    expect(find.text(label), findsOneWidget);
+    expect(
+      bridge.arguments['queryJobs']?.first,
+      containsPair('printStatus', 'UNPRINTED'),
+    );
+    // 当前队列页签为待打印 / 生成中 / 已打印；需处理是状态徽标，全部任务已下线。
+    await switchAndExpect('生成中', 'GENERATING');
+    await switchAndExpect('已打印', 'PRINTED');
+    await switchAndExpect('待打印', 'UNPRINTED');
+  });
 }
