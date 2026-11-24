@@ -78,6 +78,37 @@ class _Credentials extends FlutterSecureStorage {
 }
 
 void main() {
+  test('登录钥匙串配置关闭数据保护且不带 accessibility', () {
+    expect(workstationCredentials, isA<MacLoginKeychainStorage>());
+    final options = workstationCredentials.mOptions.toMap();
+    expect(options['usesDataProtectionKeychain'], 'false');
+    expect(options.containsKey('accessibility'), isFalse);
+  });
+
+  test('macOS 在原生通道读取值前传入凭据范围', () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    const channel = MethodChannel('ai.lvpai.ftp/login-keychain');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      expect(call.method, 'readAll');
+      expect(call.arguments, {
+        'prefixes': ['cos.watch.v2.'],
+        'keys': ['ftp.watch.v1'],
+      });
+      return {'cos.watch.v2.1': 'current', 'ftp.watch.v1': 'legacy'};
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    expect(
+      await workstationCredentials.readEntries(
+        prefix: 'cos.watch.v2.',
+        keys: const ['ftp.watch.v1'],
+      ),
+      {'cos.watch.v2.1': 'current', 'ftp.watch.v1': 'legacy'},
+    );
+  }, skip: !Platform.isMacOS);
+
   test('钥匙串预检报告写入失败，恢复后清理探针', () async {
     final credentials = _Credentials()..writeError = -25308;
     await expectLater(
@@ -102,20 +133,29 @@ void main() {
         'cos.station.v2.2': 'old',
         'unrelated': 'other',
       });
-    final current = _Credentials()..values['printing.enrollment.1'] = 'new';
-    await migrateMacWorkstationCredentials(previous, current);
+    final current = _Credentials()
+      ..values['printing.enrollment.1'] = 'new'
+      ..readAllError = -50;
+    await migrateMacWorkstationCredentials(previous.readAll, current);
     expect(current.values['printing.enrollment.1'], 'new');
     expect(current.values['cos.station.v2.2'], 'old');
     expect(current.values, isNot(contains('unrelated')));
     await current.delete(key: 'cos.station.v2.2');
-    await migrateMacWorkstationCredentials(previous, current);
+    await migrateMacWorkstationCredentials(previous.readAll, current);
     expect(current.values, isNot(contains('cos.station.v2.2')));
   });
 
   test('临时签名缺少旧钥匙串授权时保留已存凭据', () async {
     final previous = _Credentials()..readAllError = -34018;
     final current = _Credentials()..values['printing.installation'] = 'kept';
-    await migrateMacWorkstationCredentials(previous, current);
+    await migrateMacWorkstationCredentials(previous.readAll, current);
+    expect(current.values, {'printing.installation': 'kept'});
+  });
+
+  test('临时签名旧钥匙串参数错误时不阻断登录钥匙串', () async {
+    final previous = _Credentials()..readAllError = -50;
+    final current = _Credentials()..values['printing.installation'] = 'kept';
+    await migrateMacWorkstationCredentials(previous.readAll, current);
     expect(current.values, {'printing.installation': 'kept'});
   });
 

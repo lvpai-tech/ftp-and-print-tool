@@ -102,7 +102,7 @@ class _TransferPageState extends State<TransferPage>
           _error = switch (error) {
             StateError(:final message) => message,
             WorkstationAccountError(:final message) => message,
-            PlatformException() when Platform.isMacOS =>
+            PlatformException(code: 'KEYCHAIN') when Platform.isMacOS =>
               macWorkstationStorageError(error).message,
             _ => '无法读取机位配置，请重试',
           };

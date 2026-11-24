@@ -1,15 +1,16 @@
 import 'dart:convert';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:lvpai_ftp_client/auto_upload/workstation_enrollment.dart';
 import 'package:lvpai_ftp_client/printing/print_enrollment.dart';
 
+import 'support/mock_workstation_credentials.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+  setUp(() => setMockWorkstationCredentials({}));
 
   test('激活响应中断后从安全存储恢复并沿用设备凭据', () async {
     const scenic = EnrollmentScenic('5', '测试景区');

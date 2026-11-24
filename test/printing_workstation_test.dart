@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -10,6 +9,8 @@ import 'package:lvpai_ftp_client/printing/app.dart';
 import 'package:lvpai_ftp_client/printing/print_bridge.dart';
 import 'package:lvpai_ftp_client/printing/print_enrollment.dart';
 import 'package:lvpai_ftp_client/ui/workstation_form_dialog.dart';
+
+import 'support/mock_workstation_credentials.dart';
 
 class ControlledBridge extends PrintBridge {
   final calls = <String>[];
@@ -201,7 +202,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    FlutterSecureStorage.setMockInitialValues({
+    setMockWorkstationCredentials({
       '${PrintEnrollment.prefix}default': jsonEncode({
         'id': 'default',
         'location': '一楼取片区',
@@ -266,7 +267,7 @@ void main() {
   });
 
   testWidgets('首次进入打印点列表可申请或查记录', (tester) async {
-    FlutterSecureStorage.setMockInitialValues({});
+    setMockWorkstationCredentials({});
     final bridge = ControlledBridge(configured: false)
       ..snapshot['config'] = <String, dynamic>{};
     await tester.pumpWidget(
@@ -290,7 +291,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(375, 300);
     addTearDown(tester.view.reset);
-    FlutterSecureStorage.setMockInitialValues({
+    setMockWorkstationCredentials({
       for (var index = 1; index <= 6; index++)
         '${PrintEnrollment.prefix}print-$index': jsonEncode({
           'id': 'print-$index',
@@ -300,7 +301,7 @@ void main() {
           'createdAt': DateTime.utc(2026, 11, index).toIso8601String(),
         }),
     });
-    addTearDown(() => FlutterSecureStorage.setMockInitialValues({}));
+    addTearDown(() => setMockWorkstationCredentials({}));
     final bridge = ControlledBridge();
     addTearDown(bridge.dispose);
     await tester.pumpWidget(
@@ -464,8 +465,8 @@ void main() {
   });
 
   testWidgets('打印申请景区使用浮层，点外收起且不移动点位输入框', (tester) async {
-    FlutterSecureStorage.setMockInitialValues({});
-    addTearDown(() => FlutterSecureStorage.setMockInitialValues({}));
+    setMockWorkstationCredentials({});
+    addTearDown(() => setMockWorkstationCredentials({}));
     final bridge = ControlledBridge(configured: false)
       ..snapshot['config'] = <String, dynamic>{};
     addTearDown(bridge.dispose);

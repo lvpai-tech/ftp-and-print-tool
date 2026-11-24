@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
 import 'package:lvpai_ftp_client/printing/print_bridge.dart';
@@ -10,6 +9,8 @@ import 'package:lvpai_ftp_client/profile_store.dart';
 import 'package:lvpai_ftp_client/ui/transfer_page.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
+
+import 'support/mock_workstation_credentials.dart';
 
 void main() {
   const apiBase = String.fromEnvironment(
@@ -20,7 +21,7 @@ void main() {
   late Directory support;
 
   setUp(() async {
-    FlutterSecureStorage.setMockInitialValues({});
+    setMockWorkstationCredentials({});
     support = await Directory.systemTemp.createTemp('station-ui-');
   });
 
@@ -45,7 +46,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    FlutterSecureStorage.setMockInitialValues({
+    setMockWorkstationCredentials({
       'cos.auto.profile.v1': jsonEncode({
         'api': gateway.origin,
         'stationId': '317',
@@ -131,7 +132,7 @@ void main() {
     const Size(1280, 900),
   ]) {
     testWidgets('首次申请入口和手动绑定在 ${size.width}×${size.height} 可用', (tester) async {
-      FlutterSecureStorage.setMockInitialValues({
+      setMockWorkstationCredentials({
         'ftp.profile.v1': jsonEncode({'host': 'ftp.invalid'}),
       });
       tester.view.physicalSize = size;
@@ -169,7 +170,7 @@ void main() {
   }
 
   testWidgets('现有机位可查看原收图路径，仍可同时管理其他机位', (tester) async {
-    FlutterSecureStorage.setMockInitialValues({
+    setMockWorkstationCredentials({
       'cos.auto.profile.v1': jsonEncode({
         'api': gateway.origin,
         'stationId': '317',
@@ -214,7 +215,7 @@ void main() {
       'a' * 64,
       stationCode: 'A17',
     );
-    FlutterSecureStorage.setMockInitialValues({
+    setMockWorkstationCredentials({
       'cos.auto.profile.v1': jsonEncode(legacy.toJson()),
       'ftp.watch.v1': jsonEncode({'folder': 'test-inbox', 'recursive': true}),
     });
@@ -273,7 +274,7 @@ void main() {
   });
 
   testWidgets('另一个服务的机位凭据和目录不会进入当前列表', (tester) async {
-    FlutterSecureStorage.setMockInitialValues({
+    setMockWorkstationCredentials({
       'cos.auto.profile.v1': jsonEncode({
         'api': 'https://old-upload.example',
         'stationId': '317',

@@ -4,7 +4,6 @@ import 'dart:ui' as ui;
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
@@ -18,9 +17,16 @@ import 'package:lvpai_ftp_client/profile_store.dart';
 import 'package:path/path.dart' as p;
 
 import 'manual_batch_test.dart' as samples;
+import 'support/mock_workstation_credentials.dart';
+
+class _LoopbackTestBinding extends AutomatedTestWidgetsFlutterBinding {
+  @override
+  bool get overrideHttpClient => false;
+}
 
 void main() {
-  setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+  if (Platform.isMacOS) _LoopbackTestBinding();
+  setUp(() => setMockWorkstationCredentials({}));
 
   test('六位 OCR 使用原照片会话，服务端回显候选后才算上报成功', () async {
     final fixture = await _QueueFixture.open();
@@ -382,7 +388,7 @@ void main() {
     ).create();
     final selection = (path: newFolder.path, bookmark: null);
     const store = ProfileStore();
-    FlutterSecureStorage.setMockInitialValues({
+    setMockWorkstationCredentials({
       'cos.auto.profile.v1': jsonEncode(fixture.profile.toJson()),
       'ftp.watch.v1': jsonEncode({
         'folder': fixture.inbox.path,

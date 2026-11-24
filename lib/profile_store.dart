@@ -58,11 +58,10 @@ class ProfileStore {
   }
 
   Future<List<CosUploadProfile>> loadStations(Uri api) async => [
-    for (final entry in (await _storage.readAll()).entries)
-      if (entry.key.startsWith('$_stationPrefix${uploadScope(api)}.'))
-        CosUploadProfile.fromJson(
-          jsonDecode(entry.value) as Map<String, dynamic>,
-        ),
+    for (final value in (await _storage.readEntries(
+      prefix: '$_stationPrefix${uploadScope(api)}.',
+    )).values)
+      CosUploadProfile.fromJson(jsonDecode(value) as Map<String, dynamic>),
   ];
 
   Future<void> saveCos(
@@ -105,7 +104,10 @@ class ProfileStore {
 
   Future<List<({String? key, String path, String? identity})>>
   loadWatchFolders() async {
-    final entries = await _storage.readAll();
+    final entries = await _storage.readEntries(
+      prefix: _watchPrefix,
+      keys: const [_oldWatchKey, _cosKey],
+    );
     final folders = <({String? key, String path, String? identity})>[];
     for (final entry in entries.entries) {
       if (!entry.key.startsWith(_watchPrefix)) continue;
@@ -144,9 +146,10 @@ class ProfileStore {
   }
 
   Future<List<Map<String, dynamic>>> loadEnrollments(Uri api) async => [
-    for (final entry in (await _storage.readAll()).entries)
-      if (entry.key.startsWith('$_applicationPrefix${uploadScope(api)}.'))
-        jsonDecode(entry.value) as Map<String, dynamic>,
+    for (final value in (await _storage.readEntries(
+      prefix: '$_applicationPrefix${uploadScope(api)}.',
+    )).values)
+      jsonDecode(value) as Map<String, dynamic>,
   ];
 
   Future<Map<String, dynamic>?> loadEnrollment(Uri api, String id) =>

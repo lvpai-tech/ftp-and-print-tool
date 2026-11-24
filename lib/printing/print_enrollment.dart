@@ -85,12 +85,9 @@ class PrintEnrollment {
   }
 
   static Future<List<Map<String, dynamic>>> records() async {
-    final values = await storage.readAll();
-    return values.entries
-        .where((entry) => entry.key.startsWith(prefix))
-        .map(
-          (entry) => Map<String, dynamic>.from(jsonDecode(entry.value) as Map),
-        )
+    final entries = await storage.readEntries(prefix: prefix);
+    return entries.values
+        .map((value) => Map<String, dynamic>.from(jsonDecode(value) as Map))
         .toList()
       ..sort(
         (a, b) =>

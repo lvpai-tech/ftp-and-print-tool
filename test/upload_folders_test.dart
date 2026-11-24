@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
 import 'package:lvpai_ftp_client/auto_upload/folder_access.dart';
@@ -11,6 +10,8 @@ import 'package:lvpai_ftp_client/auto_upload/upload_folders.dart';
 import 'package:lvpai_ftp_client/auto_upload/upload_slots.dart';
 import 'package:lvpai_ftp_client/profile_store.dart';
 import 'package:path/path.dart' as p;
+
+import 'support/mock_workstation_credentials.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -22,7 +23,7 @@ void main() {
   late UploadFolders folders;
 
   setUp(() async {
-    FlutterSecureStorage.setMockInitialValues({});
+    setMockWorkstationCredentials({});
     root = await Directory.systemTemp.createTemp('camera-folders-');
     addTearDown(() => root.delete(recursive: true));
     support = Directory(p.join(root.path, 'app'));
@@ -61,7 +62,7 @@ void main() {
     final child = await Directory(p.join(old.path, 'child')).create();
     final other = await Directory(p.join(root.path, 'camera', 'old-2'))
         .create();
-    FlutterSecureStorage.setMockInitialValues({
+    setMockWorkstationCredentials({
       'cos.auto.profile.v1': jsonEncode(first.toJson()),
       'ftp.watch.v1': jsonEncode({'folder': old.path, 'recursive': true}),
     });

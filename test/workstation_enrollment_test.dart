@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -13,12 +12,14 @@ import 'package:lvpai_ftp_client/ui/workstation_enrollment_panel.dart';
 import 'package:lvpai_ftp_client/ui/workstation_form_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'support/mock_workstation_credentials.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const store = ProfileStore();
   final gateway = Uri.parse('https://upload.example');
 
-  setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+  setUp(() => setMockWorkstationCredentials({}));
 
   testWidgets('景区下拉失败可重试，选定后用正式名称提交且无编码', (tester) async {
     var attempts = 0;

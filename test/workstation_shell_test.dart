@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/app.dart';
 import 'package:lvpai_ftp_client/desktop_lifecycle.dart';
@@ -14,6 +13,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:tray_manager/tray_manager.dart';
 
 import 'printing_workstation_test.dart' show ControlledBridge;
+import 'support/mock_workstation_credentials.dart';
 
 Finder keyed(String key) => find.byKey(ValueKey(key));
 
@@ -55,7 +55,7 @@ class WorkstationBridge extends ControlledBridge {
 
 void main() {
   setUp(() {
-    FlutterSecureStorage.setMockInitialValues({});
+    setMockWorkstationCredentials({});
     PackageInfo.setMockInitialValues(
       appName: '帧集快拍',
       packageName: 'ai.lvpai.lvpai_ftp_client',

@@ -1,10 +1,12 @@
 import Cocoa
 import FlutterMacOS
+import Security
 import Sparkle
 
 class MainFlutterWindow: NSWindow {
   private var folderAccess: PhotoFolderAccess?
   private var desktopUpdater: DesktopUpdater?
+  private var loginKeychain: LoginKeychainStore?
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
@@ -14,8 +16,173 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
     folderAccess = PhotoFolderAccess(messenger: flutterViewController.engine.binaryMessenger)
     desktopUpdater = DesktopUpdater(messenger: flutterViewController.engine.binaryMessenger)
+    loginKeychain = LoginKeychainStore(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
+  }
+}
+
+/// Login Keychain access for workstation credentials on macOS.
+private final class LoginKeychainStore {
+  private let channel: FlutterMethodChannel
+  private let service: String
+
+  init(messenger: FlutterBinaryMessenger) {
+    channel = FlutterMethodChannel(name: "ai.lvpai.ftp/login-keychain", binaryMessenger: messenger)
+    service = Bundle.main.bundleIdentifier ?? "ai.lvpai.lvpaiFtpClient"
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard let self = self else { return }
+      do {
+        switch call.method {
+        case "write":
+          guard let args = call.arguments as? [String: String],
+                let key = args["key"],
+                let value = args["value"] else {
+            result(FlutterError(code: "KEYCHAIN", message: "write 需要 key 和 value", details: nil))
+            return
+          }
+          try self.write(key: key, value: value)
+          result(nil)
+        case "read":
+          guard let args = call.arguments as? [String: String], let key = args["key"] else {
+            result(FlutterError(code: "KEYCHAIN", message: "read 需要 key", details: nil))
+            return
+          }
+          result(try self.read(key: key))
+        case "delete":
+          guard let args = call.arguments as? [String: String], let key = args["key"] else {
+            result(FlutterError(code: "KEYCHAIN", message: "delete 需要 key", details: nil))
+            return
+          }
+          try self.delete(key: key)
+          result(nil)
+        case "containsKey":
+          guard let args = call.arguments as? [String: String], let key = args["key"] else {
+            result(FlutterError(code: "KEYCHAIN", message: "containsKey 需要 key", details: nil))
+            return
+          }
+          result(try self.containsKey(key: key))
+        case "readAll", "readLegacy":
+          let selection = call.arguments as? [String: Any]
+          let legacy = call.method == "readLegacy"
+          let prefixes = selection?["prefixes"] as? [String]
+          if (legacy || call.arguments != nil) && prefixes == nil {
+            result(FlutterError(code: "KEYCHAIN", message: "钥匙串读取范围无效", details: nil))
+            return
+          }
+          result(try self.readAll(
+            prefixes: prefixes,
+            keys: Set(selection?["keys"] as? [String] ?? []),
+            legacy: legacy
+          ))
+        default:
+          result(FlutterMethodNotImplemented)
+        }
+      } catch let error as KeychainStoreError {
+        NSLog("Login Keychain %@ failed: %d", call.method, error.status)
+        result(FlutterError(code: "KEYCHAIN", message: error.message, details: error.status))
+      } catch {
+        result(FlutterError(code: "KEYCHAIN", message: "\(error)", details: nil))
+      }
+    }
+  }
+
+  private func write(key: String, value: String) throws {
+    let query = baseQuery(account: key)
+    let attributes = [kSecValueData as String: Data(value.utf8)]
+    let item = query.merging(attributes) { _, data in data }
+    let status = SecItemAdd(item as CFDictionary, nil)
+    if status == errSecDuplicateItem {
+      try check(SecItemUpdate(query as CFDictionary, attributes as CFDictionary))
+    } else {
+      try check(status)
+    }
+  }
+
+  private func read(key: String, legacy: Bool = false) throws -> String? {
+    var query = baseQuery(account: key, legacy: legacy)
+    query[kSecReturnData as String] = true
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
+    var item: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &item)
+    if status == errSecItemNotFound { return nil }
+    try check(status)
+    guard let data = item as? Data else {
+      throw KeychainStoreError(status: errSecParam, message: "钥匙串返回了无法解析的数据")
+    }
+    return String(data: data, encoding: .utf8)
+  }
+
+  private func delete(key: String) throws {
+    let status = SecItemDelete(baseQuery(account: key) as CFDictionary)
+    if status == errSecItemNotFound { return }
+    try check(status)
+  }
+
+  private func containsKey(key: String) throws -> Bool {
+    var query = baseQuery(account: key)
+    query[kSecReturnData as String] = false
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
+    let status = SecItemCopyMatching(query as CFDictionary, nil)
+    if status == errSecSuccess { return true }
+    if status == errSecItemNotFound { return false }
+    throw KeychainStoreError(status: status)
+  }
+
+  private func readAll(prefixes: [String]?, keys: Set<String>, legacy: Bool) throws -> [String: String] {
+    var query = baseQuery(account: nil, legacy: legacy)
+    // Security rejects kSecMatchLimitAll with kSecReturnData for passwords.
+    query[kSecReturnAttributes as String] = true
+    query[kSecMatchLimit as String] = kSecMatchLimitAll
+    var item: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &item)
+    if status == errSecItemNotFound { return [:] }
+    try check(status)
+    guard let rows = item as? [[String: Any]] else { return [:] }
+    var values: [String: String] = [:]
+    for row in rows {
+      guard let account = row[kSecAttrAccount as String] as? String else { continue }
+      if let prefixes = prefixes, !keys.contains(account),
+         !prefixes.contains(where: { account.hasPrefix($0) }) { continue }
+      values[account] = try read(key: account, legacy: legacy)
+    }
+    return values
+  }
+
+  private func baseQuery(account: String?, legacy: Bool = false) -> [String: Any] {
+    var query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: legacy ? "flutter_secure_storage_service" : service,
+    ]
+    if legacy {
+      query[kSecUseDataProtectionKeychain as String] = true
+      query[kSecAttrSynchronizable as String] = false
+    }
+    if let account = account {
+      query[kSecAttrAccount as String] = account
+    }
+    return query
+  }
+
+  private func check(_ status: OSStatus) throws {
+    if status == errSecSuccess { return }
+    throw KeychainStoreError(status: status)
+  }
+}
+
+private struct KeychainStoreError: Error {
+  let status: OSStatus
+  let message: String
+
+  init(status: OSStatus, message: String? = nil) {
+    self.status = status
+    if let message = message {
+      self.message = message
+    } else if let sys = SecCopyErrorMessageString(status, nil) as String? {
+      self.message = sys
+    } else {
+      self.message = "钥匙串错误 \(status)"
+    }
   }
 }
 
