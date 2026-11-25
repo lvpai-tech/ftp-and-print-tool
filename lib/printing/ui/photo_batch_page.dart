@@ -189,16 +189,16 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
             final String id when id.startsWith('card-') => id.substring(5),
             _ => null,
           };
+
     bool canAssignTo(Json? batch) {
       if (batch == null || !_movable(item.photo)) return false;
-      if (!widget.inline) return _isTarget(item.batch, batch);
       return batch['targetPhotoId'] != null &&
           batch['targetCardId'] != null &&
           assignedCardId != batch['targetCardId'];
     }
 
     bool defaultAssignTo(Json? batch) {
-      if (!widget.inline || batch == null || !canAssignTo(batch)) return false;
+      if (batch == null || !canAssignTo(batch)) return false;
       final cardId = batch['targetCardId'];
       return _photos(batch).every((photo) {
         final assigned = photo['assignedCardId'];
@@ -208,9 +208,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
 
     setState(() => _working = true);
     try {
-      var target =
-          initialTarget ??
-          (widget.inline && targets.length == 1 ? targets.single : null);
+      var target = initialTarget ?? targets.singleOrNull;
       var assignCard = defaultAssignTo(target);
       final confirmed = await showDialog<bool>(
         context: context,
@@ -235,20 +233,10 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (widget.inline) ...[
-                    _MovePhotoSummary(item: item),
-                    const SizedBox(height: 16),
-                  ] else ...[
-                    SizedBox(
-                      width: 80,
-                      height: 70,
-                      child: _thumbnail(item.photo),
-                    ),
-                    const SizedBox(height: 10),
-                    Text('从「${_label(item.batch)}」移出 1 张'),
-                  ],
+                  _MovePhotoSummary(item: item),
+                  const SizedBox(height: 16),
                   targetField,
-                  if (widget.inline && chosen != null) ...[
+                  if (chosen != null) ...[
                     const SizedBox(height: 16),
                     _MovePhotoOptions(
                       cardTail: chosen['cardTail'] as String?,
@@ -263,20 +251,6 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
                       onChanged: (value) => update(() => assignCard = value),
                     ),
                   ],
-                  if (!widget.inline && canAssign)
-                    CheckboxListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('同时归入目标取片卡'),
-                      value: assignCard,
-                      onChanged: (value) =>
-                          update(() => assignCard = value == true),
-                    ),
-                  if (!widget.inline && chosen != null)
-                    Text(
-                      assignCard
-                          ? '这张游客照将归入目标取片卡。'
-                          : '这次移动会调整照片管理中的分组，保留现有取片归属。',
-                    ),
                 ],
               ),
               actions: [
@@ -288,7 +262,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
                   onPressed: target == null
                       ? null
                       : () => Navigator.pop(context, true),
-                  child: Text(widget.inline && assignCard ? '移动并归卡' : '确认移动'),
+                  child: Text(assignCard ? '移动并归卡' : '确认移动'),
                 ),
               ],
             );
@@ -354,6 +328,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
         when reason.isNotEmpty) {
       return reason;
     }
+    if (!_movable(photo)) return '结束照和卡片照只用于核对取片卡。';
     if (target['targetCardId'] != null &&
         assignedCardId == target['targetCardId']) {
       return '这张照片已归入${_label(target)}。';
