@@ -7,9 +7,9 @@ import toIco from 'to-ico';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
-const srcSvg =
-  process.argv[2] ||
-  'C:/Users/Dexte/WorkBuddy/2026-11-19-11-21-21/logo-zhen.svg';
+const brandingDir = path.join(root, 'assets', 'branding');
+const brandSvg = path.join(brandingDir, 'logo-zhen.svg');
+const srcSvg = path.resolve(process.argv[2] || brandSvg);
 
 if (!fs.existsSync(srcSvg)) {
   console.error(`SVG not found: ${srcSvg}`);
@@ -17,12 +17,12 @@ if (!fs.existsSync(srcSvg)) {
 }
 
 const svg = fs.readFileSync(srcSvg);
-const brandingDir = path.join(root, 'assets', 'branding');
 const printingDir = path.join(root, 'assets', 'printing');
 const winIcon = path.join(root, 'windows', 'runner', 'resources', 'app_icon.ico');
+const macIconDir = path.join(root, 'macos', 'Runner', 'Assets.xcassets', 'AppIcon.appiconset');
 fs.mkdirSync(brandingDir, { recursive: true });
 fs.mkdirSync(printingDir, { recursive: true });
-fs.copyFileSync(srcSvg, path.join(brandingDir, 'logo-zhen.svg'));
+if (srcSvg !== brandSvg) fs.copyFileSync(srcSvg, brandSvg);
 
 async function raster(size) {
   const resvg = new Resvg(svg, {
@@ -67,6 +67,10 @@ for (const size of icoSizes) {
 const ico = await toIco(icoPngs);
 fs.writeFileSync(path.join(printingDir, 'tray.ico'), ico);
 fs.writeFileSync(winIcon, ico);
+
+for (const size of [16, 32, 64, 128, 256, 512, 1024]) {
+  fs.writeFileSync(path.join(macIconDir, `app_icon_${size}.png`), await pngAt(size));
+}
 
 const android = [
   ['mipmap-mdpi', 48],

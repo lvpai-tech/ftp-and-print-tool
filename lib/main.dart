@@ -1,8 +1,11 @@
+import 'dart:developer' as developer;
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'app.dart';
+import 'auto_upload/folder_access.dart';
 import 'desktop_lifecycle.dart';
 import 'diagnostics/crash_journal.dart';
 import 'diagnostics/crash_reporting.dart';
@@ -29,7 +32,22 @@ Future<void> main(List<String> args) async {
     checkUploadStorage: Platform.isMacOS ? checkMacUploadStorage : null,
     account: WorkstationAccount.configured(),
   );
-  if (Platform.isMacOS) connectMacUpdater(session);
+  if (Platform.isMacOS) {
+    connectMacUpdater(session);
+    try {
+      if (await FolderAccess().isUnsandboxedMacDistribution()) {
+        // The picker otherwise requires sandbox entitlements before opening.
+        await FilePicker.skipEntitlementsChecks();
+      }
+    } catch (error, stackTrace) {
+      developer.log(
+        'macOS photo picker configuration failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      session.report('照片选择器初始化失败，请重启工作台后重试。');
+    }
+  }
   final navigatorKey = GlobalKey<NavigatorState>();
   runApp(PhotoFtpApp(session: session, navigatorKey: navigatorKey));
   try {

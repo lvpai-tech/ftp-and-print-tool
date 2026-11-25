@@ -89,6 +89,8 @@ workflow 文件进入默认分支后，在 GitHub Actions 选择对应构建任�
 
 ## Mac 构建与打包
 
+首次从旧版 `lvpai_ftp_client.app` 安装新版「帧集快拍」时，先等待上传、打印完成并退出工作台，再将「应用程序」里的旧 `.app` 移至其他目录备份，最后把 DMG 里的 `帧集快拍.app` 拖到「应用程序」。保留钥匙串、收图目录及工作台数据，首次启动复核原会话、机位和队列。若 Dock 仍固定着旧应用，从 Dock 移除旧图标后重新固定新版。
+
 先按 [APPLE_TESTING.md](APPLE_TESTING.md) 配置 Xcode、依赖及应用标识，完成目录授权与 FTP 实测。
 在对应架构 Mac 上执行 `flutter build macos --release --dart-define=LVPAI_UPDATE_ENV=test`。
 在最终构建完成后，把与应用同架构的 Node 和打印内核加入 `.app`，再签名。

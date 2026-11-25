@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/auto_upload/folder_access.dart';
@@ -8,6 +10,22 @@ void main() {
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   tearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+  test('选图器配置只接受原生确认的非沙箱 macOS 安装包', () async {
+    final access = FolderAccess(channel: channel);
+    if (!Platform.isMacOS) {
+      messenger.setMockMethodCallHandler(channel, (_) => fail('不应查询安装包'));
+      expect(await access.isUnsandboxedMacDistribution(), isFalse);
+      return;
+    }
+    for (final value in [true, false, null]) {
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        expect(call.method, 'isUnsandboxedDistribution');
+        return value;
+      });
+      expect(await access.isUnsandboxedMacDistribution(), value == true);
+    }
+  });
 
   test('苹果目录恢复使用书签返回的新路径，不信任缓存裸路径', () async {
     final calls = <String>[];

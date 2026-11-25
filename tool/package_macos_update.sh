@@ -13,7 +13,12 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 ditto -x -k "$archive" "$stage"
-app="$stage/lvpai-ftp-macos-personal/lvpai_ftp_client.app"
+apps=("$stage/lvpai-ftp-macos-personal/"*.app)
+if [[ "${#apps[@]}" -ne 1 || ! -d "${apps[0]}" ]]; then
+  echo 'Expected one macOS app in the personal ZIP.' >&2
+  exit 1
+fi
+app="${apps[0]}"
 frameworks="$app/Contents/Frameworks"
 sparkle="$frameworks/Sparkle.framework/Versions/B"
 test -x "$sparkle/Autoupdate"
@@ -27,8 +32,9 @@ import plistlib
 import sys
 
 file = Path(sys.argv[1])
+channel = sys.argv[2]
 info = plistlib.loads(file.read_bytes())
-if info.get("LvpaiUpdateChannel") != sys.argv[2]:
+if info.get("LvpaiUpdateChannel") != channel:
     raise ValueError("The macOS app was packaged for a different update channel")
 if channel != "prd":
     key = os.environ["SPARKLE_PUBLIC_KEY"]

@@ -37,8 +37,8 @@ trap cleanup EXIT
 
 STAGE="$WORK/$DIST_NAME"
 mkdir -p "$STAGE"
-ditto "$APP_PATH" "$STAGE/lvpai_ftp_client.app"
-APP="$STAGE/lvpai_ftp_client.app"
+APP="$STAGE/$APP_NAME.app"
+ditto "$APP_PATH" "$APP"
 INFO="$APP/Contents/Info.plist"
 plutil -replace CFBundleDisplayName -string "$APP_NAME" "$INFO"
 plutil -replace CFBundleName -string "$APP_NAME" "$INFO"
@@ -65,20 +65,25 @@ codesign --force --sign - --timestamp=none "$APP"
 codesign --verify --strict "$APP"
 
 # 启动器：清隔离属性后打开应用。首次仍可能需右键「打开」。
-cat > "$STAGE/打开旅派客户端.command" <<'EOF'
+LAUNCHER="$STAGE/打开帧集快拍.command"
+{
+  cat <<'EOF'
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")"
-APP="./lvpai_ftp_client.app"
+EOF
+  printf 'APP=%q\n' "./$APP_NAME.app"
+  cat <<'EOF'
 if [[ ! -d "$APP" ]]; then
-  osascript -e 'display alert "找不到 lvpai_ftp_client.app" message "请保持本启动器与应用在同一文件夹。" as critical' >/dev/null 2>&1 || true
+  osascript -e 'display alert "找不到帧集快拍应用" message "请保持本启动器与应用在同一文件夹。" as critical' >/dev/null 2>&1 || true
   exit 1
 fi
 xattr -cr "$APP" 2>/dev/null || true
 xattr -cr . 2>/dev/null || true
 open "$APP"
 EOF
-chmod 755 "$STAGE/打开旅派客户端.command"
+} > "$LAUNCHER"
+chmod 755 "$LAUNCHER"
 
 # 写入包内说明，避免误当正式公证包。
 cat > "$STAGE/使用说明.txt" <<EOF
@@ -87,8 +92,8 @@ ${APP_NAME} · macOS 个人包（${CHANNEL}）
 Node：${NODE_VERSION}
 
 1. 解压整个文件夹，不要只抽出 .app。
-2. 第一次：右键「打开旅派客户端.command」，或选「仍要打开」。
-3. 之后可双击该 .command，或直接打开 lvpai_ftp_client.app。
+2. 第一次：右键「打开帧集快拍.command」，或选「仍要打开」。
+3. 之后可双击该 .command，或直接打开 ${APP_NAME}.app。
 4. 本包为临时签名，未做 Apple 公证，仅供个人跨机使用。
 5. 打印内核已随包；正式对外分发仍须按 RELEASING.md 签名公证。
 EOF

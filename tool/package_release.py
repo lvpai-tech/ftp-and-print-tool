@@ -162,8 +162,7 @@ def main():
             run('lipo', '-verify_arch', arch, runtime / 'node')
             content = staging / 'image'
             content.mkdir()
-            bundle_name = app.name if args.channel == 'prd' else f'{display_name}.app'
-            shutil.copytree(app, content / bundle_name, symlinks=True)
+            shutil.copytree(app, content / f'{display_name}.app', symlinks=True)
             (content / 'Applications').symlink_to('/Applications')
             run('hdiutil', 'create', '-volname', display_name, '-srcfolder', content,
                 '-format', 'UDZO', package)

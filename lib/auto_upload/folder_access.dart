@@ -13,6 +13,10 @@ class FolderAccess {
     : channel = channel ?? const MethodChannel('ai.lvpai.ftp/folder-access'),
       apple = apple ?? (Platform.isMacOS || Platform.isIOS);
 
+  Future<bool> isUnsandboxedMacDistribution() async =>
+      Platform.isMacOS &&
+      await channel.invokeMethod<bool>('isUnsandboxedDistribution') == true;
+
   Future<String?> restore() async =>
       apple ? await channel.invokeMethod<String>('restore') : null;
 
