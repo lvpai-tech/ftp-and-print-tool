@@ -193,15 +193,26 @@ class StationUpload extends ChangeNotifier {
 
   Future<void> resume() => restore();
 
-  Future<void> replaceProfile(CosUploadProfile next, {required bool start}) =>
-      _run(() async {
-        if (profile.queueTarget != next.queueTarget) {
-          throw StateError('机位配置与队列不一致');
-        }
-        await _stop();
-        profile = next;
-        if (enabled && start) await _start();
-      });
+  Future<void> replaceProfile(
+    CosUploadProfile next, {
+    required bool start,
+  }) async {
+    if (_closed) return;
+    if (profile.queueTarget == next.queueTarget &&
+        profile.token == next.token) {
+      profile = next;
+      _changed();
+      return;
+    }
+    await _run(() async {
+      if (profile.queueTarget != next.queueTarget) {
+        throw StateError('机位配置与队列不一致');
+      }
+      await _stop();
+      profile = next;
+      if (enabled && start) await _start();
+    });
+  }
 
   Future<PickedUploadFolder?> chooseFolder() => _access.chooseUploadFolder();
 

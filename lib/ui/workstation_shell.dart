@@ -144,36 +144,22 @@ class _WorkstationShellState extends State<WorkstationShell> {
       builder: (context, _) {
         final module = _module;
         final width = MediaQuery.sizeOf(context).width;
-        final headerInset = module == null && width >= 800
-            ? ((width - workstationContentWidth) / 2).clamp(
-                40.0,
-                double.infinity,
-              )
-            : 16.0;
         final home = module == null;
+        final headerInset = home && width >= workstationWideWidth ? 40.0 : 16.0;
         return Stack(
           fit: StackFit.expand,
           children: [
-            if (home) const WorkstationScenicBackground(),
             Scaffold(
-              backgroundColor: home
-                  ? Colors.transparent
-                  : workstationBackground,
+              backgroundColor: workstationBackground,
               appBar: module == WorkModule.print
                   ? null
                   : AppBar(
-                      backgroundColor: home
-                          ? const Color(0x90101f39)
-                          : Colors.white,
+                      backgroundColor: Colors.white,
                       surfaceTintColor: Colors.transparent,
-                      toolbarHeight: module == null ? 60 : 68,
+                      toolbarHeight: home ? 72 : 68,
                       titleSpacing: headerInset,
-                      shape: Border(
-                        bottom: BorderSide(
-                          color: home
-                              ? Colors.white24
-                              : const Color(0xffe1e7f0),
-                        ),
+                      shape: const Border(
+                        bottom: BorderSide(color: Color(0xffe1e7f0)),
                       ),
                       leading: module == null
                           ? null
@@ -185,7 +171,10 @@ class _WorkstationShellState extends State<WorkstationShell> {
                       title: Text(
                         module?.label ?? appBrandName,
                         style: TextStyle(
-                          color: home ? Colors.white : workstationInk,
+                          color: workstationInk,
+                          fontSize: home && width >= workstationWideWidth
+                              ? 26
+                              : null,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
@@ -194,8 +183,7 @@ class _WorkstationShellState extends State<WorkstationShell> {
                           TextButtonTheme(
                             data: TextButtonThemeData(
                               style: TextButton.styleFrom(
-                                foregroundColor: const Color(0xffe4edff),
-                                disabledForegroundColor: Colors.white54,
+                                foregroundColor: workstationInk,
                               ),
                             ),
                             child: Row(
@@ -221,7 +209,9 @@ class _WorkstationShellState extends State<WorkstationShell> {
                                         style: Theme.of(context)
                                             .textTheme
                                             .bodySmall
-                                            ?.copyWith(color: Colors.white70),
+                                            ?.copyWith(
+                                              color: const Color(0xff586575),
+                                            ),
                                       ),
                                     );
                                   },
@@ -260,7 +250,7 @@ class _WorkstationShellState extends State<WorkstationShell> {
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: const TextStyle(
-                                            color: Colors.white,
+                                            color: workstationInk,
                                           ),
                                         ),
                                       ),

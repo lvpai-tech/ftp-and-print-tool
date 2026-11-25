@@ -1,7 +1,7 @@
 name: lvpai_ftp_client
 description: 跨平台照片 FTP 上传与打印工作台
 publish_to: none
-version: 0.4.5+11
+version: 0.4.5+12
 environment:
   sdk: '>=3.13.0 <4.0.0'
 dependencies:
@@ -38,7 +38,6 @@ flutter:
   assets:
     - windows/installer/update.ps1
     - assets/branding/zhenji-brand.png
-    - assets/branding/workstation-scenic.webp
     - assets/branding/logo-zhen.svg
     - assets/printing/tray.ico
     - assets/printing/tray.png

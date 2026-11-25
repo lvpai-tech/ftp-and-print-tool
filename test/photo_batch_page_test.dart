@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' show PictureRecorder, PointerDeviceKind;
 
 import 'package:flutter/foundation.dart' show SynchronousFuture;
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/printing/ui/photo_batch_page.dart';
 import 'package:lvpai_ftp_client/printing/ui/photo_batch_split_dialog.dart';
@@ -722,6 +723,48 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('大图加载失败，请刷新批次后重试'), findsOneWidget);
     expect(tester.widget<RawImage>(displayed).image?.width, 1);
+  });
+
+  testWidgets('刷新批次更新机位选项并保留仍可用的选择', (tester) async {
+    final queriedStations = <String>[];
+    var stationReads = 0;
+    var stations = [
+      {'id': '1', 'code': 'A01', 'name': '原机位'},
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: _printBatchView(
+          scenicName: '测试景区',
+          call: (method, args) async {
+            if (method == 'listBatchStations') {
+              stationReads++;
+              return stations;
+            }
+            expect(method, 'listPhotoBatches');
+            queriedStations.add(args.single['stationId'] as String);
+            return {'batches': <Map<String, dynamic>>[]};
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final refresh = find.byTooltip('刷新批次');
+    final newer = {'id': '2', 'code': 'A02', 'name': '新机位'};
+    stations = [newer, ...stations];
+    await tester.tap(refresh);
+    await tester.pumpAndSettle();
+    expect(queriedStations, ['1', '1']);
+    await tester.tap(find.byTooltip('选择机位'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, 'A02 · 新机位'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+
+    stations = [newer];
+    await tester.tap(refresh);
+    await tester.pumpAndSettle();
+    expect(queriedStations, ['1', '1', '2']);
+    expect(stationReads, 3);
   });
 
   testWidgets('机位和日期菜单在按钮下方展开，选一天即查询北京时间整日', (tester) async {

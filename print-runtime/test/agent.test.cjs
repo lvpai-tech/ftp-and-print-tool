@@ -7,8 +7,9 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { normalizeConfig } = require('../src/config');
-const { runOnce } = require('../src/agent');
+const { processClaimedJob, runOnce } = require('../src/agent');
 const { resolvePrinter } = require('../src/print');
+const { createPrintRecovery } = require('../src/print-recovery');
 
 function startServer(handler) {
   return new Promise((resolve) => {
@@ -54,6 +55,43 @@ function makeConfig(origin, directory, script, extra = {}) {
     { configPath: path.join(directory, 'config.json'), scriptDir: directory },
   );
 }
+
+test('Mac 纸型验证失败直接回写失败，提交异常仍保留待核对记录', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'print-layout-validation-'));
+  const reports = [];
+  const { server, origin } = await startServer(async (request, response) => {
+    if (request.url.endsWith('/result')) {
+      const result = await body(request);
+      reports.push(result);
+      return json(response, { status: result.status });
+    }
+    response.setHeader('Content-Type', 'image/jpeg');
+    response.end('fixture');
+  });
+  t.after(() => {
+    server.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const script = path.join(directory, 'print-image-mac.sh');
+  function configForExit(code) {
+    return makeConfig(origin, directory, script, { command: [process.execPath, '-e',
+      `if (process.env.LVPAI_PRINT_NODE !== process.execPath) process.exit(3);
+       console.error('无法选择 4×6'); process.exit(${code});`, script] });
+  }
+  const job = { id: '102', attempt: 1,
+    items: [{ kind: 'ORIGINAL', fileUrl: '/print-agents/jobs/102/files/PHOTO/1', copies: 1 }] };
+  const preflight = configForExit(2);
+  const recovery = createPrintRecovery(preflight);
+  const result = await processClaimedJob(preflight, job, { recovery });
+  assert.equal(result.state, 'FAILED');
+  assert.match(reports[0].reason, /4×6/);
+  assert.equal(reports[0].completedSheets, 0);
+  assert.equal(recovery.jobs.size, 0);
+
+  await assert.rejects(processClaimedJob(configForExit(1), job, { recovery }), /核对中断工单/);
+  assert.equal(recovery.jobs.get('102').sheets[0].state, 'UNCERTAIN');
+  assert.equal(reports.length, 1);
+});
 
 test('领取→下载→多 kind 路由到不同打印机→PRINTED', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'print-desktop-'));

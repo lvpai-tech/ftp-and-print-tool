@@ -28,11 +28,11 @@ class WorkstationEnrollmentPanel extends StatefulWidget {
   final Future<void> Function() onManual;
 
   @override
-  State<WorkstationEnrollmentPanel> createState() =>
-      _WorkstationEnrollmentPanelState();
+  WorkstationEnrollmentPanelState createState() =>
+      WorkstationEnrollmentPanelState();
 }
 
-class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
+class WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
     with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
@@ -48,6 +48,7 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
   final _history = ValueNotifier<List<MapEntry<String, _Application>>>(
     const [],
   );
+  late final Future<void> _initialLoad;
   String? _error;
   bool _applying = false;
   bool _historyOpen = false;
@@ -61,7 +62,7 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
   @override
   void initState() {
     super.initState();
-    unawaited(_load());
+    _initialLoad = _load();
   }
 
   Future<void> _load() async {
@@ -106,16 +107,23 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
     }
   }
 
-  void _refreshAll() {
-    for (final entry in _applications.entries) {
-      if (entry.value.result?.terminal != true) {
-        unawaited(_refresh(entry.key, entry.value));
-      }
-    }
+  Future<bool> refreshApplications() async {
+    await _initialLoad;
+    if (!mounted) return false;
+    if (_error != null) await _load();
+    if (!mounted) return false;
+    final pending = _applications.entries
+        .where((entry) => entry.value.result?.terminal != true)
+        .toList();
+    await Future.wait(pending.map((entry) => _refresh(entry.key, entry.value)));
+    return _error == null &&
+        pending.every((entry) => entry.value.error == null);
   }
 
-  Future<void> _refresh(String id, _Application app) async {
-    if (app.busy || !mounted) return;
+  Future<void> _refresh(String id, _Application app) =>
+      app.refreshing ??= _refreshApplication(id, app);
+
+  Future<void> _refreshApplication(String id, _Application app) async {
     _updateApplications(() => app.busy = true);
     try {
       final status = await _enrollment.refresh(
@@ -136,6 +144,7 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
       if (!mounted) return;
       app.error = error is EnrollmentError ? error.message : '连接或保存机位申请失败，请重试';
     } finally {
+      app.refreshing = null;
       if (mounted) _updateApplications(() => app.busy = false);
     }
   }
@@ -226,7 +235,7 @@ class _WorkstationEnrollmentPanelState extends State<WorkstationEnrollmentPanel>
                             !entry.value.busy &&
                             entry.value.result?.terminal != true,
                       )
-                      ? _refreshAll
+                      ? refreshApplications
                       : null,
                   icon: const Icon(Icons.refresh),
                   label: const Text('刷新全部申请'),
@@ -350,6 +359,7 @@ class _Application {
   EnrollmentStatus? result;
   String? error;
   bool busy = false;
+  Future<void>? refreshing;
 }
 
 class _EnrollmentDialog extends StatefulWidget {

@@ -131,18 +131,27 @@ class WorkstationAccount {
     );
   }
 
-  Future<WorkstationScenic> stationScenic(CosUploadProfile profile) async {
+  Future<({WorkstationScenic scenic, String name, String code})> stationDetails(
+    CosUploadProfile profile,
+  ) async {
     if (profile.api.origin != origin?.origin || _token == null) {
       throw const WorkstationAccountError('机位与当前工作台环境不一致');
     }
-    return _scenic(
-      await _request(
-        'GET',
-        '/api/operation/workstation-session/stations/${profile.stationId}',
-        bearer: _token,
-        deviceToken: profile.token,
-      ),
+    final data = await _request(
+      'GET',
+      '/api/operation/workstation-session/stations/${profile.stationId}',
+      bearer: _token,
+      deviceToken: profile.token,
     );
+    final name = data?['stationName'];
+    final code = data?['stationCode'];
+    if (name is! String ||
+        name.trim().isEmpty ||
+        code is! String ||
+        code.trim().isEmpty) {
+      throw const WorkstationAccountError('工作台服务未返回有效的机位名称或编码');
+    }
+    return (scenic: _scenic(data), name: name, code: code);
   }
 
   WorkstationScenic _scenic(Object? row) {

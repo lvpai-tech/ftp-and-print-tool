@@ -56,6 +56,7 @@ class _TransferPageState extends State<TransferPage>
     with WidgetsBindingObserver {
   final _store = const ProfileStore();
   final _api = CosUploadProfile.tryParseApiBase(workstationUploadApiBase);
+  final _enrollmentPanel = GlobalKey<WorkstationEnrollmentPanelState>();
   final _stations = <String, StationUpload>{};
   final _removing = <StationUpload>{};
   final _transferSlots = UploadSlots(3);
@@ -151,15 +152,15 @@ class _TransferPageState extends State<TransferPage>
         : (await Future.wait(
             saved.map((profile) async {
               try {
-                final scenic = await account.stationScenic(profile);
+                final details = await account.stationDetails(profile);
                 return CosUploadProfile(
                   profile.api.origin,
                   profile.stationId,
                   profile.token,
-                  stationName: profile.stationName,
-                  stationCode: profile.stationCode,
-                  scenicId: scenic.id,
-                  scenicName: scenic.name,
+                  stationName: details.name,
+                  stationCode: details.code,
+                  scenicId: details.scenic.id,
+                  scenicName: details.scenic.name,
                 );
               } on WorkstationAccountError catch (error) {
                 if (!error.deniedDevice) rethrow;
@@ -298,8 +299,8 @@ class _TransferPageState extends State<TransferPage>
       }
       final account = widget.session?.account;
       if (account != null) {
-        final scenic = await account.stationScenic(profile);
-        if (scenic.id != widget.session?.scenic?.id) {
+        final details = await account.stationDetails(profile);
+        if (details.scenic.id != widget.session?.scenic?.id) {
           throw const WorkstationAccountError('机位不属于当前工作景区');
         }
       }
@@ -328,11 +329,25 @@ class _TransferPageState extends State<TransferPage>
   }
 
   Future<void> _refreshStations() async {
+    if (_refreshing) return;
     setState(() => _refreshing = true);
     try {
+      final applicationsSynced = await _enrollmentPanel.currentState
+          ?.refreshApplications();
       await _reloadStations();
-    } catch (_) {
-      if (mounted) setState(() => _error = '无法刷新机位列表，请重试');
+      if (mounted && applicationsSynced == false) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('机位申请同步失败，请在申请记录中查看或重试。')));
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _error = error is WorkstationAccountError
+              ? error.message
+              : '无法刷新机位列表，请重试';
+        });
+      }
     } finally {
       if (mounted) setState(() => _refreshing = false);
     }
@@ -442,6 +457,7 @@ class _TransferPageState extends State<TransferPage>
         const SizedBox(height: 16),
         if (api != null && _error == null)
           WorkstationEnrollmentPanel(
+            key: _enrollmentPanel,
             api: api,
             store: _store,
             onBound: _reloadStations,

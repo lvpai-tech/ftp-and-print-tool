@@ -122,7 +122,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       !_selecting &&
       _draggingPhotoId == null;
 
-  Future<void> _load() async {
+  Future<void> _load({bool refreshStations = false}) async {
     if (_selectionOverlay.isShowing) _selectionOverlay.hide();
     setState(() {
       _refreshFromUploads = false;
@@ -136,16 +136,22 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       _selectionNotice = null;
     });
     try {
-      final stations =
-          _stations ??
-          (await widget.call('listBatchStations', []) as List).cast<Json>();
+      final stations = refreshStations || _stations == null
+          ? (await widget.call('listBatchStations', []) as List).cast<Json>()
+          : _stations!;
       if (!mounted) return;
-      final station = _station ?? stations.firstOrNull?['id'] as String?;
+      final previous = _station;
+      final hasSelection = stations.any((row) => row['id'] == previous);
+      final station = widget.inline || hasSelection
+          ? previous
+          : stations.firstOrNull?['id'] as String?;
+      final unavailable = widget.inline && station != null && !hasSelection;
       setState(() {
         _stations = stations;
         _station = station;
+        if (station != previous || unavailable) _batches = [];
       });
-      if (station != null && !stations.any((row) => row['id'] == station)) {
+      if (unavailable) {
         throw StateError('当前打印景区没有此上传机位，请核对机位和景区设置。');
       }
       final result = station == null
@@ -643,7 +649,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     );
     final refresh = IconButton(
       tooltip: '刷新批次',
-      onPressed: enabled ? _load : null,
+      onPressed: enabled ? () => _load(refreshStations: true) : null,
       style: IconButton.styleFrom(
         minimumSize: const Size(44, 44),
         foregroundColor: WorkstationStyle.accent,

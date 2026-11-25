@@ -16,6 +16,7 @@ const NAME = 0x42;
 const KEYWORD = 0x44;
 const URI = 0x45;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+const PHOTO_MEDIA = 'na_index-4x6_4x6in';
 
 const DEVICE_FAULTS = new Map([
   ['media-empty', 'PaperOut'], ['media-needed', 'PaperOut'], ['media-jam', 'PaperJam'],
@@ -225,14 +226,29 @@ async function cancelMacJob(printer, jobId, request = requestCups) {
   return response.status < 0x0100;
 }
 
+async function selectMacPhotoMedia(printer, request = requestCups) {
+  const { resource, attributes } = queueTarget(printer);
+  const reply = await request(GET_PRINTER_ATTRIBUTES, resource,
+    [...attributes, [KEYWORD, 'requested-attributes', ['media-supported']]]);
+  if (reply.status >= 0x0100) throw new Error(`无法读取 CUPS 纸型（IPP 0x${reply.status.toString(16)}）`);
+  const supported = reply.groups.find(({ tag }) => tag === 4)?.attributes.get('media-supported') || [];
+  const paper = supported.find((value) => value === PHOTO_MEDIA)
+    || supported.find((value) => /^(?:4x6|(?:[a-z][a-z0-9.-]*_)+(?:4x6in|101\.6x152\.4mm|102x152mm))$/i.test(value));
+  if (!paper) throw new Error('CUPS 未报告支持 6 寸纸（4×6 英寸）');
+  return paper;
+}
+
 if (require.main === module) {
   const [printer, id] = process.argv.slice(2);
-  probeMacPrinter(printer, id ? Number(id) : undefined).then((snapshot) => {
-    process.stdout.write(`${JSON.stringify(snapshot)}\n`);
+  const result = printer === '--photo-media'
+    ? selectMacPhotoMedia(id)
+    : probeMacPrinter(printer, id ? Number(id) : undefined).then(JSON.stringify);
+  result.then((output) => {
+    process.stdout.write(`${output}\n`);
   }).catch((error) => {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;
   });
 }
 
-module.exports = { CUPS_SOCKET, cancelMacJob, parseCupsJobId, probeMacPrinter, requestCups, usesMacPrintScript };
+module.exports = { CUPS_SOCKET, cancelMacJob, parseCupsJobId, probeMacPrinter, requestCups, selectMacPhotoMedia, usesMacPrintScript };

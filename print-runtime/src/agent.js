@@ -99,7 +99,13 @@ async function processClaimedJob(config, job, hooks = {}) {
         if (record) record = recovery.beforeSubmit(record, index, printer, item.kind);
         const documentName = record?.sheets[index].documentName;
         const windowsScript = config.command.some(part => /(?:^|[\\/])print-image\.ps1$/i.test(part));
-        const { cupsJobId } = await runPrintCommand(config, item, cached.file, printer, documentName);
+        const { cupsJobId } = await runPrintCommand(config, item, cached.file, printer, documentName)
+          .catch((error) => {
+            if (record && error.beforeSubmission) {
+              record = recovery.mark(record, index, { state: 'READY', documentName: undefined });
+            }
+            throw error;
+          });
         if (record && cupsJobId != null) record = recovery.mark(record, index, { spoolId: cupsJobId });
         usedPrinters.push({ kind: item.kind, printer });
         if (checkPrinter) {

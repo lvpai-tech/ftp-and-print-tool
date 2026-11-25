@@ -2,11 +2,15 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
 import 'package:lvpai_ftp_client/printing/print_bridge.dart';
 import 'package:lvpai_ftp_client/printing/ui/photo_batch_page.dart';
 import 'package:lvpai_ftp_client/profile_store.dart';
 import 'package:lvpai_ftp_client/ui/transfer_page.dart';
+import 'package:lvpai_ftp_client/workstation_account.dart';
+import 'package:lvpai_ftp_client/workstation_session.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 
@@ -29,12 +33,17 @@ void main() {
     await support.delete(recursive: true);
   });
 
-  Future<void> showUpload(WidgetTester tester, {PrintBridge? bridge}) async {
+  Future<void> showUpload(
+    WidgetTester tester, {
+    PrintBridge? bridge,
+    WorkstationSession? session,
+  }) async {
     await tester.pumpWidget(
       MaterialApp(
         home: TransferPage(
           supportDirectory: () async => support,
           printBridge: bridge,
+          session: session,
         ),
       ),
     );
@@ -88,6 +97,16 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.tapAt(const Offset(10, 10));
     await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('刷新批次'));
+    await tester.pumpAndSettle();
+    expect(bridge.calls, [
+      'listBatchStations',
+      'listPhotoBatches',
+      'listBatchStations',
+      'listPhotoBatches',
+    ]);
+    expect(find.text('取片卡 6969'), findsOneWidget);
+    expect(find.byTooltip('选择机位'), findsNothing);
     tester.view.physicalSize = const Size(375, 812);
     await tester.pumpAndSettle();
     await tester.ensureVisible(date);
@@ -207,6 +226,111 @@ void main() {
     });
   });
 
+  testWidgets('刷新机位领取审核通过的申请并直接更新列表', (tester) async {
+    const store = ProfileStore();
+    const id = 'approved-station';
+    const terminalId = 'completed-station';
+    final token = 'a' * 64;
+    const binding = {'stationId': '317', 'stationCode': 'A08'};
+    const prefix = '/api/operation/workstation-enrollment/applications';
+    await store.saveEnrollment(gateway, id, {
+      'draft': {'requestId': id, 'scenicName': '测试景区', 'location': '点位甲'},
+      'submitted': true,
+      'secret': 'b' * 64,
+    });
+    await store.saveEnrollment(gateway, terminalId, {
+      'draft': {
+        'requestId': terminalId,
+        'scenicName': '测试景区',
+        'location': '点位乙',
+      },
+      'result': {'id': terminalId, 'status': 'REJECTED'},
+    });
+    final requests = <String>[];
+    final client = MockClient((request) async {
+      expect(request.url.origin, gateway.origin);
+      final action = '${request.method} ${request.url.path}';
+      requests.add(action);
+      final data = switch (action) {
+        'GET $prefix/$id' => {
+          'id': id,
+          'status': 'APPROVED',
+          'binding': binding,
+        },
+        'POST $prefix/$id/claim' => {'stationToken': token, 'binding': binding},
+        'POST $prefix/$id/activate' => {
+          'id': id,
+          'status': 'BOUND',
+          'binding': binding,
+        },
+        _ => throw StateError('额外的申请请求 $action'),
+      };
+      return http.Response(jsonEncode({'code': 200, 'data': data}), 200);
+    });
+    await http.runWithClient(() async {
+      await showUpload(tester);
+      expect(find.text('申请记录（2）'), findsOneWidget);
+      expect(find.text('A08'), findsNothing);
+      expect(requests, isEmpty);
+
+      await tester.tap(find.text('刷新机位'));
+      await waitForStationUi(tester, find.text('A08'));
+      expect(find.textContaining('已绑定 1 个机位'), findsOneWidget);
+      expect(requests, [
+        'GET $prefix/$id',
+        'POST $prefix/$id/claim',
+        'POST $prefix/$id/activate',
+      ]);
+
+      await tester.tap(find.text('申请记录（2）'));
+      await tester.pumpAndSettle();
+      expect(find.text('已绑定'), findsOneWidget);
+      expect(find.text('已驳回'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }, () => client);
+  });
+
+  testWidgets('刷新已绑定机位的名称和编码，沿用原监听', (tester) async {
+    const store = ProfileStore();
+    final bridge = PrintBridge();
+    final account = _StationDetailsAccount(gateway);
+    final session = WorkstationSession(bridge, account: account)
+      ..scenic = _StationDetailsAccount.scenic;
+    addTearDown(session.dispose);
+    addTearDown(bridge.dispose);
+    await store.saveCos(
+      CosUploadProfile(gateway.origin, '317', 'a' * 64, stationCode: 'A07'),
+      keepManagedDefault: true,
+    );
+    await showUpload(tester, session: session);
+    await waitForStationUi(tester, find.text('运行中'));
+    expect(find.text('A08 · 原机位'), findsOneWidget);
+
+    account.details = (
+      scenic: _StationDetailsAccount.scenic,
+      name: '新机位',
+      code: 'A09',
+    );
+    await tester.tap(find.text('刷新机位'));
+    await waitForStationUi(tester, find.text('A09 · 新机位'));
+    expect(find.text('A08 · 原机位'), findsNothing);
+    expect(find.text('运行中'), findsOneWidget);
+    expect((await store.loadStations(gateway)).single.stationId, '317');
+    var stopped = false;
+    final stop = session.updateUploads!(true).whenComplete(
+      () => stopped = true,
+    );
+    for (var attempt = 0; attempt < 80 && !stopped; attempt++) {
+      await tester.pump();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 25)),
+      );
+    }
+    expect(stopped, isTrue);
+    await stop;
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('刷新显示各机位状态，移除单个机位保留目录和旧配置隔离', (tester) async {
     const store = ProfileStore();
     final legacy = CosUploadProfile(
@@ -290,6 +414,22 @@ void main() {
       expect(field.controller?.text, isEmpty);
     }
   });
+}
+
+class _StationDetailsAccount extends WorkstationAccount {
+  _StationDetailsAccount(super.origin);
+
+  static const scenic = (id: '5', name: '汉京中心', code: 'SOMA');
+  ({WorkstationScenic scenic, String name, String code}) details = (
+    scenic: scenic,
+    name: '原机位',
+    code: 'A08',
+  );
+
+  @override
+  Future<({WorkstationScenic scenic, String name, String code})> stationDetails(
+    CosUploadProfile profile,
+  ) async => details;
 }
 
 class _BatchBridge extends PrintBridge {

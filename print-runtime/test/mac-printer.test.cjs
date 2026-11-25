@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { once } = require('node:events');
 const { test } = require('node:test');
-const { cancelMacJob, parseCupsJobId, probeMacPrinter, requestCups } = require('../src/mac-printer');
+const { cancelMacJob, parseCupsJobId, probeMacPrinter, requestCups, selectMacPhotoMedia } = require('../src/mac-printer');
 const { watchAfterSubmit, printerFaults, filterPrinterFaults, isOnlyPaperOut } = require('../src/printer-status');
 
 function attribute(tag, name, value) {
@@ -28,6 +28,7 @@ test('CUPS IPP 查询读取设备缺纸、卡纸和指定作业，取消只提�
   let jammed = false;
   let jobReason = 'job-completed-successfully';
   let deviceReason = 'media-empty-error';
+  let media = ['iso_a4_210x297mm', 'na_index-4x6_4x6in'];
   const requests = [];
   const server = http.createServer(async (request, response) => {
     const chunks = [];
@@ -41,7 +42,8 @@ test('CUPS IPP 查询读取设备缺纸、卡纸和指定作业，取消只提�
         attribute(0x23, 'printer-state', 5),
         attribute(0x22, 'printer-is-accepting-jobs', [1]),
         attribute(0x44, 'printer-state-reasons', deviceReason),
-        ...(jammed ? [attribute(0x44, '', 'media-jam-error')] : [])));
+        ...(jammed ? [attribute(0x44, '', 'media-jam-error')] : []),
+        ...media.map((paper, index) => attribute(0x44, index ? '' : 'media-supported', paper))));
     } else if (operation === 0x0009 && jobReason != null) {
       response.end(ippReply(0, Buffer.from([2]),
         attribute(0x21, 'job-id', 42), attribute(0x23, 'job-state', 9),
@@ -69,6 +71,13 @@ test('CUPS IPP 查询读取设备缺纸、卡纸和指定作业，取消只提�
   assert.equal((await probeMacPrinter('Photo-6', 42, query)).jobs[0].status, 'Unconfirmed');
   jobReason = null;
   assert.deepEqual((await probeMacPrinter('Photo-6', 42, query)).jobs, []);
+
+  assert.equal(await selectMacPhotoMedia('Photo-6', query), 'na_index-4x6_4x6in');
+  assert.ok(requests.at(-1).bytes.includes(attribute(0x44, 'requested-attributes', 'media-supported')));
+  media = ['iso_a4_210x297mm', 'custom_photo_102x152mm'];
+  assert.equal(await selectMacPhotoMedia('Photo-6', query), 'custom_photo_102x152mm');
+  media = ['iso_a4_210x297mm', 'na_5x7_5x7in'];
+  await assert.rejects(selectMacPhotoMedia('Photo-6', query), /未报告支持 6 寸纸/);
 
   assert.equal(await cancelMacJob('Photo-6', 42, query), true);
   assert.equal(await cancelMacJob('Photo-6', undefined, query), false);

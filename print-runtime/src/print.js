@@ -3,7 +3,7 @@
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { appRoot } = require('./paths');
-const { parseCupsJobId } = require('./mac-printer');
+const { parseCupsJobId, usesMacPrintScript } = require('./mac-printer');
 
 /**
  * 按 item.kind 解析本机打印机名。缺映射且无兜底时抛错（整单 FAILED）。
@@ -42,11 +42,13 @@ function buildCommandArgs(config, item, file, printer) {
  */
 function runPrintCommand(config, item, file, printer, documentName) {
   const args = buildCommandArgs(config, item, file, printer);
+  const macScript = usesMacPrintScript(config.command);
   return new Promise((resolve, reject) => {
     const child = spawn(args[0], args.slice(1), {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, LVPAI_PRINT_DPI: String(config.printDpi ?? 300),
+        ...(macScript ? { LVPAI_PRINT_NODE: process.execPath } : {}),
         LVPAI_PRINT_DOCUMENT_NAME: documentName || '' },
     });
     let output = '';
@@ -62,8 +64,13 @@ function runPrintCommand(config, item, file, printer, documentName) {
       reject(new Error(`无法启动打印命令：${error.message}`));
     });
     child.on('close', (code) => {
-      if (code === 0) resolve({ printer, kind: item.kind, cupsJobId: parseCupsJobId(stdout, printer) });
-      else reject(new Error(`打印命令退出码${code}：${output.trim()}`));
+      if (code === 0) {
+        resolve({ printer, kind: item.kind, cupsJobId: parseCupsJobId(stdout, printer) });
+        return;
+      }
+      const error = new Error(`打印命令退出码${code}：${output.trim()}`);
+      if (macScript && code === 2) error.beforeSubmission = true;
+      reject(error);
     });
   });
 }

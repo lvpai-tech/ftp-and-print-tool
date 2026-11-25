@@ -218,38 +218,33 @@ class WorkstationLoginFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    body: Stack(
-      fit: StackFit.expand,
-      children: [
-        const WorkstationScenicBackground(),
-        SafeArea(
-          child: LayoutBuilder(
-            builder: (context, bounds) => SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
+    backgroundColor: workstationBackground,
+    body: SafeArea(
+      child: LayoutBuilder(
+        builder: (context, bounds) => SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight: (bounds.maxHeight - 40)
+                  .clamp(0, double.infinity)
+                  .toDouble(),
+            ),
+            child: Center(
               child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: (bounds.maxHeight - 40)
-                      .clamp(0, double.infinity)
-                      .toDouble(),
-                ),
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 420),
-                    child: Card(
-                      margin: EdgeInsets.zero,
-                      elevation: 6,
-                      color: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          mainAxisSize: MainAxisSize.min,
-                          children: children,
-                        ),
-                      ),
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Card(
+                  margin: EdgeInsets.zero,
+                  elevation: 6,
+                  color: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: children,
                     ),
                   ),
                 ),
@@ -257,7 +252,7 @@ class WorkstationLoginFrame extends StatelessWidget {
             ),
           ),
         ),
-      ],
+      ),
     ),
   );
 }

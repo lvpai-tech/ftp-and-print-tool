@@ -121,17 +121,25 @@ void main() {
 
       expect(find.text('照片工作台'), findsOneWidget);
       expect(find.text('帧集快拍'), findsOneWidget);
-      expect(find.text('一分钟拍大片'), findsOneWidget);
       final version = find.text('v2.3.4+57');
       expect(version, findsOneWidget);
-      final background = find.image(
-        const AssetImage('assets/branding/workstation-scenic.webp'),
-      );
-      expect(tester.getRect(background), Offset.zero & Size(width, 900));
+      expect(find.byType(Image), findsNothing);
       expect(tester.widget<Text>(keyed('status-upload')).data, '机位待配置');
       expect(tester.widget<Text>(keyed('status-print')).data, '自动打印已关闭');
-      expect(keyed('open-upload'), findsOneWidget);
-      expect(keyed('open-print'), findsOneWidget);
+      final upload = keyed('open-upload');
+      final print = keyed('open-print');
+      expect(find.widgetWithText(FilledButton, '查看上传'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, '进入打印'), findsOneWidget);
+      final uploadButton = tester.getRect(upload);
+      final printButton = tester.getRect(print);
+      expect(uploadButton.width, printButton.width);
+      if (width >= 800) {
+        expect(uploadButton.right, lessThan(printButton.left));
+        expect(uploadButton.top, printButton.top);
+      } else {
+        expect(uploadButton.left, printButton.left);
+        expect(uploadButton.bottom, lessThan(printButton.top));
+      }
       await open(tester, 'open-upload');
       expect(find.byType(TransferPage), findsOneWidget);
       expect(find.text('申请机位'), findsOneWidget);
