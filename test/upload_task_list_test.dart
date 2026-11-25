@@ -5,7 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
-  testWidgets('入库照片只出现在照片归属，传输中的任务仍可查阅', (tester) async {
+  testWidgets('默认展示归批结果，可切换查看本机上传任务', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1120, 950));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final folder = p.absolute('inbox');
@@ -54,6 +54,10 @@ void main() {
 
     await render();
     expect(find.text('取片卡 394373'), findsOneWidget);
+    expect(find.text('上传中 0%'), findsNothing);
+    await tester.tap(find.text('本机上传'));
+    await tester.pump();
+    expect(find.text('取片卡 394373'), findsNothing);
     expect(find.text('已入队任务'), findsNothing);
     expect(find.text('grouped.jpg'), findsNothing);
     expect(find.text('ingested.jpg'), findsNothing);
@@ -66,8 +70,12 @@ void main() {
       job.state = 'grouped';
     }
     await render();
-    expect(find.text('取片卡 394373'), findsOneWidget);
+    expect(find.text('本机暂无上传任务'), findsOneWidget);
     expect(find.byTooltip('识别取片卡尾号'), findsNothing);
+    await tester.tap(find.text('归批结果'));
+    await tester.pump();
+    expect(find.text('取片卡 394373'), findsOneWidget);
+    expect(find.text('本机暂无上传任务'), findsNothing);
   });
 
   testWidgets('确认顺序、待准备和已入队照片在同一列表显示', (tester) async {

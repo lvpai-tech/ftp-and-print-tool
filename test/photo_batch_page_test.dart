@@ -363,7 +363,7 @@ void main() {
       );
       expect(find.text('可接收游客照'), findsNothing);
       if (inline) {
-        expect(find.text('上传队列'), findsOneWidget);
+        expect(find.text('归批结果'), findsOneWidget);
         expect(find.text('设置取片批次'), findsNothing);
         expect(find.byTooltip('选择机位'), findsNothing);
         expect(find.textContaining('A17'), findsNothing);
@@ -439,24 +439,79 @@ void main() {
       await dragToBatch(find.byKey(const ValueKey('drag-photo-4')), older);
       expect(find.text('确认移动照片'), findsOneWidget);
       expect(find.text('同时归入目标取片卡'), findsNothing);
+      expect(find.text('移动方式'), inline ? findsOneWidget : findsNothing);
+      if (inline) {
+        final unavailable = find.widgetWithText(RadioListTile<bool>, '归入取片卡');
+        expect(
+          tester.widget<RadioListTile<bool>>(unavailable).enabled,
+          isFalse,
+        );
+      }
+      expect(find.text('确认移动'), findsOneWidget);
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
       expect(moved, isEmpty);
 
-      await dragToBatch(movablePhoto, cardLabel);
+      final sourceBatch = batches.first;
+      final sourcePhoto = (sourceBatch['photos'] as List).first as Map;
+      if (inline) {
+        final otherCardPhoto = (batches.last['photos'] as List).last as Map;
+        otherCardPhoto['assignedCardId'] = '100';
+        await dragToBatch(movablePhoto, newer);
+        expect(find.text('确认移动'), findsOneWidget);
+        expect(find.text('移动并归卡'), findsNothing);
+        await tester.tap(find.text('归入取片卡 123456'));
+        await tester.pump();
+        expect(find.text('移动并归卡'), findsOneWidget);
+        await tester.tap(find.text('取消'));
+        await tester.pumpAndSettle();
+        otherCardPhoto.remove('assignedCardId');
+
+        // A management group can carry the target card's title while this
+        // individual photo still has no card.
+        sourceBatch['cardTail'] = '123456';
+        sourceBatch['targetCardId'] = '99';
+        sourcePhoto['assignedCardId'] = '99';
+        await dragToBatch(movablePhoto, newer);
+        expect(find.textContaining('这张照片已归入取片卡 123456'), findsOneWidget);
+        expect(find.text('移动并归卡'), findsNothing);
+        await tester.tap(find.text('取消'));
+        await tester.pumpAndSettle();
+        sourcePhoto['assignedCardId'] = null;
+      }
+
+      await dragToBatch(movablePhoto, inline ? newer : cardLabel);
       expect(find.text('确认移动照片'), findsOneWidget);
+      if (inline) {
+        expect(find.text('仅整理工作台分组'), findsOneWidget);
+        expect(find.text('归入取片卡 123456'), findsOneWidget);
+        expect(find.text('移动并归卡'), findsOneWidget);
+        await tester.tap(find.text('仅整理工作台分组'));
+        await tester.pump();
+        expect(find.text('确认移动'), findsOneWidget);
+      }
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
       expect(writes, isEmpty);
 
-      await dragToBatch(movablePhoto, cardLabel);
-      await tester.tap(find.text('同时归入目标取片卡'));
-      await tester.pump();
-      await tester.tap(find.text('确认移动'));
+      if (inline) sourcePhoto.remove('assignedCardId');
+      await dragToBatch(movablePhoto, inline ? newer : cardLabel);
+      if (!inline) {
+        await tester.tap(find.text('同时归入目标取片卡'));
+        await tester.pump();
+      }
+      await tester.tap(find.text(inline ? '移动并归卡' : '确认移动'));
       await tester.pumpAndSettle();
       expect(writes.single['targetPhotoId'], '2');
       expect(writes.single['targetCardId'], '99');
-      await dragToBatch(find.byKey(const ValueKey('drag-photo-3')), cardLabel);
+      if (inline) {
+        sourceBatch.remove('cardTail');
+        sourceBatch.remove('targetCardId');
+      }
+      await dragToBatch(
+        find.byKey(const ValueKey('drag-photo-3')),
+        inline ? newer : cardLabel,
+      );
       await tester.tap(find.text('确认移动'));
       await tester.pumpAndSettle();
       expect(moved, hasLength(1));
@@ -466,15 +521,38 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('移动到其他批次'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(OutlinedButton, '选择目标批次'));
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.widgetWithText(ListTile, '取片卡 123456 · 2026-11-22 10:04:05'),
+      if (inline) {
+        await tester.binding.setSurfaceSize(const Size(375, 550));
+        await tester.pumpAndSettle();
+      }
+      const targetLabel = '取片卡 123456 · 2026-11-22 10:04:05';
+      final targetField = find.widgetWithText(
+        OutlinedButton,
+        inline ? targetLabel : '选择目标批次',
       );
+      final moveButton = find.widgetWithText(
+        FilledButton,
+        inline ? '移动并归卡' : '确认移动',
+      );
+      final targetBounds = tester.getRect(targetField);
+      final moveBounds = tester.getRect(moveButton);
+      await tester.tap(targetField);
+      await tester.pumpAndSettle();
+      expect(tester.getRect(targetField), targetBounds);
+      expect(tester.getRect(moveButton), moveBounds);
+      await tester.tap(find.widgetWithText(ListTile, targetLabel));
       await tester.pumpAndSettle();
       expect(find.text('确认移动照片'), findsOneWidget);
+      if (inline) {
+        expect(moveButton.hitTestable(), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      }
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
+      if (inline) {
+        await tester.binding.setSurfaceSize(const Size(1120, 850));
+        await tester.pumpAndSettle();
+      }
       expect(writes, hasLength(1));
 
       await tester.tap(find.text('批量归集'));
@@ -546,7 +624,7 @@ void main() {
       if (inline) {
         await tester.binding.setSurfaceSize(const Size(375, 650));
         await tester.pumpAndSettle();
-        expect(find.text('上传队列'), findsOneWidget);
+        expect(find.text('归批结果'), findsOneWidget);
         expect(find.text('取片卡 123456'), findsOneWidget);
         expect(find.text('批量归集'), findsOneWidget);
         expect(tester.takeException(), isNull);

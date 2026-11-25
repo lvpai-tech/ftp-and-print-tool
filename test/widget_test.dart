@@ -50,7 +50,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('上传队列内同时显示照片归属，无需切换页签', (tester) async {
+  testWidgets('上传机位默认显示归批结果，切换页签保留批次筛选', (tester) async {
     tester.view.physicalSize = const Size(1280, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -70,8 +70,9 @@ void main() {
     await showUpload(tester, bridge: bridge);
     await tester.tap(find.text('A08'));
     await tester.pumpAndSettle();
-    expect(find.text('上传队列'), findsOneWidget);
-    expect(find.text('本机暂无上传任务'), findsOneWidget);
+    expect(find.text('归批结果'), findsOneWidget);
+    expect(find.text('本机上传'), findsOneWidget);
+    expect(find.text('本机暂无上传任务'), findsNothing);
     expect(find.text('取片批次'), findsNothing);
     expect(find.text('照片归属缺少景区档案'), findsOneWidget);
     expect(find.text('添加打印密钥'), findsNothing);
@@ -79,7 +80,7 @@ void main() {
 
     bridge.setMatchingScenic(true);
     await tester.pumpAndSettle();
-    expect(find.text('上传队列'), findsOneWidget);
+    expect(find.text('归批结果'), findsOneWidget);
     final timeline = find.byType(PhotoBatchTimeline);
     expect(timeline, findsOneWidget);
     expect(tester.widget<PhotoBatchTimeline>(timeline).inline, isTrue);
@@ -107,6 +108,18 @@ void main() {
     ]);
     expect(find.text('取片卡 6969'), findsOneWidget);
     expect(find.byTooltip('选择机位'), findsNothing);
+    await tester.tap(find.text('全部状态'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('已归集').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('本机上传'));
+    await tester.pumpAndSettle();
+    expect(find.text('本机暂无上传任务'), findsOneWidget);
+    expect(timeline, findsNothing);
+    await tester.tap(find.text('归批结果'));
+    await tester.pumpAndSettle();
+    expect(find.text('已归集'), findsOneWidget);
+    expect(bridge.calls, hasLength(4));
     tester.view.physicalSize = const Size(375, 812);
     await tester.pumpAndSettle();
     await tester.ensureVisible(date);

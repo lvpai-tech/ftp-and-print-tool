@@ -63,6 +63,8 @@ Uint8List mpo(
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('JPEG/PNG不改字节，正常JPEG不二次压缩', () {
     final jpg = primary();
     expect(identical(normalizeJpegPrimary(jpg), jpg), isTrue);
@@ -81,6 +83,46 @@ void main() {
     expect(
       identical(await normalizedCameraPhoto(png, 'camera.PNG'), png),
       isTrue,
+    );
+  });
+  test('带有效 MD5 尾部的手机 JPEG 通过上传预检，源文件保留', () async {
+    final jpeg = primary();
+    final bytes = Uint8List.fromList([
+      ...jpeg,
+      0xc2,
+      0x8b,
+      0xfc,
+      0x05,
+      0,
+      0,
+      0,
+      0,
+      ...md5.convert(jpeg).bytes,
+    ]);
+    final root = await Directory.systemTemp.createTemp('photo-md5-trailer-');
+    addTearDown(() => root.delete(recursive: true));
+    final source = await File('${root.path}/phone.JPG').writeAsBytes(bytes);
+    final snapshot = await source.copy('${root.path}/pending.jpg');
+    final uploader = FolderUploader(storage: root);
+
+    expect(
+      await normalizePhotoSnapshot(snapshot, sourcePath: source.path),
+      isTrue,
+    );
+    expect(await snapshot.readAsBytes(), jpeg);
+    expect(await uploader.validateImage(snapshot), isTrue);
+    expect(await source.readAsBytes(), bytes);
+
+    final mismatched = Uint8List.fromList(bytes);
+    mismatched[mismatched.length - 1] ^= 1;
+    expect(
+      normalizeJpegPrimary(mismatched, sourcePath: source.path),
+      same(mismatched),
+    );
+    final truncated = Uint8List.sublistView(jpeg, 0, jpeg.length - 2);
+    expect(
+      () => normalizeJpegPrimary(truncated, sourcePath: source.path),
+      throwsStateError,
     );
   });
   test('MPO只保留主图，EXIF段和原压缩像素不变，转换可重复', () {

@@ -183,62 +183,116 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
         .where((target) => _canDrop(item, target))
         .toList();
     if (targets.isEmpty) return;
+    final assignedCardId = item.photo.containsKey('assignedCardId')
+        ? item.photo['assignedCardId']
+        : switch (item.batch['id']) {
+            final String id when id.startsWith('card-') => id.substring(5),
+            _ => null,
+          };
+    bool canAssignTo(Json? batch) {
+      if (batch == null || !_movable(item.photo)) return false;
+      if (!widget.inline) return _isTarget(item.batch, batch);
+      return batch['targetPhotoId'] != null &&
+          batch['targetCardId'] != null &&
+          assignedCardId != batch['targetCardId'];
+    }
+
+    bool defaultAssignTo(Json? batch) {
+      if (!widget.inline || batch == null || !canAssignTo(batch)) return false;
+      final cardId = batch['targetCardId'];
+      return _photos(batch).every((photo) {
+        final assigned = photo['assignedCardId'];
+        return assigned == null || assigned == cardId;
+      });
+    }
+
     setState(() => _working = true);
     try {
-      var assignCard = false;
-      var target = initialTarget;
+      var target =
+          initialTarget ??
+          (widget.inline && targets.length == 1 ? targets.single : null);
+      var assignCard = defaultAssignTo(target);
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => StatefulBuilder(
-          builder: (context, update) => WorkstationFormDialog(
-            title: '确认移动照片',
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(width: 80, height: 70, child: _thumbnail(item.photo)),
-                const SizedBox(height: 10),
-                Text('从「${_label(item.batch)}」移出 1 张'),
-                DropdownField<Json>(
-                  label: '目标批次',
-                  placeholder: '选择目标批次',
-                  options: targets,
-                  value: target,
-                  labelFor: (batch) => '${_label(batch)} · ${_wall(batch)}',
-                  onChanged: (batch) => update(() {
-                    target = batch;
-                    assignCard = false;
-                  }),
+          builder: (context, update) {
+            final chosen = target;
+            final canAssign = canAssignTo(chosen);
+            final targetField = DropdownField<Json>(
+              label: '目标批次',
+              placeholder: '选择目标批次',
+              options: targets,
+              value: chosen,
+              labelFor: (batch) => '${_label(batch)} · ${_wall(batch)}',
+              onChanged: (batch) => update(() {
+                target = batch;
+                assignCard = defaultAssignTo(batch);
+              }),
+            );
+            return WorkstationFormDialog(
+              title: '确认移动照片',
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (widget.inline) ...[
+                    _MovePhotoSummary(item: item),
+                    const SizedBox(height: 16),
+                  ] else ...[
+                    SizedBox(
+                      width: 80,
+                      height: 70,
+                      child: _thumbnail(item.photo),
+                    ),
+                    const SizedBox(height: 10),
+                    Text('从「${_label(item.batch)}」移出 1 张'),
+                  ],
+                  targetField,
+                  if (widget.inline && chosen != null) ...[
+                    const SizedBox(height: 16),
+                    _MovePhotoOptions(
+                      cardTail: chosen['cardTail'] as String?,
+                      assignCard: assignCard,
+                      unavailableReason: canAssign
+                          ? null
+                          : _moveGroupingNote(
+                              item.photo,
+                              chosen,
+                              assignedCardId,
+                            ),
+                      onChanged: (value) => update(() => assignCard = value),
+                    ),
+                  ],
+                  if (!widget.inline && canAssign)
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('同时归入目标取片卡'),
+                      value: assignCard,
+                      onChanged: (value) =>
+                          update(() => assignCard = value == true),
+                    ),
+                  if (!widget.inline && chosen != null)
+                    Text(
+                      assignCard
+                          ? '这张游客照将归入目标取片卡。'
+                          : '这次移动会调整照片管理中的分组，保留现有取片归属。',
+                    ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('取消'),
                 ),
-                if (target != null &&
-                    _movable(item.photo) &&
-                    _isTarget(item.batch, target!))
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('同时归入目标取片卡'),
-                    value: assignCard,
-                    onChanged: (value) =>
-                        update(() => assignCard = value == true),
-                  ),
-                if (target != null)
-                  Text(
-                    assignCard ? '这张游客照将归入目标取片卡。' : '这次移动会调整照片管理中的分组，保留现有取片归属。',
-                  ),
+                FilledButton(
+                  onPressed: target == null
+                      ? null
+                      : () => Navigator.pop(context, true),
+                  child: Text(widget.inline && assignCard ? '移动并归卡' : '确认移动'),
+                ),
               ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: target == null
-                    ? null
-                    : () => Navigator.pop(context, true),
-                child: const Text('确认移动'),
-              ),
-            ],
-          ),
+            );
+          },
         ),
       );
       final chosen = target;
@@ -294,6 +348,18 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       target['targetPhotoId'] != null &&
       target['targetCardId'] != null &&
       source['targetCardId'] != target['targetCardId'];
+
+  String _moveGroupingNote(Json photo, Json target, Object? assignedCardId) {
+    if (photo['blockedReason'] case final String reason
+        when reason.isNotEmpty) {
+      return reason;
+    }
+    if (target['targetCardId'] != null &&
+        assignedCardId == target['targetCardId']) {
+      return '这张照片已归入${_label(target)}。';
+    }
+    return '目标批次暂不能接收这张照片的取片归属。';
+  }
 
   void _setSelectionMode(bool active) {
     if (active) {
@@ -1565,6 +1631,125 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       ],
     ),
   );
+}
+
+class _MovePhotoSummary extends StatelessWidget {
+  const _MovePhotoSummary({required this.item});
+
+  final _Dragged item;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: WorkstationStyle.bg,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Row(
+          spacing: 12,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: ColoredBox(
+                color: WorkstationStyle.card,
+                child: SizedBox(
+                  width: 56,
+                  height: 64,
+                  child: _thumbnail(item.photo),
+                ),
+              ),
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 4,
+                children: [
+                  Text(
+                    '${_photoType(item.photo)} · ${_time(item.photo)}',
+                    style: text.titleSmall,
+                  ),
+                  Text(
+                    '来源批次 · ${_label(item.batch)}',
+                    style: text.bodySmall?.copyWith(
+                      color: WorkstationStyle.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MovePhotoOptions extends StatelessWidget {
+  const _MovePhotoOptions({
+    required this.cardTail,
+    required this.assignCard,
+    required this.unavailableReason,
+    required this.onChanged,
+  });
+
+  final String? cardTail;
+  final bool assignCard;
+  final String? unavailableReason;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final descriptionStyle = text.bodySmall?.copyWith(
+      color: WorkstationStyle.muted,
+    );
+    Widget option(bool value, String title, String description) {
+      final selected = assignCard == value;
+      final shape = RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(
+          color: selected ? WorkstationStyle.accent : WorkstationStyle.line,
+        ),
+      );
+      return RadioListTile<bool>(
+        value: value,
+        enabled: !value || unavailableReason == null,
+        selected: selected,
+        activeColor: WorkstationStyle.accent,
+        selectedTileColor: WorkstationStyle.accentSoft,
+        shape: shape,
+        contentPadding: const EdgeInsets.fromLTRB(8, 4, 12, 4),
+        title: Text(
+          title,
+          style: text.titleSmall?.copyWith(color: WorkstationStyle.ink),
+        ),
+        subtitle: Text(description, style: descriptionStyle),
+      );
+    }
+
+    return RadioGroup<bool>(
+      groupValue: assignCard,
+      onChanged: (value) {
+        if (value != null) onChanged(value);
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        spacing: 8,
+        children: [
+          Text('移动方式', style: text.titleSmall),
+          option(false, '仅整理工作台分组', '只调整工作台里的分组，游客扫码看到的照片保持原样。'),
+          option(
+            true,
+            cardTail == null ? '归入取片卡' : '归入取片卡 $cardTail',
+            unavailableReason ?? '归集完成后，游客在柜机扫这张卡就能看到这张照片。',
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _BatchTimestamp extends StatelessWidget {

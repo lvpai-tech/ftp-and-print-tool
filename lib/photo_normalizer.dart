@@ -2,6 +2,8 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:platform_image_converter/platform_image_converter.dart';
@@ -127,11 +129,29 @@ Uint8List normalizeJpegPrimary(
   bool legacyFirstImage = false,
 }) {
   if (bytes.length < 2 || bytes[0] != 0xff || bytes[1] != 0xd8) return bytes;
-  return _jpegFrame(
+  final sourceIsJpeg = sourcePath != null && isJpegCameraPhoto(sourcePath);
+  final frame = _jpegFrame(
     bytes,
     inspectIndex: !legacyFirstImage,
-    allowStalePrimarySize: sourcePath != null && isJpegCameraPhoto(sourcePath),
-  ).bytes;
+    allowStalePrimarySize: sourceIsJpeg,
+  );
+  if (!sourceIsJpeg || !identical(frame.bytes, bytes)) return frame.bytes;
+  return _stripJpegDigestTrailer(bytes, frame.end);
+}
+
+Uint8List _stripJpegDigestTrailer(Uint8List bytes, int jpegEnd) {
+  // Phone photos received via WeChat may append this prefix and the JPEG's MD5.
+  const prefix = [0xc2, 0x8b, 0xfc, 0x05, 0, 0, 0, 0];
+  const digestLength = 16;
+  final digestStart = jpegEnd + prefix.length;
+  if (bytes.length != digestStart + digestLength ||
+      !listEquals(Uint8List.sublistView(bytes, jpegEnd, digestStart), prefix)) {
+    return bytes;
+  }
+
+  final jpeg = Uint8List.sublistView(bytes, 0, jpegEnd);
+  final storedDigest = Uint8List.sublistView(bytes, digestStart);
+  return listEquals(md5.convert(jpeg).bytes, storedDigest) ? jpeg : bytes;
 }
 
 ({Uint8List bytes, int end}) _jpegFrame(

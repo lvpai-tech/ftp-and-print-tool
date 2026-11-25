@@ -99,6 +99,65 @@ class UploadTaskList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final timeline = batchTimeline;
+    if (timeline == null) return _queue(context);
+
+    return DefaultTabController(
+      length: 2,
+      child: Builder(
+        builder: (context) {
+          final controller = DefaultTabController.of(context);
+          return SliverMainAxisGroup(
+            slivers: [
+              const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: Material(
+                    color: WorkstationStyle.card,
+                    child: TabBar(
+                      isScrollable: true,
+                      tabAlignment: TabAlignment.start,
+                      labelColor: WorkstationStyle.accent,
+                      unselectedLabelColor: WorkstationStyle.muted,
+                      indicatorColor: WorkstationStyle.accent,
+                      dividerColor: WorkstationStyle.line,
+                      tabs: [
+                        Tab(text: '归批结果'),
+                        Tab(text: '本机上传'),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              ListenableBuilder(
+                listenable: controller,
+                builder: (context, _) {
+                  final showQueue = controller.index == 1;
+                  return SliverMainAxisGroup(
+                    slivers: [
+                      SliverOffstage(
+                        offstage: showQueue,
+                        sliver: ExcludeFocus(
+                          excluding: showQueue,
+                          child: TickerMode(
+                            enabled: !showQueue,
+                            child: timeline,
+                          ),
+                        ),
+                      ),
+                      if (showQueue) _queue(context),
+                    ],
+                  );
+                },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _queue(BuildContext context) {
     final unordered = needingOrder.toSet();
     final preparing = waiting.keys
         .where((source) => !unordered.contains(source))
@@ -135,14 +194,15 @@ class UploadTaskList extends StatelessWidget {
         runSpacing: 4,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          const Text(
-            '上传队列',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: WorkstationStyle.ink,
+          if (batchTimeline == null)
+            const Text(
+              '上传队列',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: WorkstationStyle.ink,
+              ),
             ),
-          ),
           Text(
             empty ? '本机暂无上传任务' : '文件修改时间 · 北京时间',
             style: const TextStyle(color: WorkstationStyle.muted, fontSize: 12),
@@ -313,9 +373,6 @@ class UploadTaskList extends StatelessWidget {
             ],
           ),
         ),
-        if (batchTimeline != null)
-          const SliverToBoxAdapter(child: SizedBox(height: 12)),
-        ?batchTimeline,
       ],
     );
   }
