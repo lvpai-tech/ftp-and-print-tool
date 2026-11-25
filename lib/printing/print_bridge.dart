@@ -11,6 +11,7 @@ import '../workstation_storage.dart';
 import 'print_enrollment.dart';
 
 typedef Json = Map<String, dynamic>;
+typedef ZipExportProgress = ({int completed, int total, bool saving});
 
 class PrintBridgeResultError extends StateError {
   PrintBridgeResultError(super.message, this.resultCode);
@@ -40,6 +41,8 @@ class PrintBridge extends ChangeNotifier {
       .toList();
   bool get printing => state['printBusy'] == true;
   bool get busy => working || printing;
+  ZipExportProgress? _zipProgress;
+  ZipExportProgress? get zipProgress => _zipProgress;
 
   void showError(String message) {
     error = message;
@@ -197,6 +200,22 @@ class PrintBridge extends ChangeNotifier {
         notifyListeners();
         return;
       }
+      if (message['event'] == 'zipProgress') {
+        final data = message['data'];
+        if (_pending.containsKey(message['id']) && data is Json) {
+          final completed = data['completed'];
+          final total = data['total'];
+          if (completed is int && total is int) {
+            _zipProgress = (
+              completed: completed,
+              total: total,
+              saving: data['saving'] == true,
+            );
+            notifyListeners();
+          }
+        }
+        return;
+      }
       final pending = _pending.remove(message['id']);
       if (pending == null) return;
       if (message['error'] != null) {
@@ -241,11 +260,16 @@ class PrintBridge extends ChangeNotifier {
     _process!.stdin.writeln(
       jsonEncode({'id': id, 'method': method, 'args': args}),
     );
-    // 打印操作可能持续较久；超时只报未知，不再次发起。
+    // ZIP 网络请求在内核中限时两分钟。额外等待用于写盘和接收响应。
+    final downloadingZip = method == 'downloadJobZip';
+    // 送打可能持续较久，超时后须核对实物。
     return result.future.timeout(
-      const Duration(hours: 2),
+      downloadingZip ? const Duration(seconds: 150) : const Duration(hours: 2),
       onTimeout: () {
         _pending.remove(id);
+        if (downloadingZip) {
+          throw StateError('未收到 ZIP 导出结果，请先检查保存位置再重试');
+        }
         throw StateError('操作超时，结果未知；请核对工单与实物，勿重复送打');
       },
     );
@@ -267,6 +291,7 @@ class PrintBridge extends ChangeNotifier {
       rethrow;
     } finally {
       working = false;
+      if (method == 'downloadJobZip') _zipProgress = null;
       notifyListeners();
     }
   }

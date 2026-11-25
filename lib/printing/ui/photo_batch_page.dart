@@ -190,15 +190,16 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
             _ => null,
           };
 
-    bool canAssignTo(Json? batch) {
+    bool alreadyOnTargetCard(Json? batch) =>
+        assignedCardId != null && assignedCardId == batch?['targetCardId'];
+
+    bool canChooseTargetCard(Json? batch) {
       if (batch == null || !_movable(item.photo)) return false;
-      return batch['targetPhotoId'] != null &&
-          batch['targetCardId'] != null &&
-          assignedCardId != batch['targetCardId'];
+      return batch['targetPhotoId'] != null && batch['targetCardId'] != null;
     }
 
     bool defaultAssignTo(Json? batch) {
-      if (batch == null || !canAssignTo(batch)) return false;
+      if (batch == null || !canChooseTargetCard(batch)) return false;
       final cardId = batch['targetCardId'];
       return _photos(batch).every((photo) {
         final assigned = photo['assignedCardId'];
@@ -215,7 +216,8 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
         builder: (context) => StatefulBuilder(
           builder: (context, update) {
             final chosen = target;
-            final canAssign = canAssignTo(chosen);
+            final canChooseCard = canChooseTargetCard(chosen);
+            final sameCard = alreadyOnTargetCard(chosen);
             final targetField = DropdownField<Json>(
               label: '目标批次',
               placeholder: '选择目标批次',
@@ -241,13 +243,10 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
                     _MovePhotoOptions(
                       cardTail: chosen['cardTail'] as String?,
                       assignCard: assignCard,
-                      unavailableReason: canAssign
+                      alreadyAssigned: sameCard,
+                      unavailableReason: canChooseCard
                           ? null
-                          : _moveGroupingNote(
-                              item.photo,
-                              chosen,
-                              assignedCardId,
-                            ),
+                          : _moveGroupingNote(item.photo),
                       onChanged: (value) => update(() => assignCard = value),
                     ),
                   ],
@@ -262,7 +261,13 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
                   onPressed: target == null
                       ? null
                       : () => Navigator.pop(context, true),
-                  child: Text(assignCard ? '移动并归卡' : '确认移动'),
+                  child: Text(
+                    !assignCard
+                        ? '确认移动'
+                        : sameCard
+                        ? '移入目标批次'
+                        : '移动并归卡',
+                  ),
                 ),
               ],
             );
@@ -271,7 +276,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       );
       final chosen = target;
       if (confirmed == true && mounted && chosen != null) {
-        if (assignCard) {
+        if (assignCard && !alreadyOnTargetCard(chosen)) {
           await _submit(
             [item.photo],
             {
@@ -323,16 +328,12 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       target['targetCardId'] != null &&
       source['targetCardId'] != target['targetCardId'];
 
-  String _moveGroupingNote(Json photo, Json target, Object? assignedCardId) {
+  String _moveGroupingNote(Json photo) {
     if (photo['blockedReason'] case final String reason
         when reason.isNotEmpty) {
       return reason;
     }
     if (!_movable(photo)) return '结束照和卡片照只用于核对取片卡。';
-    if (target['targetCardId'] != null &&
-        assignedCardId == target['targetCardId']) {
-      return '这张照片已归入${_label(target)}。';
-    }
     return '目标批次暂不能接收这张照片的取片归属。';
   }
 
@@ -1666,18 +1667,21 @@ class _MovePhotoOptions extends StatelessWidget {
   const _MovePhotoOptions({
     required this.cardTail,
     required this.assignCard,
+    required this.alreadyAssigned,
     required this.unavailableReason,
     required this.onChanged,
   });
 
   final String? cardTail;
   final bool assignCard;
+  final bool alreadyAssigned;
   final String? unavailableReason;
   final ValueChanged<bool> onChanged;
 
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    final card = cardTail == null ? '取片卡' : '取片卡 $cardTail';
     final descriptionStyle = text.bodySmall?.copyWith(
       color: WorkstationStyle.muted,
     );
@@ -1718,8 +1722,11 @@ class _MovePhotoOptions extends StatelessWidget {
           option(false, '仅整理工作台分组', '只调整工作台里的分组，游客扫码看到的照片保持原样。'),
           option(
             true,
-            cardTail == null ? '归入取片卡' : '归入取片卡 $cardTail',
-            unavailableReason ?? '归集完成后，游客在柜机扫这张卡就能看到这张照片。',
+            '归入$card',
+            unavailableReason ??
+                (alreadyAssigned
+                    ? '这张照片已归入$card。确认后移入目标批次，保留这张卡的归属。'
+                    : '归集完成后，游客在柜机扫这张卡就能看到这张照片。'),
           ),
         ],
       ),

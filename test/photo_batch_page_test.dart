@@ -291,13 +291,7 @@ void main() {
             }(),
             'movePhotoBatchPhoto' => () {
               moved.add(args.last as Map<String, dynamic>);
-              expect(args.last, {
-                'photoId': '3',
-                'revision': 0,
-                'targetPhotoId': '2',
-                'targetRevision': 0,
-              });
-              return {'photoId': '3', 'targetPhotoId': '2'};
+              return {'photoId': args.last['photoId'], 'targetPhotoId': '2'};
             }(),
             'removeBatchPhoto' => () {
               expect(args.first, '17');
@@ -465,10 +459,24 @@ void main() {
       sourceBatch['targetCardId'] = '99';
       sourcePhoto['assignedCardId'] = '99';
       await dragToBatch(movablePhoto, newer);
+      final sameCardChoice = find.widgetWithText(
+        RadioListTile<bool>,
+        '归入取片卡 123456',
+      );
+      expect(
+        tester.widget<RadioListTile<bool>>(sameCardChoice).selected,
+        isTrue,
+      );
       expect(find.textContaining('这张照片已归入取片卡 123456'), findsOneWidget);
-      expect(find.text('移动并归卡'), findsNothing);
-      await tester.tap(find.text('取消'));
+      await tester.tap(find.text('移入目标批次'));
       await tester.pumpAndSettle();
+      expect(writes, isEmpty);
+      expect(moved.single, {
+        'photoId': '1',
+        'revision': 0,
+        'targetPhotoId': '2',
+        'targetRevision': 0,
+      });
       sourcePhoto['assignedCardId'] = null;
 
       await dragToBatch(movablePhoto, newer);
@@ -494,7 +502,13 @@ void main() {
       await dragToBatch(find.byKey(const ValueKey('drag-photo-3')), newer);
       await tester.tap(find.text('确认移动'));
       await tester.pumpAndSettle();
-      expect(moved, hasLength(1));
+      expect(moved, hasLength(2));
+      expect(moved.last, {
+        'photoId': '3',
+        'revision': 0,
+        'targetPhotoId': '2',
+        'targetRevision': 0,
+      });
       expect(find.text('无法确认移动结果'), findsNothing);
 
       await tester.tap(find.byKey(const ValueKey('photo-actions-1')));

@@ -9,6 +9,7 @@ import '../profile_store.dart';
 import '../workstation_session.dart';
 import 'design.dart';
 import 'dropdown_field.dart';
+import 'enrollment_location_fields.dart';
 import 'workstation_form_dialog.dart';
 
 class WorkstationEnrollmentPanel extends StatefulWidget {
@@ -372,10 +373,11 @@ class _EnrollmentDialog extends StatefulWidget {
 }
 
 class _EnrollmentDialogState extends State<_EnrollmentDialog> {
+  final _form = GlobalKey<FormState>();
+  final _name = TextEditingController();
   final _location = TextEditingController();
   late Future<List<EnrollmentScenic>> _scenics;
   EnrollmentScenic? _scenic;
-  bool _missingLocation = false;
 
   @override
   void initState() {
@@ -385,19 +387,9 @@ class _EnrollmentDialogState extends State<_EnrollmentDialog> {
 
   @override
   void dispose() {
+    _name.dispose();
     _location.dispose();
     super.dispose();
-  }
-
-  void _submit() {
-    final scenic = _scenic;
-    if (scenic == null) return;
-    final location = _location.text.trim();
-    if (location.isEmpty) {
-      setState(() => _missingLocation = true);
-    } else {
-      Navigator.of(context).pop((scenic: scenic, location: location));
-    }
   }
 
   Widget _scenicField() => FutureBuilder<List<EnrollmentScenic>>(
@@ -437,38 +429,43 @@ class _EnrollmentDialogState extends State<_EnrollmentDialog> {
   );
 
   @override
-  Widget build(BuildContext context) => WorkstationFormDialog(
-    title: '申请机位',
-    content: Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _scenicField(),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _location,
-          maxLength: 100,
-          decoration: InputDecoration(
-            labelText: '具体点位',
-            errorText: _missingLocation ? '请填写具体点位' : null,
-          ),
-          onChanged: (value) {
-            if (_missingLocation && value.trim().isNotEmpty) {
-              setState(() => _missingLocation = false);
-            }
-          },
+  Widget build(BuildContext context) {
+    final scenic = _scenic;
+    final locationFields = EnrollmentLocationFields(
+      name: _name,
+      location: _location,
+      locationHint: '例如东门观景台',
+    );
+    return WorkstationFormDialog(
+      title: '申请机位',
+      content: Form(
+        key: _form,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          spacing: 12,
+          children: [_scenicField(), locationFields],
+        ),
+      ),
+      actions: [
+        OutlinedButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: scenic == null
+              ? null
+              : () {
+                  if (_form.currentState!.validate()) {
+                    Navigator.of(context).pop((
+                      scenic: scenic,
+                      location: locationFields.description,
+                    ));
+                  }
+                },
+          child: const Text('提交申请'),
         ),
       ],
-    ),
-    actions: [
-      OutlinedButton(
-        onPressed: () => Navigator.of(context).pop(),
-        child: const Text('取消'),
-      ),
-      FilledButton(
-        onPressed: _scenic == null ? null : _submit,
-        child: const Text('提交申请'),
-      ),
-    ],
-  );
+    );
+  }
 }

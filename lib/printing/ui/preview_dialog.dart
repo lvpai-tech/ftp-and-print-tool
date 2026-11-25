@@ -30,7 +30,8 @@ class _PreviewDialogState extends State<PreviewDialog> {
   Future<dynamic>? image;
   String? error;
   bool loading = true;
-  bool actionBusy = false;
+  bool trialPrintBusy = false;
+  bool zipBusy = false;
 
   String get _titleTail {
     final tail = widget.cardTail.trim();
@@ -89,7 +90,7 @@ class _PreviewDialogState extends State<PreviewDialog> {
         ? '只读预览，不占用工单'
         : '${items[index]['label']} × ${items[index]['copies']}';
     return PopScope(
-      canPop: !actionBusy,
+      canPop: !trialPrintBusy,
       child: Dialog(
         backgroundColor: WorkstationStyle.card,
         elevation: 0,
@@ -160,7 +161,7 @@ class _PreviewDialogState extends State<PreviewDialog> {
                       ),
                       IconButton(
                         tooltip: '关闭预览',
-                        onPressed: actionBusy
+                        onPressed: trialPrintBusy
                             ? null
                             : () => Navigator.pop(context),
                         style: IconButton.styleFrom(
@@ -196,7 +197,7 @@ class _PreviewDialogState extends State<PreviewDialog> {
                   child: Row(
                     children: [
                       OutlinedButton(
-                        onPressed: items.isEmpty || actionBusy
+                        onPressed: items.isEmpty || trialPrintBusy || zipBusy
                             ? null
                             : _trialPrint,
                         style: OutlinedButton.styleFrom(
@@ -218,13 +219,13 @@ class _PreviewDialogState extends State<PreviewDialog> {
                       _Pager(
                         index: items.isEmpty ? 0 : index + 1,
                         total: items.length,
-                        onPrevious: index == 0 || actionBusy
+                        onPrevious: index == 0 || trialPrintBusy
                             ? null
                             : () {
                                 index--;
                                 showImage();
                               },
-                        onNext: index >= items.length - 1 || actionBusy
+                        onNext: index >= items.length - 1 || trialPrintBusy
                             ? null
                             : () {
                                 index++;
@@ -233,7 +234,7 @@ class _PreviewDialogState extends State<PreviewDialog> {
                       ),
                       const Spacer(),
                       FilledButton(
-                        onPressed: items.isEmpty || actionBusy
+                        onPressed: items.isEmpty || trialPrintBusy || zipBusy
                             ? null
                             : _downloadZip,
                         style: FilledButton.styleFrom(
@@ -249,7 +250,10 @@ class _PreviewDialogState extends State<PreviewDialog> {
                             fontWeight: FontWeight.w600,
                           ),
                         ),
-                        child: const Text('下载本单 ZIP'),
+                        child: ListenableBuilder(
+                          listenable: widget.bridge,
+                          builder: (context, _) => Text(_zipButtonLabel),
+                        ),
                       ),
                     ],
                   ),
@@ -350,33 +354,45 @@ class _PreviewDialogState extends State<PreviewDialog> {
   }
 
   Future<void> _trialPrint() async {
-    setState(() => actionBusy = true);
+    setState(() => trialPrintBusy = true);
     final ok = await widget.perform('trialPrintItem', [items[index]]);
     if (!mounted) return;
-    setState(() => actionBusy = false);
+    setState(() => trialPrintBusy = false);
     if (ok) {
       await showAppMessage(context, message: '试打印命令已受理，请核对实物；工单状态未修改。');
     }
   }
 
+  String get _zipButtonLabel {
+    if (!zipBusy) return '下载本单 ZIP';
+    final progress = widget.bridge.zipProgress;
+    if (progress == null) return '正在导出 ZIP…';
+    if (progress.saving) return '正在保存 ZIP…';
+    return '已下载 ${progress.completed} / ${progress.total} 张';
+  }
+
   Future<void> _downloadZip() async {
-    final location = await getSaveLocation(
-      suggestedName: 'print-${widget.jobId}.zip',
-      acceptedTypeGroups: [
-        const XTypeGroup(label: 'ZIP', extensions: ['zip']),
-      ],
-    );
-    if (location == null || !mounted) return;
-    setState(() => actionBusy = true);
-    final ok = await widget.perform('downloadJobZip', [
-      widget.jobId,
-      location.path,
-    ]);
-    if (!mounted) return;
-    setState(() => actionBusy = false);
-    if (ok) {
-      await showAppMessage(context, message: 'ZIP 已保存：${location.path}');
+    if (zipBusy || trialPrintBusy) return;
+    setState(() => zipBusy = true);
+    String message;
+    var title = '提示';
+    try {
+      final location = await getSaveLocation(
+        suggestedName: 'print-${widget.jobId}.zip',
+        acceptedTypeGroups: [
+          const XTypeGroup(label: 'ZIP', extensions: ['zip']),
+        ],
+      );
+      if (!mounted || location == null) return;
+      await widget.bridge.run('downloadJobZip', [widget.jobId, location.path]);
+      message = 'ZIP 已保存：${location.path}';
+    } catch (error) {
+      title = 'ZIP 导出未完成';
+      message = appErrorMessage(error);
+    } finally {
+      if (mounted) setState(() => zipBusy = false);
     }
+    if (mounted) await showAppMessage(context, title: title, message: message);
   }
 }
 

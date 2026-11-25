@@ -522,15 +522,20 @@ void main() {
 
       final dialog = find.byType(WorkstationFormDialog);
       final picker = find.widgetWithText(OutlinedButton, '选择景区');
-      final location = find.descendant(
-        of: dialog,
-        matching: find.byType(TextField),
-      );
+      final name = find.widgetWithText(TextField, '申请人姓名');
+      final location = find.widgetWithText(TextField, '具体地点');
       final submit = find.widgetWithText(FilledButton, '提交申请');
+      for (final label in ['0/20', '0/60']) {
+        final counter = find.text(label);
+        final container = InputDecorator.containerOf(tester.element(counter))!;
+        final bounds = container.localToGlobal(Offset.zero) & container.size;
+        expect(bounds.contains(tester.getCenter(counter)), isTrue);
+      }
       await tester.tap(submit);
       await tester.pump();
       expect(find.text('请选择景区').hitTestable(), findsWidgets);
-      expect(find.text('请填写点位或工作台名称'), findsOneWidget);
+      expect(find.text('请填写申请人姓名'), findsOneWidget);
+      expect(find.text('请填写具体地点'), findsOneWidget);
       expect(submitted, isNull);
 
       final fieldBefore = tester.getRect(location);
@@ -560,12 +565,28 @@ void main() {
       await tester.pump();
       expect(lastOption, findsNothing);
       expect(location.hitTestable(), findsOneWidget);
-      await tester.enterText(location, '  东门前台  ');
+      await tester.enterText(name, '  李四  ');
       await tester.tap(picker);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 350));
       await tester.tap(find.text('景区乙'));
       await tester.pump();
+      final longestLocation = '前台' * 30;
+      final overlongLocation = '东$longestLocation';
+      await tester.enterText(location, overlongLocation);
+      await tester.pump();
+      expect(find.text('61/60'), findsOneWidget);
+      await tester.tap(submit);
+      await tester.pump();
+      expect(find.text('地点最多 60 个字符'), findsOneWidget);
+      expect(find.text(overlongLocation), findsOneWidget);
+      expect(submitted, isNull);
+      await tester.enterText(location, '\u{20000}' * 49);
+      await tester.tap(submit);
+      await tester.pump();
+      expect(find.text('姓名和地点合计过长，请缩短后提交'), findsOneWidget);
+      expect(submitted, isNull);
+      await tester.enterText(location, longestLocation);
       await tester.tap(submit);
       await tester.pumpAndSettle();
 
@@ -573,7 +594,8 @@ void main() {
       expect(dialog, findsOneWidget);
       expect(find.text('打印申请记录'), findsOneWidget);
       expect(submitted, containsPair('scenicId', '2'));
-      expect(submitted, containsPair('location', '东门前台'));
+      expect(submitted, containsPair('location', '李四 · $longestLocation'));
+      expect(find.text('景区乙 · 李四 · $longestLocation'), findsOneWidget);
       expect(find.text('待审核'), findsOneWidget);
       await tester.tap(find.text('刷新申请状态'));
       await tester.pumpAndSettle();

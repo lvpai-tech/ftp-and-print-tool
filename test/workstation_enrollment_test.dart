@@ -75,11 +75,11 @@ void main() {
       final submit = find.widgetWithText(FilledButton, '提交申请');
       expect(tester.widget<FilledButton>(submit).onPressed, isNull);
       expect(find.text('景区列表加载失败'), findsOneWidget);
-      expect(find.byType(TextField), findsOneWidget);
-      await tester.enterText(find.byType(TextField), '  东门观景台  ');
+      final nameField = find.widgetWithText(TextField, '申请人姓名');
+      final locationField = find.widgetWithText(TextField, '具体地点');
+      await tester.enterText(nameField, '  张三  ');
       await tester.tap(find.text('重试'));
       await tester.pumpAndSettle();
-      final locationField = find.byType(TextField);
       final picker = find.descendant(
         of: find.byType(DropdownField<EnrollmentScenic>),
         matching: find.byType(OutlinedButton),
@@ -113,11 +113,26 @@ void main() {
       expect(locationField.hitTestable(), findsOneWidget);
       await tester.tap(submit);
       await tester.pumpAndSettle();
+      expect(find.text('请填写具体地点'), findsOneWidget);
+      expect(submitted, isNull);
+      await tester.enterText(locationField, '  东门观景台  ');
+      final longestName = '张' * 20;
+      final overlongName = '三$longestName';
+      await tester.enterText(nameField, overlongName);
+      await tester.tap(submit);
+      await tester.pumpAndSettle();
+      expect(find.text('姓名最多 20 个字符'), findsOneWidget);
+      expect(find.text(overlongName), findsOneWidget);
+      expect(submitted, isNull);
+      await tester.enterText(nameField, longestName);
+      await tester.tap(submit);
+      await tester.pumpAndSettle();
       expect(submitted, {
         'requestId': isA<String>(),
         'scenicName': '景区乙',
-        'location': '东门观景台',
+        'location': '$longestName · 东门观景台',
       });
+      expect(find.text('景区乙 · $longestName · 东门观景台'), findsOneWidget);
       expect(find.text('待审核'), findsOneWidget);
       expect(
         find.widgetWithText(WorkstationFormDialog, '机位申请记录'),
@@ -242,7 +257,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(ListView), findsNothing);
       expect(find.widgetWithText(OutlinedButton, '景区 10'), findsOneWidget);
-      expect(find.byType(TextField).hitTestable(), findsOneWidget);
+      final field = find.widgetWithText(TextField, '具体地点');
+      expect(field.hitTestable(), findsOneWidget);
 
       tester.view.physicalSize = const Size(375, 225);
       await tester.pumpAndSettle();
@@ -250,13 +266,12 @@ void main() {
       final submit = find.widgetWithText(FilledButton, '提交申请');
       final closeBefore = tester.getRect(close);
       final submitBefore = tester.getRect(submit);
-      final field = find.byType(TextField);
       final fieldBefore = tester.getRect(field);
       final bodyScroll = find.descendant(
         of: find.byType(WorkstationFormDialog),
         matching: find.byType(SingleChildScrollView),
       );
-      await tester.drag(bodyScroll, const Offset(0, -100));
+      await tester.drag(bodyScroll, const Offset(0, -220));
       await tester.pumpAndSettle();
       expect(tester.getRect(field).top, lessThan(fieldBefore.top));
       expect(field.hitTestable(), findsOneWidget);

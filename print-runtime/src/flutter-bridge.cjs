@@ -104,7 +104,7 @@ async function serve({ input = process.stdin, send, configPath, root }) {
     return { ...config, token: profile.token };
   }
 
-  async function dispatch(method, args) {
+  async function dispatch(method, args, requestId) {
     if (method === 'snapshot') return snapshot();
     if (method === 'listPrinters') return listPrinters();
     if (method === 'initialize') {
@@ -225,8 +225,12 @@ async function serve({ input = process.stdin, send, configPath, root }) {
       }
       return bridge.setAutoPrint(enabled);
     }
+    if (method === 'downloadJobZip') {
+      return bridge.downloadJobZip(args[0], args[1], data =>
+        send({ event: 'zipProgress', id: requestId, data }));
+    }
     const methods = new Set(['printJobs', 'continueJobs', 'markUnprinted', 'confirmPrinted', 'queryJobs',
-      'refreshJobs', 'previewJob', 'previewJobImage', 'trialPrintItem', 'downloadJobZip']);
+      'refreshJobs', 'previewJob', 'previewJobImage', 'trialPrintItem']);
     if (!methods.has(method)) throw new Error('不支持的操作');
     return bridge[method](...args);
   }
@@ -244,7 +248,7 @@ async function serve({ input = process.stdin, send, configPath, root }) {
         throw new Error('任务处理中，请等待完成；不能中断或重复送打');
       }
       if (mutation) { mutating = true; ownsMutation = true; }
-      const data = await dispatch(request.method, request.args);
+      const data = await dispatch(request.method, request.args, request.id);
       send({ id: request.id, data });
       if (closing) process.exitCode = 0;
     } catch (error) {

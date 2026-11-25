@@ -183,10 +183,13 @@ async function claimJob(config) {
   return callJson(config, 'POST', '/print-agents/jobs/claim', body);
 }
 
-async function downloadFile(config, fileUrl) {
-  const response = await call(config, 'GET', fileUrl);
+async function downloadFile(config, fileUrl, signal) {
+  const response = await call(config, 'GET', fileUrl, undefined, signal);
   if (!response.ok) {
-    throw new Error(`下载失败：HTTP ${response.status}`);
+    await response.body?.cancel().catch(() => {});
+    const error = new Error(`下载失败：HTTP ${response.status}`);
+    error.httpStatus = response.status;
+    throw error;
   }
   const contentType = response.headers.get('content-type') || '';
   const buffer = Buffer.from(await response.arrayBuffer());

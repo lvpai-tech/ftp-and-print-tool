@@ -103,7 +103,9 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
         items: [{ kind: 'ORIGINAL', copies: 1, fileUrl: '/image' }] };
     } else if (req.url === '/print-agents/jobs/9/preview') {
       data = { id: '9', attempt: 1, status: 'CLAIMED', items: [{ kind: 'ORIGINAL', copies: 1, fileUrl: '/image' }] };
-    } else if (req.url === '/image') {
+    } else if (req.url === '/print-agents/jobs/11/preview') {
+      data = { id: '11', items: [{ kind: 'ORIGINAL', fileUrl: '/print-agents/jobs/11/preview-files/PHOTO/3' }] };
+    } else if (req.url === '/image' || req.url === '/print-agents/jobs/11/preview-files/PHOTO/3') {
       res.setHeader('Content-Type', 'image/jpeg'); res.end(Buffer.from([255, 216, 255, 217])); return;
     } else if (['/print-agents/jobs/9/result', '/print-agents/jobs/10/result'].includes(req.url)) {
       resultCount++;
@@ -121,9 +123,14 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   });
   t.after(() => { child.kill(); server.close(); fs.rmSync(temp, { recursive: true, force: true }); });
   const pending = new Map(); let sequence = 0; let wire = '';
+  const zipEvents = [];
   readline.createInterface({ input: child.stdout }).on('line', (line) => {
     wire += line;
     const response = JSON.parse(line);
+    if (response.event === 'zipProgress') {
+      zipEvents.push(response);
+      return;
+    }
     if (response.id != null) { pending.get(response.id)?.(response); pending.delete(response.id); }
   });
   const call = (method, ...args) => new Promise((resolve) => {
@@ -182,6 +189,14 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).printDpi, 360);
   assert.match((await call('saveConfig', { printDpi: 300.5 })).error, /72–1200/);
   assert.equal((await call('snapshot')).data.config.printDpi, 360);
+  const zipPath = path.join(temp, 'print-11.zip');
+  const zip = await call('downloadJobZip', '11', zipPath);
+  assert.deepEqual(zip.data, { jobId: '11', count: 1, path: zipPath });
+  assert.deepEqual(zipEvents, [
+    { completed: 0, total: 1, saving: false },
+    { completed: 1, total: 1, saving: false },
+    { completed: 1, total: 1, saving: true },
+  ].map(data => ({ event: 'zipProgress', id: zip.id, data })));
   const printing = call('printJobs', ['9']);
   // 同一管道紧接着发修改请求，必须拒绝并保持原配置。
   const concurrent = await call('saveConfig', { printers: { ORIGINAL: '禁止生效' } });

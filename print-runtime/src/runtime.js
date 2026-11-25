@@ -10,6 +10,30 @@ const { createLogBuffer } = require('./log-buffer');
 const { createScheduler } = require('./scheduler');
 const { acquireLock } = require('./single-instance');
 
+const ZIP_DOWNLOAD_CONCURRENCY = 3;
+const ZIP_RETRY_HTTP_STATUS = new Set([408, 500, 502, 503, 504]);
+const ZIP_RETRY_NETWORK_CODES = new Set([
+  'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET',
+]);
+
+async function downloadZipImage(config, item, signal) {
+  const { downloadFile } = require('./api');
+  for (let attempt = 0; ; attempt += 1) {
+    const deadline = AbortSignal.timeout(45000);
+    try {
+      return await downloadFile(config, item.fileUrl, AbortSignal.any([signal, deadline]));
+    } catch (error) {
+      signal.throwIfAborted();
+      const retryable = deadline.aborted || ZIP_RETRY_HTTP_STATUS.has(error.httpStatus)
+        || ZIP_RETRY_NETWORK_CODES.has(error.cause?.code);
+      if (retryable && attempt === 0) continue;
+      if (deadline.aborted) throw new Error(`第 ${item.index} 张图片下载超时，请检查网络后重试`);
+      throw error;
+    }
+  }
+}
+
 /**
  * @param {object} options
  * @param {string} [options.configPath]
@@ -186,9 +210,9 @@ async function createRuntime(options = {}) {
   }
 
   /** 打前核对：拉条目清单（不含图片字节）。 */
-  async function previewJob(jobId) {
+  async function previewJob(jobId, signal) {
     const { previewJob } = require('./api');
-    const job = await previewJob(runtime.getConfig(), jobId);
+    const job = await previewJob(runtime.getConfig(), jobId, signal);
     if (!job || !job.id) throw new Error('任务预览失败：未返回任务');
     return {
       id: String(job.id),
@@ -319,33 +343,64 @@ async function createRuntime(options = {}) {
    * 打前/手动打印：把本单全部图片打成 ZIP 写到本地。
    * @param {string|number} jobId
    * @param {string} targetPath 用户选定的 .zip 路径
+   * @param {function} onProgress 已收齐的图片数与保存状态
    */
-  async function downloadJobZip(jobId, targetPath) {
+  async function downloadJobZip(jobId, targetPath, onProgress) {
     const path = require('path');
-    const { downloadFile } = require('./api');
     const { writeStoreZipFile } = require('./zip-store.cjs');
     if (!targetPath || typeof targetPath !== 'string' || !targetPath.toLowerCase().endsWith('.zip')) {
       throw new Error('请选择以 .zip 结尾的保存路径');
     }
-    const preview = await previewJob(jobId);
-    const items = preview.items || [];
-    if (!items.length) throw new Error('本单没有可下载图片');
-    const entries = [];
-    for (const item of items) {
-      if (!item.fileUrl || !item.fileUrl.includes('/preview-files/')) {
-        throw new Error(`条目 ${item.index} 缺少预览下载地址`);
+    const deadline = AbortSignal.timeout(120000);
+    try {
+      const preview = await previewJob(jobId, deadline);
+      const total = preview.items.length;
+      if (!total) throw new Error('本单没有可下载图片');
+      for (const item of preview.items) {
+        if (!item.fileUrl || !item.fileUrl.includes('/preview-files/')) {
+          throw new Error(`条目 ${item.index} 缺少预览下载地址`);
+        }
       }
-      const { buffer, contentType } = await downloadFile(runtime.getConfig(), item.fileUrl);
-      const mime = (contentType && contentType.split(';')[0].trim()) || 'image/jpeg';
-      const ext = mime.includes('png') ? '.png' : '.jpg';
-      const kind = String(item.kind || item.label || 'PHOTO').replace(/[^\w\u4e00-\u9fff-]+/g, '_');
-      const name = `${String(item.index).padStart(2, '0')}-${kind}${ext}`;
-      entries.push({ name, data: buffer });
-      logLine(`ZIP 已收录 ${name}（${buffer.length} 字节）`, 'info');
+      const config = runtime.getConfig();
+      const failure = new AbortController();
+      const signal = AbortSignal.any([deadline, failure.signal]);
+      const entries = new Array(total);
+      let next = 0;
+      let completed = 0;
+      onProgress?.({ completed, total, saving: false });
+
+      async function downloadNextImages() {
+        try {
+          while (!signal.aborted && next < total) {
+            const index = next++;
+            const item = preview.items[index];
+            const { buffer, contentType } = await downloadZipImage(config, item, signal);
+            signal.throwIfAborted();
+            const mime = (contentType && contentType.split(';')[0].trim()) || 'image/jpeg';
+            const ext = mime.includes('png') ? '.png' : '.jpg';
+            const kind = String(item.kind || item.label || 'PHOTO').replace(/[^\w\u4e00-\u9fff-]+/g, '_');
+            const name = `${String(item.index).padStart(2, '0')}-${kind}${ext}`;
+            entries[index] = { name, data: buffer };
+            logLine(`ZIP 已收录 ${name}（${buffer.length} 字节）`, 'info');
+            completed += 1;
+            onProgress?.({ completed, total, saving: false });
+          }
+        } catch (error) {
+          failure.abort(error);
+        }
+      }
+
+      await Promise.all(Array.from({ length: Math.min(ZIP_DOWNLOAD_CONCURRENCY, total) }, downloadNextImages));
+      signal.throwIfAborted();
+      onProgress?.({ completed, total, saving: true });
+      const destination = path.resolve(targetPath);
+      writeStoreZipFile(destination, entries);
+      logLine(`任务 ${preview.id} 已打包 ${total} 张 → ${targetPath}`, 'info');
+      return { jobId: String(preview.id), count: total, path: destination };
+    } catch (error) {
+      if (deadline.aborted) throw new Error('下载 ZIP 超时，请检查网络后重试');
+      throw error;
     }
-    writeStoreZipFile(path.resolve(targetPath), entries);
-    logLine(`任务 ${preview.id} 已打包 ${entries.length} 张 → ${targetPath}`, 'info');
-    return { jobId: String(preview.id), count: entries.length, path: path.resolve(targetPath) };
   }
 
   function assertCanSwitchScenic() {
