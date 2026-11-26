@@ -1,11 +1,14 @@
+import 'dart:ui' show PointerDeviceKind;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lvpai_ftp_client/auto_upload/folder_uploader.dart';
 import 'package:lvpai_ftp_client/ui/upload_task_list.dart';
+import 'package:lvpai_ftp_client/ui/workstation_form_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
-  testWidgets('默认展示归批结果，可切换查看本机上传任务', (tester) async {
+  testWidgets('默认展示照片批次，待确认提醒可切换到本机上传', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1120, 950));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final folder = p.absolute('inbox');
@@ -30,15 +33,16 @@ void main() {
         job(state),
     ];
 
-    Future<void> render() => tester.pumpWidget(
+    final source = p.join(folder, 'needs-order.jpg');
+    Future<void> render({bool needsOrder = false}) => tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: CustomScrollView(
             slivers: [
               UploadTaskList(
                 folder: folder,
-                waiting: const {},
-                needingOrder: const [],
+                waiting: {if (needsOrder) source: null},
+                needingOrder: [if (needsOrder) source],
                 jobs: jobs,
                 onConfirmNext: null,
                 onReview: (_) {},
@@ -52,12 +56,18 @@ void main() {
       ),
     );
 
-    await render();
+    await render(needsOrder: true);
     expect(find.text('取片卡 394373'), findsOneWidget);
     expect(find.text('上传中 0%'), findsNothing);
-    await tester.tap(find.text('本机上传'));
+    final reminder = find.text('待确认顺序');
+    expect(
+      tester.getCenter(reminder).dx,
+      greaterThan(tester.getCenter(find.text('本机上传')).dx),
+    );
+    await tester.tap(reminder);
     await tester.pump();
     expect(find.text('取片卡 394373'), findsNothing);
+    expect(find.text('确认上传顺序'), findsOneWidget);
     expect(find.text('已入队任务'), findsNothing);
     expect(find.text('grouped.jpg'), findsNothing);
     expect(find.text('ingested.jpg'), findsNothing);
@@ -71,8 +81,9 @@ void main() {
     }
     await render();
     expect(find.text('本机暂无上传任务'), findsOneWidget);
-    expect(find.byTooltip('识别取片卡尾号'), findsNothing);
-    await tester.tap(find.text('归批结果'));
+    expect(find.byTooltip('照片操作'), findsNothing);
+    expect(reminder, findsNothing);
+    await tester.tap(find.text('照片批次'));
     await tester.pump();
     expect(find.text('取片卡 394373'), findsOneWidget);
     expect(find.text('本机暂无上传任务'), findsNothing);
@@ -139,18 +150,34 @@ void main() {
     expect(find.text('间隔 5 分 0 秒'), findsOneWidget);
     expect(find.text('设置取片批次'), findsNothing);
 
-    final handle = find.byTooltip('按住拖动选择下一张').at(1);
-    final target = find.text('拖到这里选为下一张');
-    final drag = await tester.startGesture(tester.getCenter(handle));
+    final thumbnail = find.byWidgetPredicate(
+      (widget) => widget is Draggable<String> && widget.data == second,
+    );
+    await tester.tap(thumbnail);
+    await tester.pumpAndSettle();
+    expect(find.text('照片预览'), findsOneWidget);
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+
+    final target = find.text('确认上传顺序');
+    final dropArea = find.byType(DragTarget<String>);
+    final dropAreaBeforeHover = tester.getRect(dropArea);
+    final drag = await tester.startGesture(
+      tester.getCenter(thumbnail),
+      kind: PointerDeviceKind.mouse,
+    );
     await drag.moveBy(const Offset(0, -24));
     await tester.pump();
     await drag.moveTo(tester.getCenter(target));
     await tester.pump();
+    expect(find.text('松开后确认上传顺序').hitTestable(), findsOneWidget);
+    expect(tester.getRect(dropArea), dropAreaBeforeHover);
     await drag.up();
     await tester.pumpAndSettle();
     expect(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(WorkstationFormDialog),
         matching: find.text('ending.jpg'),
       ),
       findsOneWidget,
@@ -160,15 +187,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(confirmed, isEmpty);
 
-    await tester.tap(find.text('选为下一张').at(1));
+    Finder actionsFor(String source) => find.descendant(
+      of: find.byKey(ValueKey(source)),
+      matching: find.byTooltip('照片操作'),
+    );
+    await tester.tap(actionsFor(second));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('选为下一张'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('确认顺序'));
     await tester.pumpAndSettle();
     expect(confirmed, [second]);
 
-    final remove = find.byTooltip('从上传队列移除').last;
+    final remove = actionsFor(later);
     await tester.ensureVisible(remove);
     await tester.tap(remove);
+    await tester.pumpAndSettle();
+    expect(find.text('选为下一张'), findsNothing);
+    await tester.tap(find.text('从上传队列移除'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('移除'));
     await tester.pumpAndSettle();
@@ -178,12 +214,16 @@ void main() {
     expect(find.text('确认上传顺序'), findsNothing);
     expect(find.text('visitor-2.jpg'), findsOneWidget);
     expect(find.text('等待进入上传队列'), findsOneWidget);
+    final review = actionsFor(uploaded.id);
     await tester.scrollUntilVisible(
-      find.byTooltip('识别取片卡尾号'),
+      review,
       220,
       scrollable: find.byType(Scrollable).first,
     );
-    await tester.tap(find.byTooltip('识别取片卡尾号'));
+    await tester.tap(review);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('识别取片卡尾号'));
+    await tester.pumpAndSettle();
     expect(reviewed, [uploaded]);
     expect(tester.takeException(), isNull);
   });
@@ -212,6 +252,9 @@ void main() {
                   jobs: const [],
                   onConfirmNext: (_) {},
                   onReview: (_) {},
+                  batchTimeline: const SliverToBoxAdapter(
+                    child: Text('照片批次内容'),
+                  ),
                 ),
               ),
             ],
@@ -219,13 +262,30 @@ void main() {
         ),
       ),
     );
+    await tester.tap(find.text('待确认顺序'));
+    await tester.pumpAndSettle();
     final strip = find.byType(Scrollbar);
     expect(strip, findsOneWidget);
     for (var i = 0; i < 5; i++) {
-      await tester.drag(strip, const Offset(-240, 0));
+      await tester.dragFrom(
+        tester.getTopLeft(strip) + const Offset(240, 70),
+        const Offset(-220, 0),
+      );
       await tester.pumpAndSettle();
     }
     expect(find.text('photo-6.jpg').hitTestable(), findsOneWidget);
+    final lastPhotoMenu = find.descendant(
+      of: find.byKey(ValueKey(sources.last)),
+      matching: find.byTooltip('照片操作'),
+    );
+    await tester.tap(lastPhotoMenu);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('选为下一张'));
+    await tester.pumpAndSettle();
+    expect(find.text('确认顺序').hitTestable(), findsOneWidget);
+    await tester.tap(find.byTooltip('关闭弹窗'));
+    await tester.pumpAndSettle();
+    expect(find.text('确认顺序'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

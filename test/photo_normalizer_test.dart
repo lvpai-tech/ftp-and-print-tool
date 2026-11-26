@@ -85,6 +85,24 @@ void main() {
       isTrue,
     );
   });
+  test('方向为 0 的手机 JPEG 保留原字节并通过预检和取片码预览', () async {
+    final exif = img.ExifData()..imageIfd[0x0112] = img.IfdValueLong(0);
+    final jpeg = img.injectJpgExif(primary(), exif)!;
+    expect(img.decodeJpgExif(jpeg)?.imageIfd.orientation, 0);
+
+    final root = await Directory.systemTemp.createTemp(
+      'photo-exif-orientation-',
+    );
+    addTearDown(() => root.delete(recursive: true));
+    final snapshot = await File('${root.path}/phone.JPG').writeAsBytes(jpeg);
+    final uploader = FolderUploader(storage: root);
+    expect(await normalizePhotoSnapshot(snapshot), isFalse);
+    expect(await snapshot.readAsBytes(), jpeg);
+    expect(await uploader.validateImage(snapshot), isTrue);
+
+    final (_, size) = cardTailPreview(jpeg, sourcePath: snapshot.path);
+    expect((size.width, size.height), (32, 24));
+  });
   test('带有效 MD5 尾部的手机 JPEG 通过上传预检，源文件保留', () async {
     final jpeg = primary();
     final bytes = Uint8List.fromList([

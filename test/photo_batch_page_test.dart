@@ -357,7 +357,7 @@ void main() {
       );
       expect(find.text('可接收游客照'), findsNothing);
       if (inline) {
-        expect(find.text('归批结果'), findsOneWidget);
+        expect(find.text('照片批次'), findsOneWidget);
         expect(find.text('设置取片批次'), findsNothing);
         expect(find.byTooltip('选择机位'), findsNothing);
         expect(find.textContaining('A17'), findsNothing);
@@ -612,7 +612,7 @@ void main() {
       if (inline) {
         await tester.binding.setSurfaceSize(const Size(375, 650));
         await tester.pumpAndSettle();
-        expect(find.text('归批结果'), findsOneWidget);
+        expect(find.text('照片批次'), findsOneWidget);
         expect(find.text('取片卡 123456'), findsOneWidget);
         expect(find.text('批量归集'), findsOneWidget);
         expect(tester.takeException(), isNull);

@@ -253,11 +253,12 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  StatusTag(
-                    label: status,
-                    color: statusColor,
-                    soft: statusBackground,
-                  ),
+                  if (status != '待确认顺序' || widget.batchTimeline == null)
+                    StatusTag(
+                      label: status,
+                      color: statusColor,
+                      soft: statusBackground,
+                    ),
                 ],
               ),
               if (station.profile.scenicName case final name?)

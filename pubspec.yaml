@@ -1,7 +1,7 @@
 name: lvpai_ftp_client
 description: 跨平台照片 FTP 上传与打印工作台
 publish_to: none
-version: 0.4.5+20
+version: 0.4.5+21
 environment:
   sdk: '>=3.13.0 <4.0.0'
 dependencies:

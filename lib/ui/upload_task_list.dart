@@ -8,6 +8,10 @@ import '../auto_upload/folder_uploader.dart';
 import '../printing/job_query_time.dart';
 import 'app_dialogs.dart';
 import 'design.dart';
+import 'workstation_form_dialog.dart';
+
+const _thumbnailHeight = 100.0;
+const _thumbnailWidth = 136.0;
 
 class UploadTaskList extends StatelessWidget {
   const UploadTaskList({
@@ -56,34 +60,29 @@ class UploadTaskList extends StatelessWidget {
   Future<void> _confirm(BuildContext context, String source) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('确认下一张上传的照片'),
-        scrollable: true,
-        content: SizedBox(
-          width: 360,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ColoredBox(
-                color: WorkstationStyle.bg,
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 204,
-                  child: _sourcePhoto(
-                    source,
-                    signature: waiting[source],
-                    cacheWidth: 640,
-                  ),
+      builder: (context) => WorkstationFormDialog(
+        title: '确认下一张上传的照片',
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          spacing: 10,
+          children: [
+            ColoredBox(
+              color: WorkstationStyle.bg,
+              child: SizedBox(
+                width: double.infinity,
+                height: 204,
+                child: _sourcePhoto(
+                  source,
+                  signature: waiting[source],
+                  cacheWidth: 640,
                 ),
               ),
-              const SizedBox(height: 10),
-              Text(p.relative(source, from: folder)),
-            ],
-          ),
+            ),
+            Text(p.relative(source, from: folder)),
+          ],
         ),
         actions: [
-          TextButton(
+          OutlinedButton(
             onPressed: () => Navigator.pop(context, false),
             child: const Text('取消'),
           ),
@@ -95,6 +94,54 @@ class UploadTaskList extends StatelessWidget {
       ),
     );
     if (context.mounted && confirmed == true) onConfirmNext?.call(source);
+  }
+
+  Widget _waitingPhoto(
+    BuildContext context,
+    String source, {
+    required bool needsOrder,
+  }) {
+    final name = p.relative(source, from: folder);
+    final signature = waiting[source];
+    final canConfirm = needsOrder && onConfirmNext != null;
+    return _PhotoTile(
+      key: ValueKey(source),
+      name: name,
+      time: _clock(_fileStamp(signature)),
+      photo: _sourcePhoto(source, signature: signature),
+      dragSource: canConfirm ? source : null,
+      onPreview: () => _showPhotoPreview(
+        context,
+        name: name,
+        photo: _sourcePhoto(
+          source,
+          signature: signature,
+          cacheWidth: 1440,
+          unavailable: const Center(child: Text('无法读取本机照片')),
+        ),
+      ),
+      actions: [
+        if (canConfirm)
+          (
+            label: '选为下一张',
+            icon: Icons.start,
+            color: null,
+            run: () => _confirm(context, source),
+          ),
+        if (onDiscard != null)
+          (
+            label: '从上传队列移除',
+            icon: Icons.delete_outline,
+            color: WorkstationStyle.bad,
+            run: () => _discard(context, source),
+          ),
+      ],
+      caption: const _TileStatus(
+        label: '待准备',
+        color: WorkstationStyle.muted,
+        background: WorkstationStyle.bg,
+      ),
+    );
   }
 
   @override
@@ -109,9 +156,9 @@ class UploadTaskList extends StatelessWidget {
           final controller = DefaultTabController.of(context);
           return SliverMainAxisGroup(
             slivers: [
-              const SliverToBoxAdapter(
+              SliverToBoxAdapter(
                 child: Padding(
-                  padding: EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.only(bottom: 12),
                   child: Material(
                     color: WorkstationStyle.card,
                     child: TabBar(
@@ -122,8 +169,22 @@ class UploadTaskList extends StatelessWidget {
                       indicatorColor: WorkstationStyle.accent,
                       dividerColor: WorkstationStyle.line,
                       tabs: [
-                        Tab(text: '归批结果'),
-                        Tab(text: '本机上传'),
+                        const Tab(text: '照片批次'),
+                        Tab(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            spacing: 8,
+                            children: [
+                              const Text('本机上传'),
+                              if (needingOrder.isNotEmpty)
+                                const StatusTag(
+                                  label: '待确认顺序',
+                                  color: WorkstationStyle.warn,
+                                  soft: WorkstationStyle.warnSoft,
+                                ),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -203,111 +264,41 @@ class UploadTaskList extends StatelessWidget {
                 color: WorkstationStyle.ink,
               ),
             ),
-          Text(
-            empty ? '本机暂无上传任务' : '文件修改时间 · 北京时间',
-            style: const TextStyle(color: WorkstationStyle.muted, fontSize: 12),
-          ),
+          if (!empty)
+            const Text(
+              '文件修改时间 · 北京时间',
+              style: TextStyle(color: WorkstationStyle.muted, fontSize: 12),
+            ),
         ],
       ),
       const SizedBox(height: 10),
+      if (empty)
+        const Padding(
+          padding: EdgeInsets.all(20),
+          child: Column(
+            spacing: 8,
+            children: [
+              Icon(Icons.photo_library_outlined, color: WorkstationStyle.muted),
+              Text('本机暂无上传任务', style: TextStyle(color: WorkstationStyle.muted)),
+            ],
+          ),
+        ),
       if (needingOrder.isNotEmpty)
         _TaskGroup(
           key: const ValueKey('order'),
           stamp: orderSpan.latest,
           title: '确认上传顺序',
-          note: '同时发现多张照片，请选出下一张',
+          note: onConfirmNext == null
+              ? '同时发现多张照片，请选出下一张'
+              : '将下一张照片拖到这里，或从照片菜单选择',
           count: needingOrder.length,
           attention: true,
-          extra: onConfirmNext == null
+          onDrop: onConfirmNext == null
               ? null
-              : DragTarget<String>(
-                  onWillAcceptWithDetails: (details) =>
-                      unordered.contains(details.data),
-                  onAcceptWithDetails: (details) =>
-                      _confirm(context, details.data),
-                  builder: (context, candidates, _) => Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: candidates.isEmpty
-                          ? WorkstationStyle.warnSoft
-                          : WorkstationStyle.accentSoft,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      '拖到这里选为下一张',
-                      style: TextStyle(
-                        color: candidates.isEmpty
-                            ? WorkstationStyle.warn
-                            : WorkstationStyle.accent,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ),
-          photoBuilder: (_, index) {
-            final source = needingOrder[index];
-            return _PhotoTile(
-              name: p.relative(source, from: folder),
-              time: _clock(_fileStamp(waiting[source])),
-              photo: _sourcePhoto(source, signature: waiting[source]),
-              action: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (onConfirmNext != null)
-                    Draggable<String>(
-                      data: source,
-                      maxSimultaneousDrags: 1,
-                      feedback: Material(
-                        borderRadius: BorderRadius.circular(8),
-                        color: WorkstationStyle.bg,
-                        child: SizedBox(
-                          width: 120,
-                          height: 84,
-                          child: _sourcePhoto(
-                            source,
-                            signature: waiting[source],
-                          ),
-                        ),
-                      ),
-                      child: const Tooltip(
-                        message: '按住拖动选择下一张',
-                        child: SizedBox(
-                          width: 34,
-                          height: 34,
-                          child: ColoredBox(
-                            color: WorkstationStyle.card,
-                            child: Icon(
-                              Icons.drag_indicator,
-                              size: 18,
-                              color: WorkstationStyle.accent,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  if (onDiscard != null)
-                    _RemovePhotoButton(
-                      onPressed: () => _discard(context, source),
-                    ),
-                ],
-              ),
-              caption: const SizedBox.shrink(),
-              footer: TextButton(
-                style: TextButton.styleFrom(
-                  foregroundColor: WorkstationStyle.accent,
-                  minimumSize: const Size(0, 32),
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                ),
-                onPressed: onConfirmNext == null
-                    ? null
-                    : () => _confirm(context, source),
-                child: const Text('选为下一张'),
-              ),
-            );
-          },
+              : (source) => _confirm(context, source),
+          dropSources: unordered,
+          photoBuilder: (context, index) =>
+              _waitingPhoto(context, needingOrder[index], needsOrder: true),
         ),
       if (needingOrder.isNotEmpty && preparing.isNotEmpty)
         _TimeGap(between: orderSpan.gapTo(waitingSpan)),
@@ -318,24 +309,8 @@ class UploadTaskList extends StatelessWidget {
           title: '已发现的照片',
           note: needingOrder.isEmpty ? '等待进入上传队列' : '等待前面的照片确认顺序',
           count: preparing.length,
-          photoBuilder: (_, index) {
-            final source = preparing[index];
-            return _PhotoTile(
-              name: p.relative(source, from: folder),
-              time: _clock(_fileStamp(waiting[source])),
-              photo: _sourcePhoto(source, signature: waiting[source]),
-              action: onDiscard == null
-                  ? null
-                  : _RemovePhotoButton(
-                      onPressed: () => _discard(context, source),
-                    ),
-              caption: const _TileStatus(
-                label: '待准备',
-                color: WorkstationStyle.muted,
-                background: WorkstationStyle.bg,
-              ),
-            );
-          },
+          photoBuilder: (context, index) =>
+              _waitingPhoto(context, preparing[index], needsOrder: false),
         ),
     ];
     return SliverMainAxisGroup(
@@ -467,7 +442,8 @@ class _TaskGroup extends StatelessWidget {
     required this.count,
     required this.photoBuilder,
     this.attention = false,
-    this.extra,
+    this.onDrop,
+    this.dropSources = const {},
   });
 
   final DateTime? stamp;
@@ -475,7 +451,56 @@ class _TaskGroup extends StatelessWidget {
   final int count;
   final IndexedWidgetBuilder photoBuilder;
   final bool attention;
-  final Widget? extra;
+  final ValueChanged<String>? onDrop;
+  final Set<String> dropSources;
+  static const _noteStyle = TextStyle(
+    color: WorkstationStyle.muted,
+    fontSize: 12,
+  );
+
+  Widget _header(Color color, {bool hovering = false}) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: hovering ? WorkstationStyle.accentSoft : Colors.transparent,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: WorkstationStyle.ink,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          StatusTag(
+            label: '$count 张',
+            color: attention ? color : WorkstationStyle.muted,
+            soft: attention ? WorkstationStyle.warnSoft : WorkstationStyle.bg,
+          ),
+          if (onDrop != null)
+            IndexedStack(
+              index: hovering ? 1 : 0,
+              alignment: Alignment.centerLeft,
+              children: [
+                Text(note, style: _noteStyle),
+                Text(
+                  '松开后确认上传顺序',
+                  style: _noteStyle.copyWith(color: WorkstationStyle.accent),
+                ),
+              ],
+            )
+          else
+            Text(note, style: _noteStyle),
+        ],
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -483,22 +508,39 @@ class _TaskGroup extends StatelessWidget {
     final wall = stamp == null
         ? null
         : formatWallClock(_beijing(stamp!)).split(' ');
-    final markerLabel = Padding(
-      padding: const EdgeInsets.only(top: 11, bottom: 8, right: 8),
+    Widget marker(bool wide) => Padding(
+      padding: wide
+          ? const EdgeInsets.only(top: 11, right: 8)
+          : const EdgeInsets.only(bottom: 6),
       child: Row(
+        spacing: 8,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 5, right: 8),
-            child: DecoratedBox(
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              child: const SizedBox.square(dimension: 8),
+          SizedBox(
+            width: 16,
+            height: 20,
+            child: Center(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: attention
+                        ? WorkstationStyle.warnSoft
+                        : WorkstationStyle.accentSoft,
+                    width: 2,
+                  ),
+                ),
+                child: const SizedBox.square(dimension: 12),
+              ),
             ),
           ),
           Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              spacing: 2,
+            child: Wrap(
+              direction: wide ? Axis.vertical : Axis.horizontal,
+              spacing: wide ? 2 : 8,
+              runSpacing: 2,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(
                   wall?.last ?? '时间未知',
@@ -535,46 +577,22 @@ class _TaskGroup extends StatelessWidget {
         ),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 9),
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: WorkstationStyle.ink,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                ?extra,
-                StatusTag(
-                  label: '$count 张',
-                  color: attention ? color : WorkstationStyle.muted,
-                  soft: attention
-                      ? WorkstationStyle.warnSoft
-                      : WorkstationStyle.bg,
-                ),
-                Text(
-                  note,
-                  style: const TextStyle(
-                    color: WorkstationStyle.muted,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: 16, color: WorkstationStyle.line),
-            _PhotoStrip(
-              count: count,
-              photoBuilder: photoBuilder,
-              hasAction: attention,
-            ),
+            if (onDrop case final onDrop?)
+              DragTarget<String>(
+                onWillAcceptWithDetails: (details) =>
+                    dropSources.contains(details.data),
+                onAcceptWithDetails: (details) => onDrop(details.data),
+                builder: (context, candidates, _) =>
+                    _header(color, hovering: candidates.isNotEmpty),
+              )
+            else
+              _header(color),
+            const Divider(height: 14, color: WorkstationStyle.line),
+            _PhotoStrip(count: count, photoBuilder: photoBuilder),
           ],
         ),
       ),
@@ -583,19 +601,19 @@ class _TaskGroup extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 9),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final markerWidth = MediaQuery.textScalerOf(context).scale(108);
-          if (constraints.maxWidth - markerWidth >= 400) {
+          if (constraints.maxWidth >= 600 &&
+              MediaQuery.textScalerOf(context).scale(16) <= 22) {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(width: markerWidth, child: markerLabel),
+                SizedBox(width: 116, child: marker(true)),
                 Expanded(child: card),
               ],
             );
           }
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [markerLabel, card],
+            children: [marker(false), card],
           );
         },
       ),
@@ -604,15 +622,10 @@ class _TaskGroup extends StatelessWidget {
 }
 
 class _PhotoStrip extends StatefulWidget {
-  const _PhotoStrip({
-    required this.count,
-    required this.photoBuilder,
-    required this.hasAction,
-  });
+  const _PhotoStrip({required this.count, required this.photoBuilder});
 
   final int count;
   final IndexedWidgetBuilder photoBuilder;
-  final bool hasAction;
 
   @override
   State<_PhotoStrip> createState() => _PhotoStripState();
@@ -634,13 +647,16 @@ class _PhotoStripState extends State<_PhotoStrip> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = scaler
-            .scale(146)
-            .clamp(146.0, constraints.maxWidth.clamp(146.0, 240.0));
+            .scale(_thumbnailWidth)
+            .clamp(
+              _thumbnailWidth,
+              constraints.maxWidth.clamp(_thumbnailWidth, 240.0),
+            );
         final overflow =
             widget.count * (width + gap) - gap > constraints.maxWidth;
-        final textHeight = scaler.scale(widget.hasAction ? 103 : 84);
+        final textHeight = scaler.scale(65);
         return SizedBox(
-          height: 84 + textHeight + (overflow ? 12 : 0),
+          height: _thumbnailHeight + textHeight + (overflow ? 12 : 0),
           child: Scrollbar(
             controller: _scroll,
             thumbVisibility: overflow,
@@ -668,40 +684,155 @@ class _PhotoStripState extends State<_PhotoStrip> {
   }
 }
 
+typedef _PhotoAction = ({
+  String label,
+  IconData icon,
+  Color? color,
+  VoidCallback run,
+});
+
+Future<void> _showPhotoPreview(
+  BuildContext context, {
+  required String name,
+  required Widget photo,
+}) => showDialog<void>(
+  context: context,
+  builder: (context) => AlertDialog(
+    title: const Text('照片预览'),
+    content: SizedBox(
+      width: 680,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        spacing: 8,
+        children: [
+          SizedBox(
+            width: double.infinity,
+            height: MediaQuery.sizeOf(context).height * .52,
+            child: InteractiveViewer(child: photo),
+          ),
+          Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('关闭'),
+      ),
+    ],
+  ),
+);
+
 class _PhotoTile extends StatelessWidget {
   const _PhotoTile({
+    super.key,
     required this.name,
     required this.photo,
+    required this.onPreview,
+    required this.actions,
     required this.caption,
     this.footer,
-    this.action,
+    this.dragSource,
     this.time,
   });
 
   final String name;
   final Widget photo, caption;
-  final Widget? footer, action;
-  final String? time;
+  final VoidCallback onPreview;
+  final List<_PhotoAction> actions;
+  final Widget? footer;
+  final String? dragSource, time;
 
   @override
   Widget build(BuildContext context) {
+    Widget preview({bool dragging = false}) => Material(
+      color: WorkstationStyle.bg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: const BorderSide(color: WorkstationStyle.line),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        mouseCursor: dragSource == null
+            ? null
+            : dragging
+            ? SystemMouseCursors.grabbing
+            : SystemMouseCursors.grab,
+        onTap: onPreview,
+        child: photo,
+      ),
+    );
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          height: 84,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            color: WorkstationStyle.bg,
-            borderRadius: BorderRadius.circular(9),
-            border: Border.all(color: WorkstationStyle.line),
-          ),
+        SizedBox(
+          height: _thumbnailHeight,
           child: Stack(
             fit: StackFit.expand,
             children: [
-              photo,
-              if (action case final action?)
-                Positioned(right: 3, bottom: 3, child: action),
+              if (dragSource case final source?)
+                Draggable<String>(
+                  data: source,
+                  maxSimultaneousDrags: 1,
+                  affinity: Axis.vertical,
+                  dragAnchorStrategy: pointerDragAnchorStrategy,
+                  feedback: Material(
+                    elevation: 3,
+                    child: SizedBox.square(dimension: 68, child: photo),
+                  ),
+                  childWhenDragging: Opacity(
+                    opacity: .45,
+                    child: preview(dragging: true),
+                  ),
+                  child: preview(),
+                )
+              else
+                preview(),
+              Positioned(
+                right: 4,
+                top: 4,
+                child: Material(
+                  color: WorkstationStyle.card,
+                  borderRadius: BorderRadius.circular(6),
+                  child: SizedBox.square(
+                    dimension: 34,
+                    child: PopupMenuButton<_PhotoAction>(
+                      tooltip: '照片操作',
+                      icon: const Icon(Icons.more_vert, size: 20),
+                      padding: EdgeInsets.zero,
+                      position: PopupMenuPosition.under,
+                      onSelected: (action) => action.run(),
+                      itemBuilder: (_) => [
+                        for (final action in [
+                          ...actions,
+                          (
+                            label: '查看图片',
+                            icon: Icons.image_outlined,
+                            color: null,
+                            run: onPreview,
+                          ),
+                        ])
+                          PopupMenuItem(
+                            value: action,
+                            child: Row(
+                              spacing: 10,
+                              children: [
+                                Icon(
+                                  action.icon,
+                                  size: 17,
+                                  color: action.color,
+                                ),
+                                Text(
+                                  action.label,
+                                  style: TextStyle(color: action.color),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -710,7 +841,7 @@ class _PhotoTile extends StatelessWidget {
           message: name,
           child: Text(
             p.basename(name),
-            maxLines: 2,
+            maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: WorkstationStyle.ink,
@@ -720,7 +851,6 @@ class _PhotoTile extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(height: 4),
         if (time case final time?)
           Text(
             time,
@@ -735,25 +865,6 @@ class _PhotoTile extends StatelessWidget {
       ],
     );
   }
-}
-
-class _RemovePhotoButton extends StatelessWidget {
-  const _RemovePhotoButton({required this.onPressed});
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) => IconButton(
-    tooltip: '从上传队列移除',
-    icon: const Icon(Icons.delete_outline, size: 18),
-    style: IconButton.styleFrom(
-      backgroundColor: WorkstationStyle.card,
-      foregroundColor: WorkstationStyle.muted,
-      minimumSize: const Size.square(34),
-      padding: const EdgeInsets.all(7),
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    ),
-    onPressed: onPressed,
-  );
 }
 
 class _TileStatus extends StatelessWidget {
@@ -855,18 +966,34 @@ class _JobPhotoState extends State<_JobPhoto> {
         cacheWidth: 240,
         errorBuilder: (context, error, stackTrace) => _fallbackPreview(job),
       ),
-      action: IconButton(
-        tooltip: '识别取片卡尾号',
-        style: IconButton.styleFrom(
-          backgroundColor: WorkstationStyle.card,
-          foregroundColor: WorkstationStyle.muted,
-          minimumSize: const Size.square(34),
-          padding: const EdgeInsets.all(7),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      onPreview: () => _showPhotoPreview(
+        context,
+        name: job.relative,
+        photo: FutureBuilder<Uint8List>(
+          future: job.readPhotoForReview(),
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return Center(child: Text(appErrorMessage(snapshot.error!)));
+            }
+            if (!snapshot.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            return Image.memory(
+              snapshot.data!,
+              fit: BoxFit.contain,
+              errorBuilder: (_, _, _) => const Center(child: Text('无法读取本机照片')),
+            );
+          },
         ),
-        onPressed: widget.onReview,
-        icon: const Icon(Icons.document_scanner_outlined, size: 18),
       ),
+      actions: [
+        (
+          label: '识别取片卡尾号',
+          icon: Icons.document_scanner_outlined,
+          color: null,
+          run: widget.onReview,
+        ),
+      ],
       caption: _TileStatus(
         label: label,
         color: color,
@@ -893,15 +1020,16 @@ const _photoPlaceholder = Icon(
   color: WorkstationStyle.muted,
 );
 
-Widget _sourcePhoto(String path, {String? signature, int cacheWidth = 240}) =>
-    Image(
-      image: ResizeImage(
-        _SourceImage(File(path), signature),
-        width: cacheWidth,
-      ),
-      fit: BoxFit.contain,
-      errorBuilder: (context, error, stackTrace) => _photoPlaceholder,
-    );
+Widget _sourcePhoto(
+  String path, {
+  String? signature,
+  int cacheWidth = 240,
+  Widget unavailable = _photoPlaceholder,
+}) => Image(
+  image: ResizeImage(_SourceImage(File(path), signature), width: cacheWidth),
+  fit: BoxFit.contain,
+  errorBuilder: (context, error, stackTrace) => unavailable,
+);
 
 // A camera may still be writing a file when the first preview is built.
 class _SourceImage extends FileImage {
