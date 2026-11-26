@@ -610,6 +610,107 @@ void main() {
     }, () => client);
   });
 
+  testWidgets('打印记录随内容收起，窄窗口可滚动、复制全部和关闭', (tester) async {
+    tester.view.physicalSize = const Size(1000, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final bridge = ControlledBridge();
+    addTearDown(bridge.dispose);
+    final messenger = tester.binding.defaultBinaryMessenger;
+    String? copiedText;
+    var clipboardAvailable = false;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        if (!clipboardAvailable) throw PlatformException(code: 'unavailable');
+        copiedText = (call.arguments as Map)['text'] as String;
+      }
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: Workstation(bridge: bridge, embedded: true)),
+    );
+    await openCurrentPrintLocation(tester);
+
+    final entry = find.widgetWithText(TextButton, '打印记录');
+    final dialog = find.byType(Dialog);
+    final close = find.byTooltip('关闭弹窗');
+    final copy = find.widgetWithText(TextButton, '复制');
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    expect(find.text('暂无打印记录'), findsOneWidget);
+    expect(tester.widget<TextButton>(copy).onPressed, isNull);
+    await tester.tap(close);
+    await tester.pumpAndSettle();
+
+    const at = '2026-11-25T09:21:03.123Z';
+    const path =
+        r'C:\Users\Workstation\AppData\Roaming\printing\configuration.json';
+    bridge.snapshot['logs'] = [
+      {'at': at, 'message': '配置 $path'},
+      {'at': at, 'message': '代理已启动'},
+    ];
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    final newest = find.text('代理已启动');
+    final oldest = find.text('配置 $path');
+    final displayTime = DateTime.parse(at)
+        .toLocal()
+        .toIso8601String()
+        .replaceFirst('T', ' ');
+    final dialogSurface = find
+        .descendant(of: dialog, matching: find.byType(Material))
+        .first;
+    expect(tester.getSize(dialogSurface).height, lessThan(300));
+    expect(
+      tester.getTopLeft(newest).dy,
+      lessThan(tester.getTopLeft(oldest).dy),
+    );
+    expect(tester.getTopLeft(find.text('事件')).dx, tester.getTopLeft(newest).dx);
+    expect(find.text(displayTime), findsNWidgets(2));
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(dialog, findsNothing);
+
+    bridge.snapshot['logs'] = [
+      {'at': at, 'message': '配置 $path'},
+      for (var i = 0; i < 24; i++) {'at': at, 'message': '运行事件 $i'},
+    ];
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    tester.view.physicalSize = const Size(375, 420);
+    await tester.pumpAndSettle();
+    final logList = find.descendant(
+      of: dialog,
+      matching: find.byType(Scrollable),
+    );
+    expect(find.text('事件'), findsNothing);
+    expect(find.text('运行事件 23').hitTestable(), findsOneWidget);
+    expect(oldest.hitTestable(), findsNothing);
+    await tester.tap(copy);
+    await tester.pumpAndSettle();
+    expect(find.text('复制失败，请重试'), findsOneWidget);
+    expect(copiedText, isNull);
+    clipboardAvailable = true;
+    await tester.tap(copy);
+    await tester.pumpAndSettle();
+    expect(find.text('已复制全部日志'), findsOneWidget);
+    expect(copiedText?.split('\n'), [
+      for (var i = 23; i >= 0; i--) '$displayTime  运行事件 $i',
+      '$displayTime  配置 $path',
+    ]);
+    await tester.scrollUntilVisible(oldest, 160, scrollable: logList);
+    expect(oldest.hitTestable(), findsOneWidget);
+    expect(close.hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(close);
+    await tester.pumpAndSettle();
+    expect(dialog, findsNothing);
+  });
+
   testWidgets('查看批次在打印页标签栏内切换并读取机位', (tester) async {
     final bridge = ControlledBridge();
     addTearDown(bridge.dispose);

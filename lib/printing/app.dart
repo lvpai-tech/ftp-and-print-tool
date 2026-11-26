@@ -13,6 +13,7 @@ import 'ui/job_thumbnails.dart';
 import 'ui/photo_batch_page.dart';
 import 'ui/preview_dialog.dart';
 import 'ui/print_locations_page.dart';
+import 'ui/print_log_dialog.dart';
 import 'ui/print_recovery_dialog.dart';
 import 'ui/settings_panel.dart';
 
@@ -949,15 +950,8 @@ class _WorkstationState extends State<Workstation> {
 
   void _openLogs() => showDialog<void>(
     context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('打印记录'),
-      content: SizedBox(width: 560, height: 380, child: logsView()),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('关闭'),
-        ),
-      ],
+    builder: (context) => PrintLogDialog(
+      logs: (bridge.snapshot['logs'] as List? ?? const []).cast<Json>(),
     ),
   );
 
