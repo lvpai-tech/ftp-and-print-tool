@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../branding.dart';
 import '../printing/app.dart';
+import '../printing/pickup_cards/page.dart';
 import '../workstation_session.dart';
 import 'app_dialogs.dart';
 import 'transfer_page.dart';
@@ -30,6 +31,7 @@ class WorkstationShell extends StatefulWidget {
 class _WorkstationShellState extends State<WorkstationShell> {
   late final _packageInfo = PackageInfo.fromPlatform();
   WorkModule? _module;
+  bool _openedPickupCards = false;
 
   String get _uploadStatus {
     final session = widget.session;
@@ -56,7 +58,10 @@ class _WorkstationShellState extends State<WorkstationShell> {
 
   void _open(WorkModule module) {
     FocusScope.of(context).unfocus();
-    setState(() => _module = module);
+    setState(() {
+      _module = module;
+      if (module == WorkModule.pickupCards) _openedPickupCards = true;
+    });
   }
 
   Future<void> _accountAction(String action) async {
@@ -298,6 +303,10 @@ class _WorkstationShellState extends State<WorkstationShell> {
                                 session.printBridge.busy ||
                                 session.printBridge.state['autoPrint'] == true,
                             onOpen: _open,
+                            showPickupCards:
+                                session.personnelToken != null &&
+                                session.scenic != null &&
+                                session.identity != null,
                           ),
                           TransferPage(
                             embedded: true,
@@ -313,6 +322,19 @@ class _WorkstationShellState extends State<WorkstationShell> {
                             session: session,
                             onBack: () => setState(() => _module = null),
                           ),
+                          if (_openedPickupCards &&
+                              session.scenic != null &&
+                              session.identity != null)
+                            PickupCardsPage(
+                              key: ValueKey((
+                                session.identity!.id,
+                                session.scenic!.id,
+                              )),
+                              session: session,
+                              visible: module == WorkModule.pickupCards,
+                            )
+                          else
+                            const SizedBox.shrink(),
                         ],
                       ),
                     ),

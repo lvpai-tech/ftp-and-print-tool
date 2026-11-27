@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../auto_upload/station_upload.dart';
 import '../photo_normalizer.dart';
+import 'anchored_dropdown.dart';
 import 'app_dialogs.dart';
 import 'card_tail_dialog.dart';
 import 'design.dart';
@@ -16,14 +17,12 @@ import 'upload_task_list.dart';
 
 class AutoUploadPanel extends StatefulWidget {
   final StationUpload station;
-  final VoidCallback onConfigureCos;
   final Widget? batchTimeline;
   final bool allowDrop;
 
   const AutoUploadPanel({
     super.key,
     required this.station,
-    required this.onConfigureCos,
     this.batchTimeline,
     this.allowDrop = true,
   });
@@ -32,14 +31,27 @@ class AutoUploadPanel extends StatefulWidget {
   State<AutoUploadPanel> createState() => _AutoUploadPanelState();
 }
 
-enum _FolderAction { copyPath, updateKey }
-
 class _AutoUploadPanelState extends State<AutoUploadPanel> {
   StationUpload get station => widget.station;
   String get _folder => station.folder;
   bool _picking = false;
+  bool _resolvingDuplicate = false;
   bool _dragging = false;
   bool? _scanExisting;
+
+  Future<void> _resolveDuplicate(String source, {required bool upload}) async {
+    setState(() => _resolvingDuplicate = true);
+    try {
+      await station.uploader.resolveDuplicate(source, upload: upload);
+    } catch (error) {
+      if (mounted) {
+        await showAppMessage(context, message: appErrorMessage(error));
+      }
+    } finally {
+      if (mounted) setState(() => _resolvingDuplicate = false);
+    }
+  }
+
   bool get _canDrop =>
       widget.allowDrop &&
       station.canImport &&
@@ -111,14 +123,6 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
     }
   }
 
-  Future<void> _copyFolder() async {
-    await Clipboard.setData(ClipboardData(text: _folder));
-    if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('已复制收图路径')));
-    }
-  }
-
   Future<void> _openFolder() async {
     try {
       if (await launchUrl(
@@ -185,7 +189,9 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
     final supported = desktop || Platform.isIOS;
     final uploader = station.uploader;
     final active = uploader.running && !uploader.authorizationPaused;
-    final working = station.busy || _picking;
+    final showMonitoringControl =
+        desktop && active && !station.folderUnavailable;
+    final working = station.busy || _picking || _resolvingDuplicate;
     final jobs = uploader.jobs;
     final orderWait = uploader.orderWaitMessage;
     final pending = jobs.where((job) => job.state == 'pending').length;
@@ -253,7 +259,8 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  if (status != '待确认顺序' || widget.batchTimeline == null)
+                  if (!(showMonitoringControl && status == '监听中') &&
+                      (status != '待确认顺序' || widget.batchTimeline == null))
                     StatusTag(
                       label: status,
                       color: statusColor,
@@ -274,48 +281,101 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
         ),
       ],
     );
+    final importButton = OutlinedButton.icon(
+      onPressed: working || !supported || !station.canImport
+          ? null
+          : _importPhotos,
+      style: _dragging && _canDrop
+          ? secondaryAction.copyWith(
+              backgroundColor: const WidgetStatePropertyAll(
+                WorkstationStyle.accentSoft,
+              ),
+            )
+          : secondaryAction,
+      icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
+      label: Text(_picking ? '正在处理…' : '导入照片'),
+    );
+    final VoidCallback? toggleListening =
+        working || !supported || !station.hasFolder
+        ? null
+        : () => station.setEnabled(
+            !uploader.running,
+            scanExisting: _scanExisting,
+          );
+    final listeningButton = FilledButton.icon(
+      onPressed: toggleListening,
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(0, 44),
+        shape: actionShape,
+        backgroundColor: active
+            ? WorkstationStyle.ink
+            : WorkstationStyle.accent,
+        foregroundColor: WorkstationStyle.card,
+      ),
+      icon: Icon(uploader.running ? Icons.pause : Icons.play_arrow, size: 20),
+      label: Text(
+        uploader.running
+            ? '暂停监听'
+            : station.legacy
+            ? '恢复旧目录监听'
+            : station.enabled
+            ? '继续监听'
+            : '开始监听',
+      ),
+    );
+    final monitoringBorder = WorkstationStyle.ok.withValues(alpha: .16);
     final actions = Wrap(
       spacing: 8,
       runSpacing: 8,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        FilledButton.icon(
-          onPressed: working || !supported || !station.hasFolder
-              ? null
-              : () => station.setEnabled(
-                  !uploader.running,
-                  scanExisting: _scanExisting,
+        if (showMonitoringControl)
+          Container(
+            padding: const EdgeInsetsDirectional.fromSTEB(12, 5, 5, 5),
+            decoration: BoxDecoration(
+              color: WorkstationStyle.okSoft,
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(color: monitoringBorder),
+            ),
+            child: Wrap(
+              spacing: 16,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  spacing: 6,
+                  children: [
+                    Icon(Icons.circle, size: 8, color: WorkstationStyle.ok),
+                    Text(
+                      '正在监听',
+                      style: TextStyle(
+                        color: WorkstationStyle.ok,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
                 ),
-          style: FilledButton.styleFrom(
-            minimumSize: const Size(0, 44),
-            shape: actionShape,
-            backgroundColor: active
-                ? WorkstationStyle.ink
-                : WorkstationStyle.accent,
-            foregroundColor: WorkstationStyle.card,
-          ),
-          icon: Icon(
-            uploader.running ? Icons.pause : Icons.play_arrow,
-            size: 20,
-          ),
-          label: Text(
-            uploader.running
-                ? '暂停监听'
-                : station.legacy
-                ? '恢复旧目录监听'
-                : station.enabled
-                ? '继续监听'
-                : '开始监听',
-          ),
-        ),
-        OutlinedButton.icon(
-          onPressed: working || !supported || !station.canImport
-              ? null
-              : _importPhotos,
-          style: secondaryAction,
-          icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
-          label: Text(_picking ? '正在处理…' : '导入照片'),
-        ),
+                OutlinedButton.icon(
+                  onPressed: toggleListening,
+                  style: secondaryAction.copyWith(
+                    backgroundColor: const WidgetStatePropertyAll(
+                      WorkstationStyle.card,
+                    ),
+                    side: WidgetStatePropertyAll(
+                      BorderSide(color: monitoringBorder),
+                    ),
+                    minimumSize: const WidgetStatePropertyAll(Size(0, 40)),
+                  ),
+                  icon: const Icon(Icons.pause, size: 16),
+                  label: const Text('暂停监听'),
+                ),
+              ],
+            ),
+          )
+        else
+          listeningButton,
+        if (!desktop) importButton,
         if (failed > 0)
           OutlinedButton.icon(
             onPressed: active && !working ? uploader.retryFailed : null,
@@ -363,52 +423,60 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
         ),
       ],
     );
-    final folderActions = <Widget>[
-      OutlinedButton(
-        onPressed: working || !supported ? null : _pickFolder,
-        style: secondaryAction.copyWith(
-          backgroundColor: const WidgetStatePropertyAll(WorkstationStyle.card),
-        ),
-        child: Text(
-          station.folderUnavailable
-              ? '重新授权收图文件夹'
-              : station.hasFolder
-              ? '更换收图文件夹'
-              : '选择收图文件夹',
-        ),
-      ),
-      if (!Platform.isIOS && station.hasFolder)
-        IconButton(
-          tooltip: '打开收图文件夹',
-          onPressed: working || !supported ? null : _openFolder,
-          icon: const Icon(Icons.folder_open_outlined, size: 20),
-        ),
-      PopupMenuButton<_FolderAction>(
-        tooltip: '文件夹操作',
-        icon: const Icon(Icons.more_horiz, size: 20),
-        enabled: station.hasFolder || !working,
-        onSelected: (action) {
-          switch (action) {
-            case _FolderAction.copyPath:
-              _copyFolder();
-            case _FolderAction.updateKey:
-              widget.onConfigureCos();
-          }
-        },
-        itemBuilder: (_) => [
-          if (station.hasFolder)
-            const PopupMenuItem(
-              value: _FolderAction.copyPath,
-              child: Text('复制路径'),
+    final folderAction = station.hasFolder
+        ? AnchoredDropdown(
+            enabled: supported && !working,
+            menuWidth: 192,
+            preferredHeight: desktop ? 96 : 48,
+            triggerBuilder: (context, focus, open, toggle) => Semantics(
+              expanded: open,
+              child: IconButton(
+                tooltip: '文件夹操作',
+                focusNode: focus,
+                onPressed: supported && !working ? toggle : null,
+                icon: const Icon(Icons.more_horiz, size: 20),
+              ),
             ),
-          PopupMenuItem(
-            value: _FolderAction.updateKey,
-            enabled: !working,
-            child: const Text('更新机位密钥'),
-          ),
-        ],
-      ),
-    ];
+            menuBuilder: (context, close) => SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  MenuItemButton(
+                    style: MenuItemButton.styleFrom(
+                      minimumSize: const Size(0, 48),
+                    ),
+                    onPressed: () {
+                      close();
+                      _pickFolder();
+                    },
+                    child: Text(
+                      station.folderUnavailable ? '重新授权收图文件夹' : '更换收图文件夹',
+                    ),
+                  ),
+                  if (desktop)
+                    MenuItemButton(
+                      style: MenuItemButton.styleFrom(
+                        minimumSize: const Size(0, 48),
+                      ),
+                      onPressed: () {
+                        close();
+                        _openFolder();
+                      },
+                      child: const Text('打开收图文件夹'),
+                    ),
+                ],
+              ),
+            ),
+          )
+        : OutlinedButton(
+            onPressed: working || !supported ? null : _pickFolder,
+            style: secondaryAction.copyWith(
+              backgroundColor: const WidgetStatePropertyAll(
+                WorkstationStyle.card,
+              ),
+            ),
+            child: const Text('选择收图文件夹'),
+          );
     final showScan = (station.legacy || station.custom) && !uploader.running;
     final scanOption = FilterChip(
       label: const Text('补扫目录已有照片'),
@@ -417,22 +485,13 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
           ? null
           : (value) => setState(() => _scanExisting = value),
     );
-    final dropTarget = desktop && station.canImport
+    final desktopImport = desktop
         ? DropTarget(
             enable: _canDrop,
             onDragEntered: (_) => setState(() => _dragging = true),
             onDragExited: (_) => setState(() => _dragging = false),
             onDragDone: _dropPhotos,
-            child: OutlinedButton.icon(
-              onPressed: working ? null : _importPhotos,
-              style: secondaryAction.copyWith(
-                backgroundColor: _dragging && _canDrop
-                    ? const WidgetStatePropertyAll(WorkstationStyle.accentSoft)
-                    : null,
-              ),
-              icon: const Icon(Icons.file_download_outlined, size: 18),
-              label: const Text('拖入照片到这个机位'),
-            ),
+            child: importButton,
           )
         : null;
     final stats = _UploadStats(
@@ -460,16 +519,6 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                 builder: (context, constraints) {
                   final wide = constraints.maxWidth >= 740;
                   final scanInline = constraints.maxWidth >= 900;
-                  final folderControls = Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    alignment: wide ? WrapAlignment.end : WrapAlignment.start,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      if (scanInline && showScan) scanOption,
-                      ...folderActions,
-                    ],
-                  );
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     spacing: 12,
@@ -506,23 +555,18 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           spacing: 4,
                           children: [
-                            if (wide)
+                            if (wide || station.hasFolder)
                               Row(
                                 spacing: 16,
                                 children: [
                                   Expanded(child: folderPath),
-                                  Flexible(
-                                    flex: 2,
-                                    child: Align(
-                                      alignment: Alignment.centerRight,
-                                      child: folderControls,
-                                    ),
-                                  ),
+                                  if (scanInline && showScan) scanOption,
+                                  folderAction,
                                 ],
                               )
                             else ...[
                               folderPath,
-                              folderControls,
+                              folderAction,
                             ],
                             if (showScan && !scanInline)
                               Padding(
@@ -532,7 +576,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                           ],
                         ),
                       ),
-                      if (wide && dropTarget != null)
+                      if (wide && desktopImport != null)
                         Row(
                           spacing: 16,
                           children: [
@@ -540,23 +584,77 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
                             Flexible(
                               child: Align(
                                 alignment: Alignment.centerRight,
-                                child: dropTarget,
+                                child: desktopImport,
                               ),
                             ),
                           ],
                         )
                       else ...[
                         stats,
-                        if (dropTarget != null)
+                        if (desktopImport != null)
                           Align(
                             alignment: Alignment.centerLeft,
-                            child: dropTarget,
+                            child: desktopImport,
                           ),
                       ],
                       if (Platform.isIOS)
                         const Text(
                           'iPad 在前台收图，回到应用后会继续未完成任务。',
                           style: TextStyle(color: WorkstationStyle.muted),
+                        ),
+                      if (uploader.skippedDuplicates > 0)
+                        Text(
+                          '已跳过重复照片 ${uploader.skippedDuplicates} 张',
+                          style: const TextStyle(color: WorkstationStyle.muted),
+                        ),
+                      if (uploader.duplicateReviewSource case final source?)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: WorkstationStyle.warnSoft,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            spacing: 8,
+                            children: [
+                              Semantics(
+                                liveRegion: true,
+                                child: const Text('此机位已上传过相同照片，是否再次上传？'),
+                              ),
+                              Text(
+                                p.basename(source),
+                                style: const TextStyle(
+                                  color: WorkstationStyle.muted,
+                                ),
+                              ),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  OutlinedButton(
+                                    onPressed: !active || working
+                                        ? null
+                                        : () => _resolveDuplicate(
+                                            source,
+                                            upload: false,
+                                          ),
+                                    style: secondaryAction,
+                                    child: const Text('跳过'),
+                                  ),
+                                  FilledButton(
+                                    onPressed: !active || working
+                                        ? null
+                                        : () => _resolveDuplicate(
+                                            source,
+                                            upload: true,
+                                          ),
+                                    child: const Text('仍然上传'),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
                       if (!supported) ...[
                         const Text(
@@ -627,6 +725,7 @@ class _AutoUploadPanelState extends State<AutoUploadPanel> {
           batchTimeline: widget.batchTimeline,
           onDiscard: uploader.running ? uploader.discardWaitingSource : null,
           onConfirmNext: uploader.running ? uploader.confirmNextSource : null,
+          confirmingNext: uploader.confirmingNextSource,
           onReview: (job) => showCardTailDialog(
             context,
             readPhoto: job.readPhotoForReview,

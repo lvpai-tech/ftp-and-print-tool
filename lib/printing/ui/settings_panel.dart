@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:material_ui/material_ui.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../ui/app_dialogs.dart';
 import '../../ui/dropdown_field.dart';
@@ -27,12 +30,34 @@ class SettingsPanel extends StatefulWidget {
 class _SettingsPanelState extends State<SettingsPanel> {
   final printForm = GlobalKey<FormState>();
   late final TextEditingController dpi;
+  late bool highPrintQuality;
   List<String> printers = [];
+  Set<String> epsonL8050Printers = {};
   String? printer;
   String? printerError;
   bool loadingPrinters = false;
   bool checkingPrinters = false;
   String? printerStatus;
+
+  Future<void> openEpsonDriverDownload() async {
+    try {
+      final opened = await launchUrl(
+        Uri.https(
+          'www.epson.com.hk',
+          '/Support/Printers/Inkjet-Printer/EcoTank-Series/L8050/s/SPT_C11CK37506',
+        ),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!opened) throw StateError('无法打开爱普生 L8050 驱动下载页。');
+    } catch (error) {
+      if (!mounted) return;
+      await showAppMessage(
+        context,
+        title: '打开驱动下载页失败',
+        message: appErrorMessage(error),
+      );
+    }
+  }
 
   Future<void> inspectPrinter() async {
     final name = printer;
@@ -49,8 +74,18 @@ class _SettingsPanelState extends State<SettingsPanel> {
         throw StateError('无法读取「$name」的状态，请检查连接。');
       }
       if (mounted) {
+        final capabilities = result['capabilities'];
+        var details = '$name：${_printerState(status)}（${jobs.length} 项任务）';
+        if (capabilities is Map) {
+          final resolutions = List<String>.from(capabilities['resolutions']);
+          final resolutionText = resolutions.isEmpty
+              ? '驱动未公开数值分辨率'
+              : '驱动分辨率：${resolutions.join('、').replaceAll(' x ', ' × ')} DPI';
+          final high = capabilities['high'] == true ? '可请求高画质' : '无高画质档';
+          details = '$details\n$resolutionText · $high';
+        }
         setState(() {
-          printerStatus = '$name：${_printerState(status)}（${jobs.length} 项任务）';
+          printerStatus = details;
         });
       }
     } catch (e) {
@@ -95,6 +130,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     dpi = TextEditingController(
       text: '${widget.bridge.config['printDpi'] ?? 300}',
     );
+    highPrintQuality = widget.bridge.config['highPrintQuality'] == true;
     loadPrinters();
   }
 
@@ -109,7 +145,11 @@ class _SettingsPanelState extends State<SettingsPanel> {
     if (name == null) return;
     if (!printForm.currentState!.validate()) return;
     final saved = await widget.perform('saveConfig', [
-      {'printer': name, 'printDpi': int.parse(dpi.text.trim(), radix: 10)},
+      {
+        'printer': name,
+        'printDpi': int.parse(dpi.text.trim(), radix: 10),
+        if (Platform.isWindows) 'highPrintQuality': highPrintQuality,
+      },
     ]);
     if (saved && mounted) {
       ScaffoldMessenger.of(context)
@@ -135,8 +175,29 @@ class _SettingsPanelState extends State<SettingsPanel> {
       printerError = null;
     });
     try {
-      final result = await widget.bridge.call('listPrinters');
-      if (mounted) setState(() => printers = List<String>.from(result));
+      final result = await widget.bridge.call('listPrinters', [
+        if (Platform.isWindows) true,
+      ]) as List;
+      final names = <String>[];
+      final epson = <String>{};
+      if (Platform.isWindows) {
+        for (final entry in result.cast<Map>()) {
+          final name = entry['Name'] as String;
+          names.add(name);
+          if ((entry['DriverName'] as String).toLowerCase() ==
+              'epson l8050 series') {
+            epson.add(name);
+          }
+        }
+      } else {
+        names.addAll(result.cast<String>());
+      }
+      if (mounted) {
+        setState(() {
+          printers = names;
+          epsonL8050Printers = epson;
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() => printerError = appErrorMessage(e));
@@ -256,6 +317,15 @@ class _SettingsPanelState extends State<SettingsPanel> {
                         session: widget.session,
                       ),
                     ],
+                    if (Platform.isMacOS)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: openEpsonDriverDownload,
+                          icon: const Icon(Icons.open_in_new, size: 18),
+                          label: const Text('下载 Epson L8050 官方驱动'),
+                        ),
+                      ),
                     if (widget.bridge.configured) ...[
                       if (!widget.embedded) const SizedBox(height: 28),
                       Row(
@@ -307,6 +377,13 @@ class _SettingsPanelState extends State<SettingsPanel> {
                         options: {...printers, ?printer}.toList(),
                         enabled: !widget.bridge.busy && !checkingPrinters,
                         onChanged: (value) => setState(() {
+                          final savedPrinter = widget.bridge.config['printer'];
+                          if (value != printer &&
+                              (savedPrinter == null || savedPrinter == '')) {
+                            highPrintQuality = epsonL8050Printers.contains(
+                              value,
+                            );
+                          }
                           printer = value;
                           printerStatus = null;
                         }),
@@ -363,7 +440,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                           enabled: !widget.bridge.busy,
                           keyboardType: TextInputType.number,
                           decoration: const InputDecoration(
-                            labelText: '打印分辨率',
+                            labelText: '送打位图分辨率',
                             suffixText: 'DPI',
                           ),
                           validator: (value) {
@@ -382,9 +459,25 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       ),
                       const SizedBox(height: 8),
                       const Text(
-                        '默认 300 DPI，所有景区共用。设备输出分辨率由打印机驱动决定。',
+                        '默认 300 DPI。驱动决定实际输出分辨率。',
                         style: TextStyle(color: muted),
                       ),
+                      if (Platform.isWindows) ...[
+                        const SizedBox(height: 8),
+                        SwitchListTile(
+                          key: const ValueKey('print-high-quality'),
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('高画质'),
+                          subtitle: const Text(
+                            '送打时请求驱动的高画质档。相纸类型和双向打印在打印机旁的系统打印偏好中设置。',
+                          ),
+                          value: highPrintQuality,
+                          onChanged: widget.bridge.busy || printer == null
+                              ? null
+                              : (value) =>
+                                    setState(() => highPrintQuality = value),
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       Align(
                         alignment: Alignment.centerLeft,

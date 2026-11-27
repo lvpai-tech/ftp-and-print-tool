@@ -232,6 +232,15 @@ class CosUpload {
     return (status: _status(data, allowFailed: true), error: _error(data));
   }
 
+  Future<bool> wasIngested(String requestId) async {
+    try {
+      final result = await status(requestId);
+      return const {'INGESTED', 'GROUPED'}.contains(result.status);
+    } on _MissingUploadSession {
+      return false;
+    }
+  }
+
   String _error(Map<String, dynamic> data) =>
       data['errorCode'] == 'INVALID_IMAGE_OR_DIGEST'
       ? '照片内容不合法或校验失败'
@@ -306,6 +315,9 @@ class CosUpload {
         .join()
         .timeout(const Duration(seconds: 10));
     final result = jsonDecode(text);
+    if (method == 'GET' && result is Map && result['code'] == 40401) {
+      throw const _MissingUploadSession();
+    }
     if (result is Map && const {40101, 40102, 40301}.contains(result['code'])) {
       throw CosUploadAuthorizationError(
         personnelToken == null
@@ -320,4 +332,8 @@ class CosUpload {
   }
 
   void close() => _http.close(force: true);
+}
+
+class _MissingUploadSession implements Exception {
+  const _MissingUploadSession();
 }

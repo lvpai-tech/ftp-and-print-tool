@@ -50,6 +50,7 @@ function runPrintCommand(config, item, file, printer, documentName) {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, LVPAI_PRINT_DPI: String(config.printDpi ?? 300),
+        LVPAI_PRINT_HIGH_QUALITY: config.highPrintQuality === true ? '1' : '0',
         ...(macScript ? { LVPAI_PRINT_NODE: process.execPath } : {}),
         LVPAI_PRINT_DOCUMENT_NAME: documentName || '' },
     });

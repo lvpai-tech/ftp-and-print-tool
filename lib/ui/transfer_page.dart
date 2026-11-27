@@ -295,7 +295,7 @@ class _TransferPageState extends State<TransferPage>
       );
       if (profile == null || !mounted) return;
       if (station == null && _stations.containsKey(profile.stationId)) {
-        await showAppMessage(context, message: '该机位已绑定。请在对应机位详情更新密钥。');
+        await showAppMessage(context, message: '该机位已绑定。请返回机位列表，在「机位操作」中更新密钥。');
         return;
       }
       final account = widget.session?.account;
@@ -537,9 +537,25 @@ class _TransferPageState extends State<TransferPage>
                     PopupMenuButton<String>(
                       tooltip: '机位操作',
                       enabled: !_removing.contains(station),
-                      onSelected: (_) => unawaited(_removeStation(station)),
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(value: 'remove', child: Text('从本机移除')),
+                      position: PopupMenuPosition.under,
+                      onSelected: (action) {
+                        switch (action) {
+                          case 'updateKey':
+                            unawaited(_configure(station));
+                          case 'remove':
+                            unawaited(_removeStation(station));
+                        }
+                      },
+                      itemBuilder: (_) => [
+                        PopupMenuItem(
+                          value: 'updateKey',
+                          enabled: !station.busy,
+                          child: const Text('更新机位密钥'),
+                        ),
+                        const PopupMenuItem(
+                          value: 'remove',
+                          child: Text('从本机移除'),
+                        ),
                       ],
                     ),
                     const Icon(Icons.chevron_right),
@@ -595,7 +611,6 @@ class _TransferPageState extends State<TransferPage>
                     key: ValueKey(station.profile.stationId),
                     station: station,
                     allowDrop: widget.visible,
-                    onConfigureCos: () => _configure(station),
                     batchTimeline: _batchTimeline(station),
                   ),
                 ),

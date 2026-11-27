@@ -962,6 +962,76 @@ void main() {
     });
   });
 
+  test('补扫重复照片可跳过或新建上传，失败重启后沿用新请求', () async {
+    final fixture = await _QueueFixture.open();
+    await fixture.run(() async {
+      final uploader = fixture.uploader();
+      final original = File(p.join(fixture.inbox.path, 'original.png'));
+      await original.writeAsBytes(await _png());
+      await uploader.start(
+        fixture.inbox,
+        null,
+        cosProfile: fixture.profile,
+        includeExisting: true,
+      );
+      await _until(
+        () => uploader.jobs.singleOrNull?.state == 'accepted',
+        '原图上传',
+      );
+      final originalId = uploader.jobs.single.id;
+      fixture.ingested.add(originalId);
+      await _until(() => uploader.jobs.single.state == 'ingested', '原图入库');
+      await uploader.stop();
+
+      final backfill = await Directory(p.join(fixture.scratch.path, 'backfill'))
+          .create();
+      final skip = await original.copy(p.join(backfill.path, 'skip.png'));
+      final repeat = await original.copy(p.join(backfill.path, 'repeat.png'));
+      Future<void> startBackfill() => uploader.start(
+        backfill,
+        null,
+        cosProfile: fixture.profile,
+        includeExisting: true,
+        reviewExistingDuplicates: true,
+      );
+      await startBackfill();
+      uploader.confirmNextSource(skip.path);
+      await _until(() => uploader.duplicateReviewSource == skip.path, '发现旧会话');
+      expect(fixture.prepared, [originalId]);
+      expect(uploader.jobs, isEmpty);
+      await uploader.resolveDuplicate(skip.path, upload: false);
+      expect(await skip.exists(), isTrue);
+      expect(uploader.skippedDuplicates, 1);
+      await _until(
+        () => uploader.duplicateReviewSource == repeat.path,
+        '最后一张也需要确认重复',
+      );
+      fixture.failNextUpload = true;
+      await uploader.resolveDuplicate(repeat.path, upload: true);
+      await _until(
+        () =>
+            uploader.jobs.singleOrNull?.state == 'pending' &&
+            uploader.jobs.single.attempts == 1,
+        '新上传首次传输失败',
+      );
+      final repeatId = uploader.jobs.single.id;
+      expect(repeatId, isNot(originalId));
+      await uploader.stop();
+      await startBackfill();
+      await _until(
+        () => uploader.jobs.singleOrNull?.state == 'accepted',
+        '重启后继续新上传',
+      );
+      fixture.ingested.add(repeatId);
+      await _until(() => uploader.jobs.single.state == 'ingested', '重复照片新增入库');
+      expect(fixture.prepared.toSet(), {originalId, repeatId});
+      expect(fixture.uploaded, {originalId, repeatId});
+      expect(uploader.skippedDuplicates, 1);
+      expect(uploader.duplicateReviewSource, isNull);
+      expect(await repeat.exists(), isTrue);
+    });
+  });
+
   test('同次补扫没有发现顺序时须确认，确认结果重启后保留', () async {
     final fixture = await _QueueFixture.open();
     await fixture.run(() async {
@@ -993,10 +1063,13 @@ void main() {
       ]);
       expect(fixture.prepared, isEmpty);
       uploader.confirmNextSource(original.path);
+      expect(uploader.confirmingNextSource, isTrue);
+      uploader.confirmNextSource(ending.path);
       await _until(
         () => uploader.orderWaitMessage?.contains('z-original.png') == true,
         '确认原片优先',
       );
+      expect(uploader.confirmingNextSource, isFalse);
       await uploader.stop();
       await uploader.start(
         fixture.inbox,
@@ -1208,6 +1281,11 @@ class _QueueFixture {
     } else if (request.method == 'GET') {
       final id = request.uri.pathSegments.last;
       statusQueries.add(id);
+      if (!prepared.contains(id) && !ingested.contains(id)) {
+        response.write(jsonEncode({'code': 40401}));
+        await response.close();
+        return;
+      }
       data = {'status': ingested.contains(id) ? 'INGESTED' : 'PROCESSING'};
     } else {
       final id = request.uri.pathSegments[request.uri.pathSegments.length - 2];

@@ -153,6 +153,8 @@ function normalizeConfig(raw, options = {}) {
   if (!Number.isInteger(printDpi) || printDpi < 72 || printDpi > 1200) {
     throw new Error('打印分辨率须为 72–1200 DPI 的整数');
   }
+  const highPrintQuality = raw.highPrintQuality === undefined ? false : raw.highPrintQuality;
+  if (typeof highPrintQuality !== 'boolean') throw new Error('高画质设置无效');
   const skipPrint = raw.skipPrint != null
     ? Boolean(raw.skipPrint)
     : /^(1|true|yes)$/i.test(String(process.env.PRINT_DESKTOP_SKIP_PRINT || ''));
@@ -184,6 +186,7 @@ function normalizeConfig(raw, options = {}) {
     statusPort: asPositiveInt(raw.statusPort, 17888, 'statusPort'),
     ...printerSettings,
     printDpi,
+    highPrintQuality,
     command,
     /** 打印机状态命令；null 表示本机不检查缺纸等异常，打印命令受理即报已打印。 */
     statusCommand: normalizeStatusCommand(raw.statusCommand, options.platform || process.platform, command),
@@ -377,6 +380,7 @@ function toWritableConfig(config) {
     printer: config.printer,
     ...(config.printerSelectionRequired ? { printerSelectionRequired: true } : {}),
     printDpi: config.printDpi,
+    highPrintQuality: config.highPrintQuality,
     command: config.command.slice(),
     statusCommand: config.statusCommand ? config.statusCommand.slice() : null,
     printerSettleMs: config.printerSettleMs,

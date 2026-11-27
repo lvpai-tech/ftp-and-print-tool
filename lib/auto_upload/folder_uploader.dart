@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:crypto/crypto.dart';
@@ -152,7 +153,8 @@ class _Observation {
 
 /// 事件触发和定时补扫并用；扫描、落盘及上传各自串行，上传不阻塞新图发现。
 class FolderUploader extends ChangeNotifier {
-  static const importStagingPrefix = '.lvpai-import-';
+  static const manualImportPrefix = 'lvpai-import-';
+  static const importStagingPrefix = '.$manualImportPrefix';
   final Directory storage;
   final Duration scanInterval, stableFor, retryDelay;
   final Future<bool> Function(File) validateImage;
@@ -184,6 +186,11 @@ class FolderUploader extends ChangeNotifier {
   final Map<String, String> _legacyNoticeSignatures = {};
   final Set<String> _reportedEndingRequests = {};
   final Map<String, String> _duplicateSources = {};
+  final Set<String> _manualSources = {};
+  final _repeatUploads = <String, ({String digest, String requestId})>{};
+  ({String source, String signature, String digest})? _duplicateReview;
+  bool _reviewExistingDuplicates = false;
+  int _skippedDuplicates = 0;
   final Map<String, DateTime> _noticeRetryAt = {};
   final Map<String, String> noticeIssues = {};
   bool _noticeInitialized = false;
@@ -237,6 +244,10 @@ class FolderUploader extends ChangeNotifier {
       _waiting.isNotEmpty && _waiting.first.length > 1
       ? List.unmodifiable(_waiting.first)
       : const [];
+
+  bool get confirmingNextSource => running && _confirmedSource != null;
+  String? get duplicateReviewSource => _duplicateReview?.source;
+  int get skippedDuplicates => _skippedDuplicates;
 
   String? get orderWaitMessage {
     if (_cos == null) return null;
@@ -335,7 +346,8 @@ class FolderUploader extends ChangeNotifier {
     return cameraPhotoExtensions.any((type) => extension == '.$type');
   }
 
-  void _prioritizeSource(String source) {
+  void _prioritizeSource(String source, {bool reviewDuplicates = false}) {
+    if (reviewDuplicates) _manualSources.addAll(_waiting.first);
     _waiting.first.remove(source);
     _waiting.insert(0, [source]);
     if (_waiting[1].isEmpty) _waiting.removeAt(1);
@@ -344,6 +356,13 @@ class FolderUploader extends ChangeNotifier {
   void _resolveSource(String source) {
     if (_waiting.isEmpty || !_waiting.first.remove(source)) return;
     if (_waiting.first.isEmpty) _waiting.removeAt(0);
+    _clearDuplicateReview(source);
+  }
+
+  void _clearDuplicateReview(String source) {
+    _manualSources.remove(source);
+    _repeatUploads.remove(source);
+    if (_duplicateReview?.source == source) _duplicateReview = null;
   }
 
   void _discardSource(String source, String? signature) {
@@ -356,6 +375,7 @@ class FolderUploader extends ChangeNotifier {
     if (signature != null) _seen[source] = signature;
     _observations.remove(source);
     _duplicateSources.remove(source);
+    _clearDuplicateReview(source);
     _missingSince.remove(source);
     issues.remove(source);
     if (signature == null) {
@@ -404,13 +424,64 @@ class FolderUploader extends ChangeNotifier {
     await _recordDiscard(source, signature);
   }
 
-  Future<void> _recordDiscard(String source, String? signature) async {
+  Future<void> _recordDiscard(
+    String source,
+    String? signature, {
+    bool duplicate = false,
+  }) async {
     await _append({
       'type': 'discardSource',
       'source': source,
       'signature': signature,
+      if (duplicate) 'duplicate': true,
     });
+    if (duplicate) _skippedDuplicates++;
     _discardSource(source, signature);
+  }
+
+  Future<void> resolveDuplicate(String source, {required bool upload}) async {
+    while (_scanTask != null) {
+      await _scanTask;
+    }
+    final review = _duplicateReview;
+    if (!running || review == null || review.source != source) {
+      throw StateError('照片已离开重复确认队列，请刷新后核对。');
+    }
+    final decision = () async {
+      final stat = await File(source).stat();
+      if (stat.type != FileSystemEntityType.file ||
+          _signature(stat) != review.signature) {
+        _duplicateReview = null;
+        throw StateError('照片已变化，请核对重新检测的结果。');
+      }
+      if (!upload) {
+        await _recordDiscard(source, review.signature, duplicate: true);
+        return;
+      }
+      final random = Random.secure();
+      final requestId = _hash(
+        List.generate(32, (_) => random.nextInt(256)).join(','),
+      );
+      await _append({
+        'type': 'repeatUpload',
+        'source': source,
+        'digest': review.digest,
+        'requestId': requestId,
+      });
+      _repeatUploads[source] = (digest: review.digest, requestId: requestId);
+      _duplicateReview = null;
+    }();
+    final scanSlot = decision
+        .then<void>((_) {}, onError: (Object _) {})
+        .whenComplete(() => _scanTask = null);
+    _scanTask = scanSlot;
+    try {
+      await decision;
+    } finally {
+      await scanSlot;
+      _notify();
+      _tick();
+    }
   }
 
   void confirmNextSource(String source) {
@@ -419,6 +490,7 @@ class FolderUploader extends ChangeNotifier {
         source != _discardingSource &&
         sourcesNeedingOrder.contains(source)) {
       _confirmedSource = source;
+      _notify();
       _tick();
     }
   }
@@ -439,6 +511,7 @@ class FolderUploader extends ChangeNotifier {
     String? Function()? personnelToken,
     bool recursive = true,
     bool includeExisting = false,
+    bool reviewExistingDuplicates = false,
   }) async {
     if (running || stopping || _journal != null) throw StateError('请先停止当前监听');
     if (!Platform.isWindows &&
@@ -464,6 +537,7 @@ class FolderUploader extends ChangeNotifier {
         : CosUpload(cosProfile, personnelToken: personnelToken);
     _recursive = recursive;
     _includeExisting = includeExisting;
+    _reviewExistingDuplicates = includeExisting && reviewExistingDuplicates;
     _resetQueue();
     final key = cosProfile != null
         ? _cosQueueKey(absolute.path, cosProfile)
@@ -496,6 +570,10 @@ class FolderUploader extends ChangeNotifier {
     _legacyNoticeSignatures.clear();
     _reportedEndingRequests.clear();
     _duplicateSources.clear();
+    _manualSources.clear();
+    _repeatUploads.clear();
+    _duplicateReview = null;
+    _skippedDuplicates = 0;
     _noticeRetryAt.clear();
     noticeIssues.clear();
     _noticeInitialized = false;
@@ -553,16 +631,27 @@ class FolderUploader extends ChangeNotifier {
                 (group) => List<String>.from(group as List),
               ),
             );
+            final manual = event['manual'];
+            if (manual is List) _manualSources.addAll(manual.cast<String>());
           case 'nextSource':
-            _prioritizeSource(event['source'] as String);
+            _prioritizeSource(
+              event['source'] as String,
+              reviewDuplicates: event['reviewDuplicates'] == true,
+            );
           case 'resolvedSource':
             final source = event['source'] as String;
             _seen[source] = event['signature'] as String;
             _resolveSource(source);
           case 'discardSource':
+            if (event['duplicate'] == true) _skippedDuplicates++;
             _discardSource(
               event['source'] as String,
               event['signature'] as String?,
+            );
+          case 'repeatUpload':
+            _repeatUploads[event['source'] as String] = (
+              digest: event['digest'] as String,
+              requestId: event['requestId'] as String,
             );
           case 'job':
             final job = AutoJob.fromJson(event);
@@ -735,6 +824,7 @@ class FolderUploader extends ChangeNotifier {
         _noticeInitialized = true;
       }
       await _scanInOrder(files);
+      _reviewExistingDuplicates = false;
     } else {
       for (final file in files) {
         if (!running) break;
@@ -807,22 +897,44 @@ class FolderUploader extends ChangeNotifier {
       final groups = discovered.length == ordered.length
           ? ordered.map((source) => [source]).toList()
           : [discovered.values.toList()];
-      await _append({'type': 'arrival', 'groups': groups});
+      final manual = discovered.values.where((source) {
+        final parts = p.split(p.relative(source, from: _root!.path));
+        return (parts.length > 1 &&
+                parts.first.startsWith(manualImportPrefix)) ||
+            (_reviewExistingDuplicates && !ordered.contains(source));
+      }).toList();
+      await _append({
+        'type': 'arrival',
+        'groups': groups,
+        if (manual.isNotEmpty) 'manual': manual,
+      });
+      _manualSources.addAll(manual);
       _waiting.addAll(groups);
     }
     await _discardMissingSources(reserved, present);
     for (final entry in ready.entries) {
       if (!running) return;
       final signature = _signature(entry.value);
-      if (_duplicateSources[entry.key] == signature) {
+      if (_duplicateSources[entry.key] == signature &&
+          !_manualSources.contains(entry.key)) {
         await _recordDiscard(entry.key, signature);
       }
     }
     final confirmed = _confirmedSource;
-    _confirmedSource = null;
-    if (confirmed != null && sourcesNeedingOrder.contains(confirmed)) {
-      await _append({'type': 'nextSource', 'source': confirmed});
-      _prioritizeSource(confirmed);
+    if (confirmed != null) {
+      try {
+        if (sourcesNeedingOrder.contains(confirmed)) {
+          await _append({
+            'type': 'nextSource',
+            'source': confirmed,
+            'reviewDuplicates': true,
+          });
+          _prioritizeSource(confirmed, reviewDuplicates: true);
+        }
+      } finally {
+        _confirmedSource = null;
+        _notify();
+      }
     }
     if (_noticeTask == null) {
       final noticeFiles = Map<String, FileStat>.of(ready);
@@ -1013,6 +1125,11 @@ class FolderUploader extends ChangeNotifier {
 
   Future<bool> _enqueue(File file, FileStat stat) async {
     final signature = _signature(stat);
+    final review = _duplicateReview;
+    if (review?.source == file.path) {
+      if (review!.signature == signature) return false;
+      _duplicateReview = null;
+    }
     File? snapshot;
     try {
       final tempDir = Directory(p.join(_journal!.file.parent.path, 'pending'));
@@ -1060,7 +1177,7 @@ class FolderUploader extends ChangeNotifier {
         _observations.remove(file.path);
         return false;
       }
-      final id = _photoRequestId(file.path, signature, digest);
+      final originalId = _photoRequestId(file.path, signature, digest);
       final paired =
           captureTime != null &&
           _jobs.values.any(
@@ -1074,9 +1191,38 @@ class FolderUploader extends ChangeNotifier {
                   p.withoutExtension(file.path),
                 ),
           );
-      if (_jobs.containsKey(id) ||
-          _cosJobsByDigest.containsKey(digest) ||
-          paired) {
+      final repeat = _repeatUploads[file.path];
+      final repeatId = repeat?.digest == digest ? repeat?.requestId : null;
+      final cos = _cos;
+      if (cos != null &&
+          !paired &&
+          repeatId == null &&
+          _manualSources.contains(file.path) &&
+          !_authorizationPaused) {
+        final existing = _cosJobsByDigest[digest];
+        final ingested = existing == null
+            ? await cos.wasIngested(originalId)
+            : const {'ingested', 'grouped'}.contains(existing.state);
+        if (ingested) {
+          if (await decodeEndingBarcode(snapshot) != null) {
+            await _recordDiscard(file.path, signature, duplicate: true);
+            return true;
+          }
+          _duplicateReview = (
+            source: file.path,
+            signature: signature,
+            digest: digest,
+          );
+          issues.remove(file.path);
+          return false;
+        }
+      }
+      if (_authorizationPaused) return false;
+      final id = repeatId ?? originalId;
+      if (repeatId == null &&
+          (_jobs.containsKey(id) ||
+              _cosJobsByDigest.containsKey(digest) ||
+              paired)) {
         if (_cos != null) {
           await _append({
             'type': 'resolvedSource',
@@ -1108,13 +1254,20 @@ class FolderUploader extends ChangeNotifier {
       // 复制文件的失败与日志写入失败分开处理，持久化失败必须中止。
       await _append(job.toJson());
       _jobs[id] = job;
-      if (_cos != null) _cosJobsByDigest[digest] = job;
+      if (_cos != null) _cosJobsByDigest.putIfAbsent(digest, () => job);
       _resolveSource(file.path);
       _seen[file.path] = signature;
       _observations.remove(file.path);
       issues.remove(file.path);
       snapshot = null;
       return true;
+    } on CosUploadAuthorizationError catch (error) {
+      _authorizationPaused = true;
+      issues[file.path] = error.message;
+    } on SocketException {
+      issues[file.path] = '无法查询照片上传记录，等待重试';
+    } on HttpException {
+      issues[file.path] = '无法查询照片上传记录，等待重试';
     } on FileSystemException {
       issues[file.path] = '照片不可读取或磁盘写入失败，等待重试';
     } on StateError catch (e) {

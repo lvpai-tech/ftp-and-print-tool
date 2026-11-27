@@ -1,13 +1,18 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:desktop_drop/desktop_drop.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:lvpai_ftp_client/auto_upload/cos_upload.dart';
+import 'package:lvpai_ftp_client/auto_upload/station_upload.dart';
+import 'package:lvpai_ftp_client/auto_upload/upload_slots.dart';
 import 'package:lvpai_ftp_client/printing/print_bridge.dart';
 import 'package:lvpai_ftp_client/printing/ui/photo_batch_page.dart';
 import 'package:lvpai_ftp_client/profile_store.dart';
+import 'package:lvpai_ftp_client/ui/auto_upload_panel.dart';
 import 'package:lvpai_ftp_client/ui/transfer_page.dart';
 import 'package:lvpai_ftp_client/workstation_account.dart';
 import 'package:lvpai_ftp_client/workstation_session.dart';
@@ -110,6 +115,24 @@ void main() {
     await showUpload(tester, batchClient: client);
     await tester.tap(find.text('A08'));
     await tester.pumpAndSettle();
+    if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+      final importButton = find.widgetWithText(OutlinedButton, '导入照片');
+      expect(importButton, findsOneWidget);
+      expect(find.text('拖入照片到这个机位'), findsNothing);
+      expect(
+        find.ancestor(of: importButton, matching: find.byType(DropTarget)),
+        findsOneWidget,
+      );
+      final importPosition = tester.getCenter(importButton);
+      expect(
+        importPosition.dy,
+        greaterThan(tester.getBottomLeft(find.text('收图文件夹')).dy),
+      );
+      expect(
+        importPosition.dx,
+        greaterThan(tester.getCenter(find.text('失败')).dx),
+      );
+    }
     expect(find.text('照片批次'), findsOneWidget);
     expect(find.text('本机上传'), findsOneWidget);
     expect(find.text('本机暂无上传任务'), findsNothing);
@@ -189,6 +212,64 @@ void main() {
     expect(finder, present ? findsOneWidget : findsNothing);
   }
 
+  testWidgets('桌面监听状态与暂停操作并排，暂停后显示开始监听', (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final station = StationUpload(
+      profile: CosUploadProfile(gateway.origin, '317', 'a' * 64),
+      store: const ProfileStore(),
+      support: support,
+      inboxRoot: Directory(p.join(support.path, 'inbox')),
+      transferSlots: UploadSlots(1),
+      preparationSlots: UploadSlots(1),
+    );
+    try {
+      await tester.runAsync(station.restore);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: station,
+              builder: (context, child) => AutoUploadPanel(station: station),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final status = find.text('正在监听');
+      final pause = find.widgetWithText(OutlinedButton, '暂停监听');
+      expect(status, findsOneWidget);
+      expect(pause, findsOneWidget);
+      expect(find.text('监听中'), findsNothing);
+      expect(tester.getCenter(status).dx, lessThan(tester.getCenter(pause).dx));
+      expect(
+        tester.getCenter(status).dy,
+        closeTo(tester.getCenter(pause).dy, 1),
+      );
+
+      tester.view.physicalSize = const Size(375, 812);
+      await tester.pumpAndSettle();
+      expect(pause, findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.runAsync(() async {
+        await tester.tap(pause);
+        for (var attempt = 0; station.busy && attempt < 80; attempt++) {
+          await Future<void>.delayed(const Duration(milliseconds: 25));
+        }
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('开始监听'), findsOneWidget);
+      expect(status, findsNothing);
+      expect(station.uploader.running, isFalse);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(station.suspend);
+      station.dispose();
+    }
+  }, skip: !(Platform.isWindows || Platform.isMacOS || Platform.isLinux));
+
   for (final size in [
     const Size(375, 812),
     const Size(812, 375),
@@ -232,7 +313,20 @@ void main() {
     });
   }
 
-  testWidgets('现有机位可查看原收图路径，仍可同时管理其他机位', (tester) async {
+  testWidgets('收图操作菜单与三个点留有间距，机位密钥从列表管理', (tester) async {
+    const launchChannel = MethodChannel('plugins.flutter.io/url_launcher');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final openedFolders = <String>[];
+    messenger.setMockMethodCallHandler(launchChannel, (call) async {
+      expectSync(call.method, 'launch');
+      openedFolders.add(call.arguments['url'] as String);
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(launchChannel, null));
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    final folder = p.join(support.path, 'test-inbox');
     setMockWorkstationCredentials({
       'cos.auto.profile.v1': jsonEncode({
         'api': gateway.origin,
@@ -240,27 +334,72 @@ void main() {
         'token': 'a' * 64,
         'stationCode': 'A17',
       }),
-      'ftp.watch.v1': jsonEncode({'folder': 'test-inbox', 'recursive': true}),
+      'ftp.watch.v1': jsonEncode({'folder': folder, 'recursive': true}),
     });
     await showUpload(tester);
     expect(find.text('A17'), findsOneWidget);
     await tester.tap(find.text('A17'));
     await tester.pumpAndSettle();
-    expect(find.text('test-inbox'), findsOneWidget);
-    expect(find.text('更换收图文件夹'), findsOneWidget);
+    expect(find.text(folder), findsOneWidget);
     expect(find.text('恢复旧目录监听'), findsOneWidget);
-    expect(find.byTooltip('打开收图文件夹'), findsOneWidget);
-    await tester.tap(find.byTooltip('文件夹操作'));
+    final trigger = find.byTooltip('文件夹操作');
+    final changeFolder = find.widgetWithText(MenuItemButton, '更换收图文件夹');
+    final openFolder = find.widgetWithText(MenuItemButton, '打开收图文件夹');
+    for (final size in [const Size(1280, 900), const Size(375, 812)]) {
+      tester.view.physicalSize = size;
+      await tester.pumpAndSettle();
+      expect(find.text('更换收图文件夹'), findsNothing);
+      expect(find.text('打开收图文件夹'), findsNothing);
+      final triggerRect = tester.getRect(trigger);
+      await tester.tap(trigger);
+      await tester.pumpAndSettle();
+      expect(find.text('复制路径'), findsNothing);
+      expect(find.text('更新机位密钥'), findsNothing);
+      expect(tester.getRect(trigger), triggerRect);
+      expect(
+        tester.getTopLeft(changeFolder).dy,
+        greaterThan(triggerRect.bottom),
+      );
+      expect(
+        tester.getBottomRight(openFolder).dx,
+        lessThanOrEqualTo(size.width),
+      );
+      await tester.tap(openFolder);
+      await tester.pumpAndSettle();
+      expect(changeFolder, findsNothing);
+
+      await tester.tap(trigger);
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(changeFolder, findsNothing);
+      expect(tester.takeException(), isNull);
+    }
+    expect(openedFolders, List.filled(2, p.toUri(folder).toString()));
+
+    final narrowTrigger = tester.getRect(trigger);
+    tester.view.physicalSize = Size(375, narrowTrigger.bottom + 64);
     await tester.pumpAndSettle();
-    expect(find.text('复制路径'), findsOneWidget);
+    await tester.tap(trigger);
+    await tester.pumpAndSettle();
+    expect(tester.getBottomRight(openFolder).dy, lessThan(narrowTrigger.top));
+    await tester.tapAt(Offset(12, narrowTrigger.bottom + 32));
+    await tester.pumpAndSettle();
+    expect(changeFolder, findsNothing);
+
+    tester.view.physicalSize = const Size(1280, 900);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('返回机位列表'));
+    await tester.pumpAndSettle();
+    expect(find.text('申请机位'), findsOneWidget);
+    await tester.tap(find.byTooltip('机位操作'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('更新机位密钥'));
     await tester.pumpAndSettle();
     final fields = find.byType(TextField);
     expect(tester.widget<TextField>(fields.at(0)).readOnly, isTrue);
     expect(tester.widget<TextField>(fields.at(0)).controller?.text, '317');
     await tester.tap(find.text('取消'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('返回机位列表'));
     await tester.pumpAndSettle();
     expect(find.text('申请机位'), findsOneWidget);
     expect(tester.takeException(), isNull);

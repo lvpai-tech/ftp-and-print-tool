@@ -41,6 +41,26 @@ if (-not (Test-Path -LiteralPath (Join-Path $runtime 'src/flutter-bridge.cjs') -
     throw "找不到打印内核入口，请检查项目文件：$runtime"
 }
 
+$epsonDriver = 'EPSON L8050 Series'
+try {
+    $drivers = @(Get-PrinterDriver -ErrorAction Stop)
+    if ($drivers.Name -contains $epsonDriver) {
+        $queues = @(Get-Printer -ErrorAction Stop | Where-Object DriverName -EQ $epsonDriver)
+        if ($queues.Count) {
+            Write-Host "Epson L8050 专用驱动已安装。已添加队列：$($queues.Name -join '、')"
+        }
+        else {
+            Write-Host 'Epson L8050 专用驱动已安装。请先在 Windows「打印机和扫描仪」添加打印机，再回工作台刷新列表。'
+        }
+    }
+    else {
+        Write-Host '系统未登记 Epson L8050 专用驱动。使用 L8050 时，可通过工作台 Setup.exe 安装官方驱动。'
+    }
+}
+catch {
+    Write-Warning "无法读取 Windows 打印机状态，仍可启动工作台。$($_.Exception.Message)"
+}
+
 if (-not $PSCmdlet.ShouldProcess($PSScriptRoot, "运行 $Flutter run -d windows --debug")) { return }
 
 $previousRuntime = $env:LVPAI_PRINT_RUNTIME

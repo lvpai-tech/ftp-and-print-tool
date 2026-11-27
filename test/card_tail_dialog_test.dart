@@ -100,6 +100,13 @@ void main() {
     );
     await waitFor(find.textContaining('已识别条形码'));
     expect(scanProgress, findsNothing);
+    final displayedCode = find.byWidgetPredicate(
+      (widget) => widget is SelectableText && widget.data == code,
+    );
+    expect(displayedCode, findsOneWidget);
+    final codeBounds = tester.getRect(displayedCode);
+    final contentBounds = tester.getRect(find.byType(SingleChildScrollView));
+    expect(codeBounds.intersect(contentBounds), codeBounds);
     await tester.runAsync(() async {
       await tester.tap(find.text('核对后用于补录'));
       await tester.pump();

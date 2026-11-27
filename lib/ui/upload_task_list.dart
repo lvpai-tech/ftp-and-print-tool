@@ -24,6 +24,7 @@ class UploadTaskList extends StatelessWidget {
     required this.onReview,
     this.onDiscard,
     this.batchTimeline,
+    this.confirmingNext = false,
   });
 
   final String folder;
@@ -31,6 +32,7 @@ class UploadTaskList extends StatelessWidget {
   final List<String> needingOrder;
   final List<AutoJob> jobs;
   final ValueChanged<String>? onConfirmNext;
+  final bool confirmingNext;
   final ValueChanged<AutoJob> onReview;
   final Future<void> Function(String, String?)? onDiscard;
   final Widget? batchTimeline;
@@ -103,7 +105,7 @@ class UploadTaskList extends StatelessWidget {
   }) {
     final name = p.relative(source, from: folder);
     final signature = waiting[source];
-    final canConfirm = needsOrder && onConfirmNext != null;
+    final canConfirm = needsOrder && onConfirmNext != null && !confirmingNext;
     return _PhotoTile(
       key: ValueKey(source),
       name: name,
@@ -136,11 +138,38 @@ class UploadTaskList extends StatelessWidget {
             run: () => _discard(context, source),
           ),
       ],
-      caption: const _TileStatus(
-        label: '待准备',
-        color: WorkstationStyle.muted,
-        background: WorkstationStyle.bg,
-      ),
+      caption: needsOrder
+          ? null
+          : const _TileStatus(
+              label: '待准备',
+              color: WorkstationStyle.muted,
+              background: WorkstationStyle.bg,
+            ),
+      footer: needsOrder
+          ? Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: canConfirm
+                      ? () => onConfirmNext?.call(source)
+                      : null,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 40),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    foregroundColor: WorkstationStyle.accent,
+                    backgroundColor: WorkstationStyle.accentSoft,
+                    side: const BorderSide(color: WorkstationStyle.line),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  icon: const Icon(Icons.upload_outlined, size: 16),
+                  label: const Text('上传这张'),
+                ),
+              ),
+            )
+          : null,
     );
   }
 
@@ -288,12 +317,15 @@ class UploadTaskList extends StatelessWidget {
           key: const ValueKey('order'),
           stamp: orderSpan.latest,
           title: '确认上传顺序',
-          note: onConfirmNext == null
-              ? '同时发现多张照片，请选出下一张'
-              : '将下一张照片拖到这里，或从照片菜单选择',
+          note: confirmingNext
+              ? '正在确认上传顺序…'
+              : onConfirmNext == null
+              ? '开始监听后可确认上传顺序'
+              : '点击「上传这张」，将照片排为下一张',
           count: needingOrder.length,
           attention: true,
-          onDrop: onConfirmNext == null
+          photoExtraHeight: 24,
+          onDrop: onConfirmNext == null || confirmingNext
               ? null
               : (source) => _confirm(context, source),
           dropSources: unordered,
@@ -442,6 +474,7 @@ class _TaskGroup extends StatelessWidget {
     required this.count,
     required this.photoBuilder,
     this.attention = false,
+    this.photoExtraHeight = 0,
     this.onDrop,
     this.dropSources = const {},
   });
@@ -451,6 +484,7 @@ class _TaskGroup extends StatelessWidget {
   final int count;
   final IndexedWidgetBuilder photoBuilder;
   final bool attention;
+  final double photoExtraHeight;
   final ValueChanged<String>? onDrop;
   final Set<String> dropSources;
   static const _noteStyle = TextStyle(
@@ -592,7 +626,11 @@ class _TaskGroup extends StatelessWidget {
             else
               _header(color),
             const Divider(height: 14, color: WorkstationStyle.line),
-            _PhotoStrip(count: count, photoBuilder: photoBuilder),
+            _PhotoStrip(
+              count: count,
+              photoBuilder: photoBuilder,
+              extraHeight: photoExtraHeight,
+            ),
           ],
         ),
       ),
@@ -622,10 +660,15 @@ class _TaskGroup extends StatelessWidget {
 }
 
 class _PhotoStrip extends StatefulWidget {
-  const _PhotoStrip({required this.count, required this.photoBuilder});
+  const _PhotoStrip({
+    required this.count,
+    required this.photoBuilder,
+    required this.extraHeight,
+  });
 
   final int count;
   final IndexedWidgetBuilder photoBuilder;
+  final double extraHeight;
 
   @override
   State<_PhotoStrip> createState() => _PhotoStripState();
@@ -654,7 +697,7 @@ class _PhotoStripState extends State<_PhotoStrip> {
             );
         final overflow =
             widget.count * (width + gap) - gap > constraints.maxWidth;
-        final textHeight = scaler.scale(65);
+        final textHeight = scaler.scale(65 + widget.extraHeight);
         return SizedBox(
           height: _thumbnailHeight + textHeight + (overflow ? 12 : 0),
           child: Scrollbar(
@@ -737,7 +780,8 @@ class _PhotoTile extends StatelessWidget {
   });
 
   final String name;
-  final Widget photo, caption;
+  final Widget photo;
+  final Widget? caption;
   final VoidCallback onPreview;
   final List<_PhotoAction> actions;
   final Widget? footer;
@@ -860,7 +904,7 @@ class _PhotoTile extends StatelessWidget {
               fontFeatures: [FontFeature.tabularFigures()],
             ),
           ),
-        caption,
+        ?caption,
         ?footer,
       ],
     );

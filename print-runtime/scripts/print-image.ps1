@@ -29,10 +29,15 @@ try {
   $document.DefaultPageSettings.PaperSize = $sixInch
   $document.DefaultPageSettings.Landscape = $image.Width -gt $image.Height
   $document.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0, 0, 0, 0)
-  # 队列可能只公开设备原生分辨率，例如 360×360 DPI。
-  $resolution = $document.PrinterSettings.PrinterResolutions | Where-Object {
-    $_.X -eq $printDpi -and $_.Y -eq $printDpi
-  } | Select-Object -First 1
+  # Windows 的画质档和数值分辨率通过同一个属性传给驱动。
+  $resolutions = $document.PrinterSettings.PrinterResolutions
+  $resolution = if ($env:LVPAI_PRINT_HIGH_QUALITY -eq '1') {
+    $high = $resolutions | Where-Object Kind -eq High | Select-Object -First 1
+    if (!$high) { throw '该打印驱动未提供高画质档，请关闭工作台高画质或检查驱动。' }
+    $high
+  } else {
+    $resolutions | Where-Object { $_.X -eq $printDpi -and $_.Y -eq $printDpi } | Select-Object -First 1
+  }
   if ($resolution) { $document.DefaultPageSettings.PrinterResolution = $resolution }
   $document.PrinterSettings.Copies = [int16]$Copies
   # 去掉默认「正在打印 Document」状态小窗，静默送后台假脱机。

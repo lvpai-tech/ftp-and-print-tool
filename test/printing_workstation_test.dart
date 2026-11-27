@@ -56,7 +56,15 @@ class ControlledBridge extends PrintBridge {
   Future<dynamic> call(String method, [List<dynamic> args = const []]) async {
     calls.add(method);
     arguments[method] = args;
-    if (method == 'listPrinters') return ['真实系统适配的测试替身'];
+    if (method == 'listPrinters') {
+      const printer = '真实系统适配的测试替身';
+      if (args.isNotEmpty && args.first == true) {
+        return [
+          {'Name': printer, 'DriverName': '受控打印驱动'},
+        ];
+      }
+      return [printer];
+    }
     if (method == 'listBatchStations') {
       return <Json>[
         {'id': '317', 'code': 'A08', 'name': '隔离测试机位'},

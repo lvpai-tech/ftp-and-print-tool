@@ -340,6 +340,7 @@ class StationUpload extends ChangeNotifier {
         personnelToken: personnelToken,
         recursive: !legacy || _legacyRecursive,
         includeExisting: managed || _scanExisting,
+        reviewExistingDuplicates: !managed && _scanExisting,
       );
     } on PlatformException catch (error) {
       await _releaseFolder();
@@ -388,7 +389,7 @@ class StationUpload extends ChangeNotifier {
     }
     final staging = custom
         ? await directory.createTemp(FolderUploader.importStagingPrefix)
-        : await _managed.parent.createTemp('import-');
+        : await _managed.parent.createTemp(FolderUploader.manualImportPrefix);
     try {
       final names = <String>{};
       for (final photo in photos) {
@@ -400,10 +401,7 @@ class StationUpload extends ChangeNotifier {
       }
       final name = p.basename(staging.path);
       await staging.rename(
-        p.join(
-          directory.path,
-          custom ? name.substring('.lvpai-'.length) : name,
-        ),
+        p.join(directory.path, custom ? name.substring(1) : name),
       );
     } finally {
       if (await staging.exists()) await staging.delete(recursive: true);

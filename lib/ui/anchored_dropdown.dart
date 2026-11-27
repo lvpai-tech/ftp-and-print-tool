@@ -10,10 +10,12 @@ class AnchoredDropdown extends StatefulWidget {
     required this.preferredHeight,
     required this.triggerBuilder,
     required this.menuBuilder,
+    this.menuWidth,
   });
 
   final bool enabled;
   final double preferredHeight;
+  final double? menuWidth;
   final Widget Function(BuildContext, FocusNode, bool, VoidCallback)
   triggerBuilder;
   final Widget Function(BuildContext, VoidCallback) menuBuilder;
@@ -88,14 +90,19 @@ class _AnchoredDropdownState extends State<AnchoredDropdown> {
       widget.preferredHeight,
       openAbove ? above : below,
     );
-    final width = math.min(anchor.width, maxX - minX);
+    final width = math.min(widget.menuWidth ?? anchor.width, maxX - minX);
     if (width <= 0 || maxHeight <= 0) return const SizedBox.shrink();
 
+    final left =
+        widget.menuWidth != null &&
+            Directionality.of(context) == TextDirection.ltr
+        ? anchor.right - width
+        : anchor.left;
     final colors = Theme.of(context).colorScheme;
     return Stack(
       children: [
         Positioned(
-          left: anchor.left.clamp(minX, maxX - width),
+          left: left.clamp(minX, maxX - width),
           width: width,
           top: openAbove ? null : anchor.bottom + gap,
           bottom: openAbove ? info.overlaySize.height - anchor.top + gap : null,

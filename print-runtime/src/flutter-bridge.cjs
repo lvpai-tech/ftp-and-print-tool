@@ -16,13 +16,14 @@ const { CUPS_SOCKET } = require('./mac-printer');
 const execute = promisify(execFile);
 
 /** 查询真实系统打印机；失败显式上报，不返回假列表。 */
-async function listPrinters() {
+async function listPrinters({ includeDrivers = false } = {}) {
   if (process.platform === 'win32') {
     const { stdout } = await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); @(Get-Printer -ErrorAction Stop | Select-Object -ExpandProperty Name) | ConvertTo-Json -Compress"],
+      '[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); ' +
+      'ConvertTo-Json -Compress -InputObject @(Get-Printer -ErrorAction Stop | Select-Object Name,DriverName)'],
     { windowsHide: true, encoding: 'utf8', timeout: 20000 });
-    const result = JSON.parse(stdout.trim() || '[]');
-    return typeof result === 'string' ? [result] : result;
+    const printers = JSON.parse(stdout);
+    return includeDrivers ? printers : printers.map(printer => printer.Name);
   }
   if (process.platform === 'darwin') {
     const { stdout } = await execute('/usr/bin/lpstat', ['-e'], {
@@ -90,6 +91,7 @@ async function serve({ input = process.stdin, send, configPath, root }) {
   }
   const read = readline.createInterface({ input, crlfDelay: Infinity });
   const mutations = new Set(['initialize', 'installPrintAuthorization', 'saveConfig', 'autoPrint', 'printJobs', 'continueJobs',
+    'printPickupCardPdf',
     'markUnprinted', 'confirmPrinted', 'recoverPrintJob', 'queryJobs', 'refreshJobs', 'trialPrintItem', 'downloadJobZip',
     'activateScenicProfile', 'deleteScenicProfile',
     'correctPhotoBatch', 'removeBatchPhoto', 'savePhotoBatchSplit', 'movePhotoBatchPhoto', 'removePhotoBatch']);
@@ -106,7 +108,7 @@ async function serve({ input = process.stdin, send, configPath, root }) {
 
   async function dispatch(method, args, requestId) {
     if (method === 'snapshot') return snapshot();
-    if (method === 'listPrinters') return listPrinters();
+    if (method === 'listPrinters') return listPrinters({ includeDrivers: args[0] === true });
     if (method === 'initialize') {
       if (initialized) return snapshot();
       if (args[1]) {
@@ -138,10 +140,34 @@ async function serve({ input = process.stdin, send, configPath, root }) {
     if (personnelLocked && method !== 'shutdown' && !(method === 'autoPrint' && args[0] === false)) {
       throw new Error('工作台人员会话已锁定');
     }
+    if (method === 'printPickupCardPdf') {
+      if (!personnel) throw new Error('请先登录工作台');
+      const [printer, file] = args;
+      if (typeof printer !== 'string' || !(await listPrinters()).includes(printer)) {
+        throw new Error('所选打印机已移除，请刷新并重新选择');
+      }
+      if (typeof file !== 'string' || !path.isAbsolute(file) || path.extname(file).toLowerCase() !== '.pdf') {
+        throw new Error('缺少本次下载的取片卡 PDF');
+      }
+      return require('./pickup-card-print').printPickupCardPdf(root, printer, file);
+    }
     if (method === 'printerStatus') {
       if (!bridge) throw new Error('请先连接景区');
       if (!bridge.runtime.getConfig().statusCommand) throw new Error('当前平台未配置打印机状态观察');
-      return require('./printer-status').probePrinter(bridge.runtime.getConfig(), String(args[0]));
+      const printer = String(args[0]);
+      const status = await require('./printer-status').probePrinter(bridge.runtime.getConfig(), printer);
+      if (process.platform !== 'win32') return status;
+      const { stdout } = await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', [
+        "$ErrorActionPreference='Stop'",
+        'Add-Type -AssemblyName System.Drawing',
+        '$settings = [System.Drawing.Printing.PrinterSettings]::new()',
+        '$settings.PrinterName = $env:LVPAI_PRINTER_QUERY',
+        "if (!$settings.IsValid) { throw 'Invalid printer queue' }",
+        '@{ resolutions = @($settings.PrinterResolutions | Where-Object { $_.X -gt 0 -and $_.Y -gt 0 } | ForEach-Object { "$($_.X) x $($_.Y)" }); high = [bool]($settings.PrinterResolutions | Where-Object Kind -eq High | Select-Object -First 1) } | ConvertTo-Json -Compress',
+      ].join('; ')], {
+        windowsHide: true, timeout: 15000, env: { ...process.env, LVPAI_PRINTER_QUERY: printer },
+      });
+      return { ...status, capabilities: JSON.parse(stdout) };
     }
     if (method === 'printerPreferences') {
       if (process.platform !== 'win32') throw new Error('请在系统打印设置中调整打印机偏好');
@@ -208,10 +234,11 @@ async function serve({ input = process.stdin, send, configPath, root }) {
     if (method === 'removePhotoBatch') return removePhotoBatch(batchConfig(args[2]), args[0], args[1]);
     if (method === 'getBatchPhotoCapture') return getBatchPhotoCapture(batchConfig(args[2]), args[0], args[1]);
     if (method === 'saveConfig') {
-      const { printer, printDpi } = args[0] || {};
+      const { printer, printDpi, highPrintQuality } = args[0] || {};
       await bridge.applyConfigPatch({
         ...(printer === undefined ? {} : { printer }),
         ...(printDpi === undefined ? {} : { printDpi }),
+        ...(highPrintQuality === undefined ? {} : { highPrintQuality }),
       });
       return snapshot();
     }

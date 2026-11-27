@@ -145,7 +145,7 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   const marker = path.join(temp, 'submitted');
   fs.writeFileSync(configPath, JSON.stringify({
     statusCommand: null, resultRetries: 1, command: [process.execPath, '-e',
-      'require("node:fs").appendFileSync(process.argv[1], process.env.LVPAI_PRINT_DPI + "\\n");setTimeout(()=>{},200)', marker],
+      'require("node:fs").appendFileSync(process.argv[1], process.env.LVPAI_PRINT_DPI + ":" + process.env.LVPAI_PRINT_HIGH_QUALITY + "\\n");setTimeout(()=>{},200)', marker],
     printers: { SIZE_6: '旧照片打印机', COVER: '旧开头片打印机' },
     token: 'retired-shared-token',
   }));
@@ -153,6 +153,7 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   assert.equal(configured.data.configured, true);
   assert.equal(configured.data.config.token, '[已配置]');
   assert.equal(configured.data.config.printDpi, 300);
+  assert.equal(configured.data.config.highPrintQuality, false);
   assert.equal(configured.data.config.printer, '');
   assert.equal(configured.data.config.printerSelectionRequired, true);
   assert.equal(configured.data.state.autoPrint, false);
@@ -186,13 +187,16 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   assert.equal((await call('snapshot')).data.config.activeScenicProfileId, firstId);
   assert.equal(wire.includes(other), false);
   assert.match((await call('__proto__')).error, /不支持/);
-  const settings = await call('saveConfig', { printDpi: 360, printer: '受控打印机' });
+  const settings = await call('saveConfig', { printDpi: 360, printer: '受控打印机', highPrintQuality: true });
   const saved = fs.readFileSync(configPath, 'utf8');
   assert.equal(saved.includes(secret) || saved.includes(other) || saved.includes('retired-shared-token'), false);
   assert.equal(Object.hasOwn(JSON.parse(saved), 'token'), false);
   assert.equal(Object.hasOwn(JSON.parse(saved), 'printers'), false);
   assert.equal(JSON.parse(saved).printer, '受控打印机');
   assert.equal(settings.data.config.printDpi, 360);
+  assert.equal(settings.data.config.highPrintQuality, true);
+  assert.equal(JSON.parse(saved).highPrintQuality, true);
+  assert.match((await call('saveConfig', { highPrintQuality: 'true' })).error, /高画质设置无效/);
   assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).printDpi, 360);
   assert.match((await call('saveConfig', { printDpi: 300.5 })).error, /72–1200/);
   assert.equal((await call('snapshot')).data.config.printDpi, 360);
@@ -211,14 +215,14 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   const result = await printing;
   assert.equal(beginCount, 1);
   assert.equal(resultCount, 2); // 原回写及刷新时的结果补传，均无再次送打。
-  assert.equal(fs.readFileSync(marker, 'utf8'), '360\n');
+  assert.equal(fs.readFileSync(marker, 'utf8'), '360:1\n');
   assert.match(JSON.stringify(result), /回写失败/);
   assert.equal(wire.includes(secret), false);
   assert.equal((await call('snapshot')).data.config.printer, '受控打印机');
   assert.match((await call('printJobs', ['9'])).error, /中断记录/);
   failResult = false;
   assert.equal((await call('recoverPrintJob', '9', [])).data.state.recoveryJobs.length, 0);
-  assert.equal(fs.readFileSync(marker, 'utf8'), '360\n');
+  assert.equal(fs.readFileSync(marker, 'utf8'), '360:1\n');
   // 界面崩溃、读写管道都关闭时，另一张已开始的工单仍须完成回写。
   void call('printJobs', ['10']);
   const deadline = Date.now() + 10000;
@@ -229,6 +233,6 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   child.stdout.destroy();
   await exited;
   assert.equal(resultCount, 4);
-  assert.equal(fs.readFileSync(marker, 'utf8'), '360\n360\n');
+  assert.equal(fs.readFileSync(marker, 'utf8'), '360:1\n360:1\n');
   assert.equal(fs.existsSync(path.join(temp, '.runtime/print-desktop.lock')), false);
 });

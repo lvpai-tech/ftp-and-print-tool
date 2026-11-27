@@ -280,6 +280,7 @@ class _CardTailDialogState extends State<_CardTailDialog> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final selected = _selection != null;
+    final barcode = _barcode;
     final (icon, title, detail) = switch ((_reading, _result.isNotEmpty)) {
       (true, _) => (
         Icons.document_scanner_outlined,
@@ -332,6 +333,15 @@ class _CardTailDialogState extends State<_CardTailDialog> {
                             fontWeight: FontWeight.w700,
                           ),
                         ),
+                        if (barcode != null)
+                          SelectableText(
+                            barcode,
+                            semanticsLabel: '条形码完整取片码 $barcode',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              color: colors.onSurface,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         Text(
                           detail,
                           style: theme.textTheme.bodySmall?.copyWith(
@@ -411,7 +421,7 @@ class _CardTailDialogState extends State<_CardTailDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final photoHeight = (MediaQuery.sizeOf(context).height * 0.5).clamp(
+    final photoHeight = (MediaQuery.sizeOf(context).height * 0.45).clamp(
       144.0,
       440.0,
     );

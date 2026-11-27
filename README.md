@@ -104,6 +104,8 @@ macOS 和 iPad 为每个自选目录保存独立安全书签。已有机位可�
 
 脚本从 `PATH` 或 `%USERPROFILE%\develop\flutter` 查找 Flutter，也可用 `-Flutter` 指定 `flutter.bat`。保存 Dart 修改后，在运行终端按 `r` 热重载，修改入口或初始化逻辑后按 `R` 热重启。修改 Windows 原生代码、依赖或 Node 打印内核后，按 `q` 退出并重跑命令。
 
+启动前在终端显示 Epson L8050 专用驱动和打印队列状态。加 `-WhatIf` 可检查状态而无需启动 Flutter。驱动安装入口在工作台 `Setup.exe`。爱普生的「软件更新」弹窗可在其窗口内选择自动检查方式。
+
 上传使用系统安全存储中的机位档案。联调其他环境时，通过 Flutter 的 `--dart-define=LVPAI_WORKSTATION_API_BASE=<HTTPS 网关地址>` 指定该环境的 HTTPS 网关根地址，再用对应环境签发的机位凭据配置。旧档案的网关地址与当前网关一致时可直接使用，切换网关后需填写当前网关的机位凭据。打印运营 API 默认是 `https://hilvpai.com/api/operation`，可在启动前用 `PRINT_AGENT_BASE` 显式选择；打印页需激活对应景区密钥档案。
 
 Windows 本地 Debug 构建已通过用户级 Flutter 3.50.1 验证。需要复现 CI 时使用上文的 FVM 配置。严格校验依赖锁文件时运行 `flutter pub get --enforce-lockfile`；下载工具链和依赖的镜像配置见上文的接续开发步骤。

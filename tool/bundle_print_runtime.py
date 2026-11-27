@@ -17,6 +17,7 @@ def runtime_files(windows):
         raise RuntimeError(f'Print bridge not found: {SOURCE / BRIDGE}')
     if windows:
         return files + [Path('scripts/print-image.ps1'), Path('scripts/printer-status.ps1'),
+                        Path('scripts/print-pickup-card.ps1'),
                         Path('config.example.json')]
     return files + [Path('scripts/print-image-mac.sh'), Path('config.mac.example.json')]
 

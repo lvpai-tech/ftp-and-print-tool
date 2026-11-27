@@ -110,32 +110,34 @@ void main() {
     final reviewed = <AutoJob>[];
     final removed = <String>[];
 
-    Future<void> render(List<String> needingOrder) => tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: CustomScrollView(
-            slivers: [
-              UploadTaskList(
-                folder: folder,
-                waiting: {
-                  first: signature(4),
-                  second: signature(4),
-                  later: signature(9),
-                },
-                needingOrder: needingOrder,
-                jobs: [uploaded],
-                onConfirmNext: confirmed.add,
-                onReview: reviewed.add,
-                onDiscard: (source, stamp) async {
-                  expect(stamp, signature(9));
-                  removed.add(source);
-                },
+    Future<void> render(List<String> needingOrder, {bool confirming = false}) =>
+        tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: CustomScrollView(
+                slivers: [
+                  UploadTaskList(
+                    folder: folder,
+                    waiting: {
+                      first: signature(4),
+                      second: signature(4),
+                      later: signature(9),
+                    },
+                    needingOrder: needingOrder,
+                    jobs: [uploaded],
+                    onConfirmNext: confirmed.add,
+                    confirmingNext: confirming,
+                    onReview: reviewed.add,
+                    onDiscard: (source, stamp) async {
+                      expect(stamp, signature(9));
+                      removed.add(source);
+                    },
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-        ),
-      ),
-    );
+        );
 
     await render([first, second]);
     expect(find.text('确认上传顺序'), findsOneWidget);
@@ -149,6 +151,21 @@ void main() {
     expect(find.text('08:33:09'), findsAtLeastNWidgets(1));
     expect(find.text('间隔 5 分 0 秒'), findsOneWidget);
     expect(find.text('设置取片批次'), findsNothing);
+    final uploadButtons = find.widgetWithText(OutlinedButton, '上传这张');
+    expect(uploadButtons, findsNWidgets(2));
+    final uploadFirst = find.descendant(
+      of: find.byKey(ValueKey(first)),
+      matching: uploadButtons,
+    );
+    await render([first, second], confirming: true);
+    expect(tester.widget<OutlinedButton>(uploadFirst).onPressed, isNull);
+    expect(find.text('正在确认上传顺序…'), findsOneWidget);
+    await render([first, second]);
+    await tester.tap(uploadFirst);
+    await tester.pumpAndSettle();
+    expect(confirmed, [first]);
+    expect(find.byType(WorkstationFormDialog), findsNothing);
+    confirmed.clear();
 
     final thumbnail = find.byWidgetPredicate(
       (widget) => widget is Draggable<String> && widget.data == second,
@@ -238,6 +255,7 @@ void main() {
       7,
       (index) => p.join(folder, 'photo-$index.jpg'),
     );
+    final confirmed = <String>[];
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -250,7 +268,7 @@ void main() {
                   waiting: {for (final source in sources) source: null},
                   needingOrder: sources,
                   jobs: const [],
-                  onConfirmNext: (_) {},
+                  onConfirmNext: confirmed.add,
                   onReview: (_) {},
                   batchTimeline: const SliverToBoxAdapter(
                     child: Text('照片批次内容'),
@@ -274,18 +292,14 @@ void main() {
       await tester.pumpAndSettle();
     }
     expect(find.text('photo-6.jpg').hitTestable(), findsOneWidget);
-    final lastPhotoMenu = find.descendant(
+    final lastPhotoUpload = find.descendant(
       of: find.byKey(ValueKey(sources.last)),
-      matching: find.byTooltip('照片操作'),
+      matching: find.widgetWithText(OutlinedButton, '上传这张'),
     );
-    await tester.tap(lastPhotoMenu);
+    await tester.tap(lastPhotoUpload);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('选为下一张'));
-    await tester.pumpAndSettle();
-    expect(find.text('确认顺序').hitTestable(), findsOneWidget);
-    await tester.tap(find.byTooltip('关闭弹窗'));
-    await tester.pumpAndSettle();
-    expect(find.text('确认顺序'), findsNothing);
+    expect(confirmed, [sources.last]);
+    expect(find.byType(WorkstationFormDialog), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

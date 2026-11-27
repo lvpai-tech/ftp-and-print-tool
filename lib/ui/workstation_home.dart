@@ -10,7 +10,8 @@ const _homeBorder = Color(0xffd8dde5);
 
 enum WorkModule {
   upload('上传照片', '指定文件夹中的新照片会自动上传', '查看上传', Icons.cloud_upload_outlined),
-  print('打印照片', '查看待打印照片，核对后打印', '进入打印', Icons.print_outlined);
+  print('打印照片', '查看待打印照片，核对后打印', '进入打印', Icons.print_outlined),
+  pickupCards('打印取片码', '', '', Icons.qr_code_2);
 
   const WorkModule(this.label, this.description, this.action, this.icon);
 
@@ -26,11 +27,13 @@ class WorkstationHome extends StatelessWidget {
     required this.uploadActive,
     required this.printActive,
     required this.onOpen,
+    this.showPickupCards = false,
   });
 
   final String uploadStatus, printStatus;
   final bool uploadActive, printActive;
   final ValueChanged<WorkModule> onOpen;
+  final bool showPickupCards;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -67,17 +70,47 @@ class WorkstationHome extends StatelessWidget {
               children: [
                 Padding(
                   padding: EdgeInsets.only(left: spacious ? 14 : 0),
-                  child: Semantics(
-                    header: true,
-                    child: Text(
-                      '照片工作台',
-                      style: TextStyle(
-                        fontSize: spacious ? 48 : 34,
-                        height: 1.16,
-                        color: _homeInk,
-                        fontWeight: FontWeight.w700,
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 16,
+                    runSpacing: 12,
+                    children: [
+                      Semantics(
+                        header: true,
+                        child: Text(
+                          '照片工作台',
+                          style: TextStyle(
+                            fontSize: spacious ? 48 : 34,
+                            height: 1.16,
+                            color: _homeInk,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
-                    ),
+                      if (showPickupCards)
+                        MenuAnchor(
+                          menuChildren: [
+                            MenuItemButton(
+                              leadingIcon: const Icon(Icons.qr_code_2),
+                              onPressed: () => onOpen(WorkModule.pickupCards),
+                              child: const Text('打印取片码'),
+                            ),
+                          ],
+                          builder: (context, controller, _) =>
+                              OutlinedButton.icon(
+                                onPressed: () {
+                                  if (controller.isOpen) {
+                                    controller.close();
+                                  } else {
+                                    controller.open();
+                                  }
+                                },
+                                icon: const Icon(Icons.expand_more),
+                                label: const Text('更多操作'),
+                              ),
+                        ),
+                    ],
                   ),
                 ),
                 if (wide)

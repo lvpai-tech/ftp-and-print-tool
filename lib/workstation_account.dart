@@ -172,6 +172,40 @@ class WorkstationAccount {
   Future<String?> lastScenic(WorkstationIdentity user) =>
       _storage.read(key: '$_key:scenic:${user.id}');
 
+  Future<Map<String, dynamic>> requestPickupCards(
+    String scenicId,
+    String suffix, {
+    Map<String, Object>? body,
+    bool post = false,
+  }) async {
+    final token = _token;
+    if (token == null) {
+      throw const WorkstationAccountError('请重新登录工作台');
+    }
+    final result = await _request(
+      post ? 'POST' : 'GET',
+      '/api/operation/workstation-session/scenics/$scenicId/pickup-cards/exports$suffix',
+      bearer: token,
+      body: body,
+    );
+    if (result == null) throw const WorkstationAccountError('取片卡响应缺少数据');
+    return result;
+  }
+
+  Future<String?> pendingPickupExport(String userId, String scenicId) =>
+      _withStorage(() => _storage.read(key: '$_key:cards:$userId:$scenicId'));
+
+  Future<void> rememberPickupExport(
+    String userId,
+    String scenicId,
+    String? request,
+  ) => _withStorage(() {
+    final key = '$_key:cards:$userId:$scenicId';
+    return request == null
+        ? _storage.delete(key: key)
+        : _storage.write(key: key, value: request);
+  });
+
   Future<void> rememberScenic(
     WorkstationIdentity user,
     WorkstationScenic scenic,
@@ -210,7 +244,7 @@ class WorkstationAccount {
   Future<Map<String, dynamic>?> _request(
     String method,
     String route, {
-    Map<String, String>? body,
+    Map<String, Object>? body,
     String? bearer,
     String? deviceToken,
   }) async {

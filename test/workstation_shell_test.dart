@@ -43,6 +43,12 @@ class WorkstationBridge extends ControlledBridge {
   Future<dynamic> call(String method, [List<dynamic> args = const []]) async {
     if (method == 'listPrinters') {
       calls.add(method);
+      if (args.isNotEmpty && args.first == true) {
+        return [
+          {'Name': printer, 'DriverName': 'EPSON L8050 Series'},
+          {'Name': alternatePrinter, 'DriverName': 'EPSON L8050 Series'},
+        ];
+      }
       return [printer, alternatePrinter];
     }
     if (method == 'printerStatus') {
@@ -197,11 +203,23 @@ void main() {
       expect(bridge.calls, isNot(contains('saveConfig')));
       await tester.ensureVisible(field);
       await tester.enterText(field, '360');
+      if (Platform.isWindows) {
+        final highQuality = keyed('print-high-quality');
+        await tester.ensureVisible(highQuality);
+        expect(tester.widget<SwitchListTile>(highQuality).value, isFalse);
+        await tester.tap(highQuality);
+        await tester.pumpAndSettle();
+        expect(tester.widget<SwitchListTile>(highQuality).value, isTrue);
+      }
       await tester.ensureVisible(save);
       await tester.tap(save);
       await tester.pumpAndSettle();
       expect(bridge.arguments['saveConfig'], [
-        {'printer': WorkstationBridge.printer, 'printDpi': 360},
+        {
+          'printer': WorkstationBridge.printer,
+          'printDpi': 360,
+          if (Platform.isWindows) 'highPrintQuality': true,
+        },
       ]);
       expect(tester.takeException(), isNull);
     });
@@ -268,11 +286,20 @@ void main() {
       WorkstationBridge.alternatePrinter,
     ]);
     expect(find.text('备用测试打印机：正常（0 项任务）'), findsOneWidget);
+    if (Platform.isWindows) {
+      final highQuality = keyed('print-high-quality');
+      await tester.ensureVisible(highQuality);
+      expect(tester.widget<SwitchListTile>(highQuality).value, isTrue);
+    }
     await tester.ensureVisible(save);
     await tester.tap(save);
     await tester.pumpAndSettle();
     expect(bridge.arguments['saveConfig'], [
-      {'printer': WorkstationBridge.alternatePrinter, 'printDpi': 300},
+      {
+        'printer': WorkstationBridge.alternatePrinter,
+        'printDpi': 300,
+        if (Platform.isWindows) 'highPrintQuality': true,
+      },
     ]);
     expect(tester.takeException(), isNull);
   });
