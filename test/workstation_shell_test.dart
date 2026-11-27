@@ -29,8 +29,9 @@ class WorkstationBridge extends ControlledBridge {
   static const printer = '隔离测试打印机';
   static const alternatePrinter = '备用测试打印机';
 
-  WorkstationBridge() {
-    snapshot['config']['printers'] = {'COVER': printer};
+  WorkstationBridge({bool needsPrinterSelection = false}) {
+    snapshot['config']['printer'] = needsPrinterSelection ? '' : printer;
+    snapshot['config']['printerSelectionRequired'] = needsPrinterSelection;
   }
 
   void setPrinting(bool printing) {
@@ -46,7 +47,7 @@ class WorkstationBridge extends ControlledBridge {
     }
     if (method == 'printerStatus') {
       calls.add(method);
-      expect(args, [printer]);
+      arguments[method] = args;
       return {'printerStatus': 'Normal', 'jobs': []};
     }
     return super.call(method, args);
@@ -161,7 +162,7 @@ void main() {
       await tester.tap(keyed('print-inspect-printers'));
       await tester.pumpAndSettle();
       expect(find.text('隔离测试打印机：正常（0 项任务）'), findsOneWidget);
-      expect(bridge.calls, contains('printerStatus'));
+      expect(bridge.arguments['printerStatus'], [WorkstationBridge.printer]);
       expect(bridge.calls, isNot(contains('printJobs')));
       expect(bridge.calls, isNot(contains('autoPrint')));
       await tester.tap(find.byTooltip('返回工作台'));
@@ -200,26 +201,28 @@ void main() {
       await tester.tap(save);
       await tester.pumpAndSettle();
       expect(bridge.arguments['saveConfig'], [
-        {
-          'printers': {'COVER': WorkstationBridge.printer},
-          'printDpi': 360,
-        },
+        {'printer': WorkstationBridge.printer, 'printDpi': 360},
       ]);
       expect(tester.takeException(), isNull);
     });
   }
 
-  testWidgets('窄窗打印机下拉可浏览、选择与键盘关闭', (tester) async {
+  testWidgets('窄窗可搜索并保存唯一打印机，旧配置有多个队列时提示重选', (tester) async {
     tester.view.physicalSize = const Size(420, 780);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final bridge = WorkstationBridge();
+    final bridge = WorkstationBridge(needsPrinterSelection: true);
     await tester.pumpWidget(PhotoFtpApp(session: WorkstationSession(bridge)));
     await tester.pumpAndSettle();
     await open(tester, 'open-print');
     await open(tester, 'print-settings-button');
-    final field = find.byType(DropdownField<String>).first;
+    final field = find.byType(DropdownField<String>);
+    expect(field, findsOneWidget);
+    expect(find.byTooltip('打开系统打印偏好设置'), findsOneWidget);
+    expect(find.text('旧设置使用了多台打印机，请选择一台并保存。'), findsOneWidget);
+    final save = find.widgetWithText(FilledButton, '保存打印设置');
+    expect(tester.widget<FilledButton>(save).onPressed, isNull);
     final arrow = find.descendant(
       of: field,
       matching: find.byIcon(Icons.keyboard_arrow_down_rounded),
@@ -227,7 +230,6 @@ void main() {
     await tester.ensureVisible(arrow);
     await tester.tap(arrow);
     await tester.pumpAndSettle();
-    expect(find.byIcon(Icons.check_rounded), findsWidgets);
     expect(
       find.text(WorkstationBridge.alternatePrinter).hitTestable(),
       findsOneWidget,
@@ -261,6 +263,17 @@ void main() {
       findsOneWidget,
     );
     expect(bridge.calls, isNot(contains('saveConfig')));
+    await open(tester, 'print-inspect-printers');
+    expect(bridge.arguments['printerStatus'], [
+      WorkstationBridge.alternatePrinter,
+    ]);
+    expect(find.text('备用测试打印机：正常（0 项任务）'), findsOneWidget);
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(bridge.arguments['saveConfig'], [
+      {'printer': WorkstationBridge.alternatePrinter, 'printDpi': 300},
+    ]);
     expect(tester.takeException(), isNull);
   });
 

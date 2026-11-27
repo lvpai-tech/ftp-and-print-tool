@@ -10,6 +10,7 @@ test('调度：自动打印开关与停止', async () => {
   const scheduler = createScheduler({
     config: {
       token: 'x',
+      printer: '测试打印机',
       base: 'http://127.0.0.1:9',
       autoPrintMs: 600000,
       listRefreshMs: 600000,

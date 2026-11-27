@@ -4,7 +4,7 @@ const { listJobs, listGenerating, beginJob, continueJob, recoverJob, previewJob,
   requeueJobs, confirmPrintedJobs } = require('./api');
 const { processClaimedJob, expandSheets } = require('./agent');
 const { createPrintRecovery, matchesSheets, readRecoveryQueue } = require('./print-recovery');
-const { summarizePrinters } = require('./print');
+const { requirePrinter, summarizePrinters } = require('./print');
 const {
   assertPrinterReady,
   probePrinter,
@@ -124,6 +124,7 @@ function createScheduler(options = {}) {
   }
 
   function setAutoPrint(enabled) {
+    if (enabled && !config.skipPrint) requirePrinter(config);
     if (!enabled) stopBatchGeneration += 1;
     autoPrint = Boolean(enabled);
     log(`[${new Date().toISOString()}] 自动打印已${autoPrint ? '开启' : '关闭'}`);
@@ -329,7 +330,7 @@ function createScheduler(options = {}) {
       const invalid = state.record.sheets.some((sheet, index) =>
         (sheet.state === 'READY' && !selection.has(index)) || (sheet.state === 'DONE' && selection.has(index)));
       if (invalid) throw new Error('已核对进度有变化，请重新打开工单确认照片');
-      if (selection.size) await assertMappedPrintersReady({});
+      if (selection.size) await assertSelectedPrinterReady();
       const job = await recoverJob(config, id, record.attempt);
       if (String(job?.id) !== id || job.attempt !== record.attempt || job.status !== 'CLAIMED'
           || !matchesSheets(state.record, expandSheets(job.items))) throw new Error('工单恢复响应与本机记录不符');
@@ -409,53 +410,34 @@ function createScheduler(options = {}) {
     }
   }
 
-  function mappedPrinters() {
-    const printers = new Set(Object.values(config.printers || {}).filter(Boolean));
-    if (config.allowDefaultPrinter && config.defaultPrinter) printers.add(config.defaultPrinter);
-    return [...printers];
-  }
-
   /**
-   * 领单前检查本机映射打印机。
+   * 领单前检查选定的打印机。
    * - 默认：缺纸等异常直接抛错（自动打印仍硬拦）。
    * - paperOutConfirm：仅缺纸时返回 needConfirm，不领单，由界面确认后带 ignorePaperOut 再调。
    * - ignorePaperOut：本批忽略缺纸（含送打后观察），其它故障仍硬拦。
    */
-  async function assertMappedPrintersReady(options = {}) {
-    if (config.skipPrint || !Array.isArray(config.statusCommand)) return null;
-    const ignorePaperOut = Boolean(options.ignorePaperOut);
-    const paperOutConfirm = Boolean(options.paperOutConfirm);
-    const paperOutPrinters = [];
+  async function assertSelectedPrinterReady({ ignorePaperOut, paperOutConfirm } = {}) {
+    if (config.skipPrint) return null;
     try {
-      for (const printer of mappedPrinters()) {
-        if (ignorePaperOut) {
-          await assertPrinterReady(config, printer, { ignorePaperOut: true });
-          continue;
-        }
-        const snapshot = await probePrinter(config, printer);
-        const faults = printerFaults(snapshot);
-        if (isOnlyPaperOut(faults)) {
-          paperOutPrinters.push(printer);
-          continue;
-        }
-        const blocking = filterPrinterFaults(faults, {});
-        if (blocking.length) {
-          throw new Error(`打印机未就绪：${printer}（${blocking.join('、')}）`);
-        }
+      const printer = requirePrinter(config);
+      if (!Array.isArray(config.statusCommand)) return null;
+      if (ignorePaperOut) {
+        await assertPrinterReady(config, printer, { ignorePaperOut: true });
+        return null;
       }
-      if (paperOutPrinters.length) {
-        if (paperOutConfirm) {
-          const names = paperOutPrinters.join('、');
-          return {
-            needConfirm: true,
-            reason: '缺纸',
-            printers: paperOutPrinters,
-            message:
-              `打印机 ${names} 驱动报告缺纸；若纸匣有纸，可能是误报。`
-              + '确认后本批将忽略缺纸继续打印，请核对实物。',
-          };
-        }
-        throw new Error(`打印机未就绪：${paperOutPrinters[0]}（缺纸）`);
+      const faults = printerFaults(await probePrinter(config, printer));
+      if (paperOutConfirm && isOnlyPaperOut(faults)) {
+        return {
+          needConfirm: true,
+          reason: '缺纸',
+          printers: [printer],
+          message: `打印机 ${printer} 驱动报告缺纸；若纸匣有纸，可能是误报。`
+            + '确认后本批将忽略缺纸继续打印，请核对实物。',
+        };
+      }
+      const blocking = filterPrinterFaults(faults, {});
+      if (blocking.length) {
+        throw new Error(`打印机未就绪：${printer}（${blocking.join('、')}）`);
       }
       return null;
     } catch (error) {
@@ -513,7 +495,7 @@ function createScheduler(options = {}) {
     const ignorePaperOut = Boolean(printOptions.ignorePaperOut);
     const paperOutConfirm = Boolean(printOptions.paperOutConfirm) && !ignorePaperOut;
 
-    const ready = await assertMappedPrintersReady({
+    const ready = await assertSelectedPrinterReady({
       ignorePaperOut,
       paperOutConfirm,
     });

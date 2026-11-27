@@ -38,15 +38,9 @@ function makeConfig(origin, directory, script, extra = {}) {
       token: 'isolated-print-desktop-token',
       scenicIds: ['1'],
       resultRetries: 2,
-      allowDefaultPrinter: false,
-      defaultPrinter: '',
+      printer: '照片打印机',
       // 显式关，避免本机 PRINT_DESKTOP_SKIP_PRINT 污染「真走命令」断言
       skipPrint: false,
-      printers: {
-        SIZE_6: '打印机-6寸',
-        ORIGINAL: '打印机-原片',
-        CREATIVE: '打印机-创意',
-      },
       command: [process.execPath, script, directory, '{kind}', '{copies}', '{printer}', '{file}'],
       // 默认不读本机打印机状态；缺纸检查由下方专门用例的假状态脚本覆盖
       statusCommand: null,
@@ -93,7 +87,7 @@ test('Mac 纸型验证失败直接回写失败，提交异常仍保留待核对�
   assert.equal(reports.length, 1);
 });
 
-test('领取→下载→多 kind 路由到不同打印机→PRINTED', async () => {
+test('领取→下载→四种照片使用同一台打印机→PRINTED', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'print-desktop-'));
   const script = path.join(directory, 'fake-print.cjs');
   fs.writeFileSync(
@@ -109,6 +103,7 @@ fs.appendFileSync(dir+'/printed.log',[kind,copies,printer,fs.statSync(file).size
       return json(response, {
         id: '101',
         items: [
+          { kind: 'COVER', copies: 1, label: '开头片', fileUrl: '/print-agents/jobs/101/files/COVER/1' },
           { kind: 'SIZE_6', copies: 2, label: '6寸', fileUrl: '/print-agents/jobs/101/files/PHOTO/1' },
           { kind: 'ORIGINAL', copies: 1, label: '原片', fileUrl: '/print-agents/jobs/101/files/PHOTO/2' },
           { kind: 'CREATIVE', copies: 1, label: '创意', fileUrl: '/print-agents/jobs/101/files/PHOTO/3' },
@@ -128,16 +123,14 @@ fs.appendFileSync(dir+'/printed.log',[kind,copies,printer,fs.statSync(file).size
     const result = await runOnce(config);
     assert.equal(result.state, 'PRINTED');
     assert.equal(result.jobId, '101');
-    assert.match(result.printer, /SIZE_6=打印机-6寸/);
-    assert.match(result.printer, /ORIGINAL=打印机-原片/);
-    assert.match(result.printer, /CREATIVE=打印机-创意/);
+    assert.equal(result.printer, 'COVER=照片打印机;SIZE_6=照片打印机;ORIGINAL=照片打印机;CREATIVE=照片打印机');
     assert.equal(results.length, 1);
     assert.equal(results[0].status, 'PRINTED');
     assert.equal(
       fs.readFileSync(path.join(directory, 'printed.log'), 'utf8'),
-      'SIZE_6,1,打印机-6寸,15\nSIZE_6,1,打印机-6寸,15\nORIGINAL,1,打印机-原片,15\nCREATIVE,1,打印机-创意,15\n',
+      'COVER,1,照片打印机,15\nSIZE_6,1,照片打印机,15\nSIZE_6,1,照片打印机,15\nORIGINAL,1,照片打印机,15\nCREATIVE,1,照片打印机,15\n',
     );
-    assert.equal(results[0].completedSheets, 4);
+    assert.equal(results[0].completedSheets, 5);
   } finally {
     server.close();
     fs.rmSync(directory, { recursive: true, force: true });
@@ -214,39 +207,10 @@ test('回写持续失败不自重打（claim 仅 1 次）', async () => {
   }
 });
 
-test('缺映射且无兜底→FAILED', async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'print-desktop-'));
-  const script = path.join(directory, 'ok.cjs');
-  fs.writeFileSync(script, 'process.exit(0);');
-  const results = [];
-  const { server, origin } = await startServer(async (request, response) => {
-    if (request.url.endsWith('/claim')) {
-      return json(response, {
-        id: '301',
-        items: [
-          { kind: 'CREATIVE', copies: 1, label: '创意', fileUrl: '/print-agents/jobs/301/files/PHOTO/1' },
-        ],
-      });
-    }
-    if (request.url.includes('/files/')) return response.end(Buffer.from('x'));
-    results.push(await body(request));
-    return json(response, { id: '301' });
-  });
-  try {
-    const config = makeConfig(origin, directory, script, {
-      printers: { SIZE_6: '仅6寸' },
-      allowDefaultPrinter: false,
-    });
-    assert.throws(() => resolvePrinter(config, 'CREATIVE'), /缺少打印机映射：CREATIVE/);
-    assert.equal(resolvePrinter(config, 'COVER'), '仅6寸');
-    const failed = await runOnce(config);
-    assert.equal(failed.state, 'FAILED');
-    assert.match(failed.reason, /缺少打印机映射：CREATIVE/);
-    assert.equal(results[0].status, 'FAILED');
-  } finally {
-    server.close();
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+test('无打印机时阻止领单，也拒绝未支持的照片类型', async () => {
+  const config = normalizeConfig({ token: 'test', command: [process.execPath], printer: '', skipPrint: false });
+  await assert.rejects(runOnce(config), /请先在打印设置/);
+  assert.throws(() => resolvePrinter({ ...config, printer: '照片打印机' }, 'RECEIPT'), /不支持的照片类型/);
 });
 
 test('双实例并发 claim：服务端只发一单，客户端不本地复制任务', async () => {

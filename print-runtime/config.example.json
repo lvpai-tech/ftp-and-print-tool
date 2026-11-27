@@ -10,14 +10,7 @@
   "resultRetries": 5,
   "statusHost": "127.0.0.1",
   "statusPort": 17888,
-  "allowDefaultPrinter": false,
-  "defaultPrinter": "",
-  "printers": {
-    "COVER": "6寸打印机名",
-    "SIZE_6": "6寸打印机名",
-    "ORIGINAL": "6寸打印机名",
-    "CREATIVE": "6寸打印机名"
-  },
+  "printer": "",
   "command": [
     "powershell",
     "-NoProfile",

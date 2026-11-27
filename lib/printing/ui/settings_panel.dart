@@ -28,37 +28,31 @@ class _SettingsPanelState extends State<SettingsPanel> {
   final printForm = GlobalKey<FormState>();
   late final TextEditingController dpi;
   List<String> printers = [];
-  late Map<String, String> routes;
+  String? printer;
   String? printerError;
   bool loadingPrinters = false;
   bool checkingPrinters = false;
   String? printerStatus;
 
-  Future<void> inspectPrinters() async {
+  Future<void> inspectPrinter() async {
+    final name = printer;
+    if (name == null) return;
     setState(() {
       checkingPrinters = true;
       printerStatus = null;
     });
     try {
-      final saved = Map<String, String>.from(
-        widget.bridge.config['printers'] ?? {},
-      );
-      final source = routes.values.any((name) => name.isNotEmpty)
-          ? routes
-          : saved;
-      final names = source.values.where((name) => name.isNotEmpty).toSet();
-      if (names.isEmpty) throw StateError('请先选择打印机');
-      final lines = <String>[];
-      for (final name in names) {
-        final result = await widget.bridge.call('printerStatus', [name]);
-        final status = result['printerStatus'];
-        final jobs = result['jobs'];
-        if (status is! String || status.trim().isEmpty || jobs is! List) {
-          throw StateError('无法读取「$name」的状态，请检查连接。');
-        }
-        lines.add('$name：${_printerState(status)}（${jobs.length} 项任务）');
+      final result = await widget.bridge.call('printerStatus', [name]);
+      final status = result['printerStatus'];
+      final jobs = result['jobs'];
+      if (status is! String || status.trim().isEmpty || jobs is! List) {
+        throw StateError('无法读取「$name」的状态，请检查连接。');
       }
-      if (mounted) setState(() => printerStatus = lines.join('\n'));
+      if (mounted) {
+        setState(() {
+          printerStatus = '$name：${_printerState(status)}（${jobs.length} 项任务）';
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() => printerStatus = null);
@@ -96,7 +90,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
   @override
   void initState() {
     super.initState();
-    routes = Map<String, String>.from(widget.bridge.config['printers'] ?? {});
+    final savedPrinter = widget.bridge.config['printer'] as String?;
+    printer = savedPrinter?.isNotEmpty == true ? savedPrinter : null;
     dpi = TextEditingController(
       text: '${widget.bridge.config['printDpi'] ?? 300}',
     );
@@ -110,9 +105,11 @@ class _SettingsPanelState extends State<SettingsPanel> {
   }
 
   Future<void> savePrintSettings() async {
+    final name = printer;
+    if (name == null) return;
     if (!printForm.currentState!.validate()) return;
     final saved = await widget.perform('saveConfig', [
-      {'printers': routes, 'printDpi': int.parse(dpi.text.trim(), radix: 10)},
+      {'printer': name, 'printDpi': int.parse(dpi.text.trim(), radix: 10)},
     ]);
     if (saved && mounted) {
       ScaffoldMessenger.of(context)
@@ -142,12 +139,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
       if (mounted) setState(() => printers = List<String>.from(result));
     } catch (e) {
       if (mounted) {
-        setState(() => printerError = null);
-        await showAppMessage(
-          context,
-          title: '操作未完成',
-          message: appErrorMessage(e),
-        );
+        setState(() => printerError = appErrorMessage(e));
       }
     } finally {
       if (mounted) setState(() => loadingPrinters = false);
@@ -253,7 +245,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       const SizedBox(height: 8),
                       Text(
                         widget.bridge.configured
-                            ? '可申请多个景区，打印机路由共用。打印中或自动打印开启时不能切换。'
+                            ? '可申请多个景区，共用本机打印机。打印中或自动打印开启时不能切换。'
                             : '通过审批并激活后，可选择本机打印机。',
                         style: const TextStyle(color: muted),
                       ),
@@ -268,10 +260,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       if (!widget.embedded) const SizedBox(height: 28),
                       Row(
                         children: [
-                          Expanded(
+                          const Expanded(
                             child: Text(
-                              '打印机路由',
-                              style: const TextStyle(
+                              '打印机',
+                              style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w700,
                               ),
@@ -285,7 +277,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                         ],
                       ),
                       const Text(
-                        '开头片和照片都用 6 寸相纸；所有景区共用这套打印机。',
+                        '所有景区的开头片和照片都由这台打印机打印，使用 6 寸相纸。',
                         style: TextStyle(color: muted),
                       ),
                       if (printerError != null)
@@ -303,53 +295,50 @@ class _SettingsPanelState extends State<SettingsPanel> {
                           padding: EdgeInsets.only(top: 12),
                           child: Text('系统没有已安装打印机，请先安装驱动。'),
                         ),
-                      for (final entry in const {
-                        'COVER': '开头片',
-                        'SIZE_6': '6 寸照片',
-                        'ORIGINAL': '原片',
-                        'CREATIVE': '创意成片',
-                      }.entries)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 16),
-                          child: _PrinterDropdown(
-                            key: ValueKey(entry.key),
-                            label: entry.value,
-                            value: routes[entry.key]?.isNotEmpty == true
-                                ? routes[entry.key]
-                                : null,
-                            options: _options(entry.key).toList(),
-                            enabled: !widget.bridge.busy,
-                            onChanged: (value) =>
-                                setState(() => routes[entry.key] = value),
-                            onOpenPreferences:
-                                widget.bridge.busy ||
-                                    routes[entry.key]?.isNotEmpty != true
-                                ? null
-                                : () async {
-                                    try {
-                                      await widget.bridge.call(
-                                        'printerPreferences',
-                                        [routes[entry.key]],
-                                      );
-                                    } catch (e) {
-                                      if (!context.mounted) return;
-                                      await showAppMessage(
-                                        context,
-                                        title: '操作未完成',
-                                        message: appErrorMessage(e),
-                                      );
-                                    }
-                                  },
-                          ),
+                      if (widget.bridge.config['printerSelectionRequired'] ==
+                          true)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 12),
+                          child: Text('旧设置使用了多台打印机，请选择一台并保存。'),
                         ),
+                      const SizedBox(height: 16),
+                      _PrinterDropdown(
+                        value: printer,
+                        options: {...printers, ?printer}.toList(),
+                        enabled: !widget.bridge.busy && !checkingPrinters,
+                        onChanged: (value) => setState(() {
+                          printer = value;
+                          printerStatus = null;
+                        }),
+                        onOpenPreferences: widget.bridge.busy || printer == null
+                            ? null
+                            : () async {
+                                try {
+                                  await widget.bridge.call(
+                                    'printerPreferences',
+                                    [printer],
+                                  );
+                                } catch (e) {
+                                  if (!context.mounted) return;
+                                  await showAppMessage(
+                                    context,
+                                    title: '操作未完成',
+                                    message: appErrorMessage(e),
+                                  );
+                                }
+                              },
+                      ),
                       const SizedBox(height: 24),
                       Align(
                         alignment: Alignment.centerLeft,
                         child: TextButton.icon(
                           key: const ValueKey('print-inspect-printers'),
-                          onPressed: widget.bridge.busy || checkingPrinters
+                          onPressed:
+                              widget.bridge.busy ||
+                                  checkingPrinters ||
+                                  printer == null
                               ? null
-                              : inspectPrinters,
+                              : inspectPrinter,
                           icon: const Icon(
                             Icons.monitor_heart_outlined,
                             size: 18,
@@ -400,7 +389,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       Align(
                         alignment: Alignment.centerLeft,
                         child: FilledButton(
-                          onPressed: widget.bridge.busy
+                          onPressed: widget.bridge.busy || printer == null
                               ? null
                               : savePrintSettings,
                           child: const Text('保存打印设置'),
@@ -418,11 +407,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
             ),
           ],
         );
-
-  Set<String> _options(String kind) => {
-    ...printers,
-    if (routes[kind]?.isNotEmpty == true) routes[kind]!,
-  };
 
   Widget _checks() {
     final bridge = widget.bridge;
@@ -448,7 +432,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      !bridge.configured
+                      !bridge.configured || printer == null
                           ? '请先开通景区打印权限并选择打印机。'
                           : !supported
                           ? '这台电脑暂时无法读取打印机状态，请在系统设置里检查。'
@@ -461,9 +445,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
                         onPressed:
                             bridge.configured &&
                                 supported &&
+                                printer != null &&
                                 !bridge.busy &&
                                 !checkingPrinters
-                            ? inspectPrinters
+                            ? inspectPrinter
                             : null,
                         icon: const Icon(Icons.monitor_heart_outlined),
                         label: Text(checkingPrinters ? '正在检查…' : '读取打印机状态'),
@@ -486,8 +471,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
 
 class _PrinterDropdown extends StatelessWidget {
   const _PrinterDropdown({
-    super.key,
-    required this.label,
     required this.value,
     required this.options,
     required this.enabled,
@@ -495,7 +478,6 @@ class _PrinterDropdown extends StatelessWidget {
     this.onOpenPreferences,
   });
 
-  final String label;
   final String? value;
   final List<String> options;
   final bool enabled;
@@ -508,7 +490,7 @@ class _PrinterDropdown extends StatelessWidget {
     children: [
       Expanded(
         child: DropdownField<String>(
-          label: label,
+          label: '6 寸照片打印机',
           placeholder: '选择打印机',
           searchHint: '搜索打印机',
           options: options,

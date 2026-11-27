@@ -4,19 +4,21 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { appRoot } = require('./paths');
 const { parseCupsJobId, usesMacPrintScript } = require('./mac-printer');
+const { KIND_KEYS } = require('./config');
 
 /**
- * 按 item.kind 解析本机打印机名。缺映射且无兜底时抛错（整单 FAILED）。
- * COVER（开头片）与 SIZE_6 同为 6 寸纸（开头片横向 3:2），未单独配置时复用 SIZE_6 映射。
+ * 6 寸照片和开头片使用同一个本机队列。
  */
-function resolvePrinter(config, kind) {
-  const printers = config.printers || {};
-  const mapped = printers[kind] || (kind === 'COVER' ? printers.SIZE_6 : null);
-  if (mapped) return mapped;
-  if (config.allowDefaultPrinter && config.defaultPrinter) {
-    return config.defaultPrinter;
+function resolvePrinter(config, kind, skipPrint = config.skipPrint) {
+  if (!KIND_KEYS.includes(kind)) throw new Error(`不支持的照片类型：${kind}`);
+  return skipPrint ? config.printer || '' : requirePrinter(config);
+}
+
+function requirePrinter(config) {
+  if (!config.printer) {
+    throw new Error('请先在打印设置中选择并保存本机打印机');
   }
-  throw new Error(`缺少打印机映射：${kind}`);
+  return config.printer;
 }
 
 /**
@@ -76,7 +78,7 @@ function runPrintCommand(config, item, file, printer, documentName) {
 }
 
 /**
- * 汇总本单使用过的打印机路由，供 result.printer 回写。
+ * 汇总本单使用过的打印机，供 result.printer 回写。
  * 库字段约 128 字：按 kind 去重后拼接，超长则改为「张数@打印机名」。
  */
 function summarizePrinters(used) {
@@ -98,6 +100,7 @@ function summarizePrinters(used) {
 
 module.exports = {
   resolvePrinter,
+  requirePrinter,
   buildCommandArgs,
   runPrintCommand,
   summarizePrinters,

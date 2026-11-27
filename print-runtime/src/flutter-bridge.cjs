@@ -176,8 +176,10 @@ async function serve({ input = process.stdin, send, configPath, root }) {
       const me = await fetchMe({ base: authorizedBase, token, authorizeRequest: personnel ? authorizeRequest : undefined });
       if (!me?.scenicId || String(me.scenicId) !== scenicId) throw new Error('打印授权景区不一致');
       const profile = { id, token, scenicIds: [scenicId], scenicName: me.scenicName, scenicCode: me.scenicCode };
+      const storedConfig = stored();
       const config = normalizeConfig({
-        ...defaults, printers: {}, ...stored(), ...profile, base: authorizedBase, scenicProfiles: [profile],
+        ...defaults, ...storedConfig, printer: storedConfig.printer,
+        ...profile, base: authorizedBase, scenicProfiles: [profile],
         activeScenicProfileId: id, autoPrint: false,
         lockDir: path.join(path.dirname(configPath), '.runtime'),
       }, { configPath, scriptDir: path.join(root, 'scripts') });
@@ -206,19 +208,17 @@ async function serve({ input = process.stdin, send, configPath, root }) {
     if (method === 'removePhotoBatch') return removePhotoBatch(batchConfig(args[2]), args[0], args[1]);
     if (method === 'getBatchPhotoCapture') return getBatchPhotoCapture(batchConfig(args[2]), args[0], args[1]);
     if (method === 'saveConfig') {
-      const { printers, printDpi } = args[0] || {};
-      await bridge.applyConfigPatch({ printers, printDpi });
+      const { printer, printDpi } = args[0] || {};
+      await bridge.applyConfigPatch({
+        ...(printer === undefined ? {} : { printer }),
+        ...(printDpi === undefined ? {} : { printDpi }),
+      });
       return snapshot();
     }
     if (method === 'activateScenicProfile') return bridge.activateScenicProfile(args[0] || {});
     if (method === 'deleteScenicProfile') return bridge.deleteScenicProfile(args[0] || {});
     if (method === 'autoPrint') {
       const enabled = Boolean(args[0]);
-      const config = bridge.runtime.getConfig();
-      if (enabled && !config.skipPrint && !Object.values(config.printers).some(Boolean)
-          && !config.allowDefaultPrinter) {
-        throw new Error('请先在打印设置中选择并保存本机打印机');
-      }
       if (!enabled && bridge.scheduler.getState().printBusy) {
         bridge.scheduler.setAutoPrint(false);
         return snapshot();

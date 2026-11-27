@@ -146,14 +146,19 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   fs.writeFileSync(configPath, JSON.stringify({
     statusCommand: null, resultRetries: 1, command: [process.execPath, '-e',
       'require("node:fs").appendFileSync(process.argv[1], process.env.LVPAI_PRINT_DPI + "\\n");setTimeout(()=>{},200)', marker],
+    printers: { SIZE_6: '旧照片打印机', COVER: '旧开头片打印机' },
     token: 'retired-shared-token',
   }));
   const configured = await call('installPrintAuthorization', { id: firstId, token: secret, scenicId: '1' });
   assert.equal(configured.data.configured, true);
   assert.equal(configured.data.config.token, '[已配置]');
   assert.equal(configured.data.config.printDpi, 300);
+  assert.equal(configured.data.config.printer, '');
+  assert.equal(configured.data.config.printerSelectionRequired, true);
   assert.equal(configured.data.state.autoPrint, false);
   assert.match((await call('autoPrint', true)).error, /请先在打印设置/);
+  assert.match((await call('printJobs', ['9'])).error, /请先在打印设置/);
+  assert.equal(beginCount, 0);
   assert.match((await call('installPrintAuthorization', { id: secondId, token: other, scenicId: '1' })).error, /不属于/);
   const added = await call('installPrintAuthorization', { id: secondId, token: other, scenicId: '2' });
   const second = added.data.config.scenicProfiles.find(profile => profile.scenicIds.includes('2'));
@@ -181,10 +186,12 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   assert.equal((await call('snapshot')).data.config.activeScenicProfileId, firstId);
   assert.equal(wire.includes(other), false);
   assert.match((await call('__proto__')).error, /不支持/);
-  const settings = await call('saveConfig', { printDpi: 360, printers: { ORIGINAL: '受控打印机' } });
+  const settings = await call('saveConfig', { printDpi: 360, printer: '受控打印机' });
   const saved = fs.readFileSync(configPath, 'utf8');
   assert.equal(saved.includes(secret) || saved.includes(other) || saved.includes('retired-shared-token'), false);
   assert.equal(Object.hasOwn(JSON.parse(saved), 'token'), false);
+  assert.equal(Object.hasOwn(JSON.parse(saved), 'printers'), false);
+  assert.equal(JSON.parse(saved).printer, '受控打印机');
   assert.equal(settings.data.config.printDpi, 360);
   assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).printDpi, 360);
   assert.match((await call('saveConfig', { printDpi: 300.5 })).error, /72–1200/);
@@ -199,7 +206,7 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   ].map(data => ({ event: 'zipProgress', id: zip.id, data })));
   const printing = call('printJobs', ['9']);
   // 同一管道紧接着发修改请求，必须拒绝并保持原配置。
-  const concurrent = await call('saveConfig', { printers: { ORIGINAL: '禁止生效' } });
+  const concurrent = await call('saveConfig', { printer: '禁止生效' });
   assert.match(concurrent.error, /任务处理中/);
   const result = await printing;
   assert.equal(beginCount, 1);
@@ -207,7 +214,7 @@ test('Flutter桥：设备授权校验、凭据不落配置、互斥与回写失�
   assert.equal(fs.readFileSync(marker, 'utf8'), '360\n');
   assert.match(JSON.stringify(result), /回写失败/);
   assert.equal(wire.includes(secret), false);
-  assert.equal((await call('snapshot')).data.config.printers.ORIGINAL, '受控打印机');
+  assert.equal((await call('snapshot')).data.config.printer, '受控打印机');
   assert.match((await call('printJobs', ['9'])).error, /中断记录/);
   failResult = false;
   assert.equal((await call('recoverPrintJob', '9', [])).data.state.recoveryJobs.length, 0);

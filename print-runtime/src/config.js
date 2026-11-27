@@ -66,18 +66,32 @@ function normalizeCommand(command) {
   return command.slice();
 }
 
-function normalizePrinters(printers) {
-  if (printers == null) return {};
+function normalizePrinterSettings(raw) {
+  if (raw.printer !== undefined) {
+    if (typeof raw.printer !== 'string') throw new Error('printer必须是字符串');
+    const printer = raw.printer.trim();
+    return { printer, printerSelectionRequired: !printer && raw.printerSelectionRequired === true };
+  }
+
+  const printers = raw.printers ?? {};
   if (typeof printers !== 'object' || Array.isArray(printers)) {
     throw new Error('printers必须是对象');
   }
-  const out = {};
+  const names = new Set();
   for (const [key, value] of Object.entries(printers)) {
-    if (value == null || value === '') continue;
+    if (value == null) continue;
     if (typeof value !== 'string') throw new Error(`printers.${key}必须是字符串`);
-    out[key] = value.trim();
+    if (value.trim()) names.add(value.trim());
   }
-  return out;
+  if (raw.allowDefaultPrinter) {
+    const fallback = String(raw.defaultPrinter || '').trim();
+    if (!fallback) throw new Error('开启 allowDefaultPrinter 时必须配置 defaultPrinter');
+    names.add(fallback);
+  }
+  return {
+    printer: names.size === 1 ? [...names][0] : '',
+    printerSelectionRequired: names.size > 1,
+  };
 }
 
 const WINDOWS_STATUS_COMMAND = [
@@ -134,16 +148,14 @@ function normalizeConfig(raw, options = {}) {
   scenicCode = active.scenicCode;
 
   const command = normalizeCommand(raw.command);
-  const printers = normalizePrinters(raw.printers);
+  const printerSettings = normalizePrinterSettings(raw);
   const printDpi = raw.printDpi === undefined ? DEFAULT_PRINT_DPI : raw.printDpi;
   if (!Number.isInteger(printDpi) || printDpi < 72 || printDpi > 1200) {
     throw new Error('打印分辨率须为 72–1200 DPI 的整数');
   }
-  const allowDefaultPrinter = Boolean(raw.allowDefaultPrinter);
-  const defaultPrinter = String(raw.defaultPrinter || '').trim();
-  if (allowDefaultPrinter && !defaultPrinter) {
-    throw new Error('开启 allowDefaultPrinter 时必须配置 defaultPrinter');
-  }
+  const skipPrint = raw.skipPrint != null
+    ? Boolean(raw.skipPrint)
+    : /^(1|true|yes)$/i.test(String(process.env.PRINT_DESKTOP_SKIP_PRINT || ''));
 
   const scriptDir = options.scriptDir || path.join(ROOT, 'scripts');
   const configPath = options.configPath || null;
@@ -170,9 +182,7 @@ function normalizeConfig(raw, options = {}) {
     listRefreshMs: asPositiveInt(raw.listRefreshMs, 30000, 'listRefreshMs'),
     statusHost,
     statusPort: asPositiveInt(raw.statusPort, 17888, 'statusPort'),
-    allowDefaultPrinter,
-    defaultPrinter,
-    printers,
+    ...printerSettings,
     printDpi,
     command,
     /** 打印机状态命令；null 表示本机不检查缺纸等异常，打印命令受理即报已打印。 */
@@ -192,11 +202,9 @@ function normalizeConfig(raw, options = {}) {
     printerWatchMaxMs: asPositiveInt(raw.printerWatchMaxMs, 600000, 'printerWatchMaxMs'),
     printerPollMs: asPositiveInt(raw.printerPollMs, 2000, 'printerPollMs'),
     /** 定时拉未打印并自动出纸；默认关。 */
-    autoPrint: Boolean(raw.autoPrint),
+    autoPrint: Boolean(raw.autoPrint) && (skipPrint || Boolean(printerSettings.printer)),
     /** 验证用：走完整下载/回报，不调本机打印机。配置显式优先于环境变量。 */
-    skipPrint: raw.skipPrint !== undefined && raw.skipPrint !== null
-      ? Boolean(raw.skipPrint)
-      : /^(1|true|yes)$/i.test(String(process.env.PRINT_DESKTOP_SKIP_PRINT || '')),
+    skipPrint,
     historyLimit: asPositiveInt(raw.historyLimit, 20, 'historyLimit'),
     openStatusOnStart: raw.openStatusOnStart !== false,
     notifyOnResult: raw.notifyOnResult !== false,
@@ -229,12 +237,15 @@ function applyEnvOverrides(raw, env = process.env) {
       throw new Error(`PRINT_AGENT_COMMAND必须是JSON数组：${error.message}`);
     }
   }
-  if (env.PRINT_AGENT_PRINTERS) {
+  if (env.PRINT_AGENT_PRINTER != null) {
+    next.printer = env.PRINT_AGENT_PRINTER;
+  } else if (env.PRINT_AGENT_PRINTERS) {
     try {
       next.printers = JSON.parse(env.PRINT_AGENT_PRINTERS);
     } catch (error) {
       throw new Error(`PRINT_AGENT_PRINTERS必须是JSON对象：${error.message}`);
     }
+    delete next.printer;
   }
   return next;
 }
@@ -363,9 +374,8 @@ function toWritableConfig(config) {
     listRefreshMs: config.listRefreshMs,
     statusHost: config.statusHost,
     statusPort: config.statusPort,
-    allowDefaultPrinter: config.allowDefaultPrinter,
-    defaultPrinter: config.defaultPrinter,
-    printers: { ...config.printers },
+    printer: config.printer,
+    ...(config.printerSelectionRequired ? { printerSelectionRequired: true } : {}),
     printDpi: config.printDpi,
     command: config.command.slice(),
     statusCommand: config.statusCommand ? config.statusCommand.slice() : null,

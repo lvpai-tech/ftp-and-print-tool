@@ -62,7 +62,7 @@ test('Mac 安装包首次启动写入示例配置，再次加载不覆盖密钥'
   fs.writeFileSync(configPath, JSON.stringify(saved));
   const second = loadConfig({ proc, env: {} });
   assert.equal(second.token, 'kept-token');
-  assert.deepEqual(second.printers, first.printers);
+  assert.equal(second.printer, first.printer);
   assert.deepEqual(second.statusCommand, first.statusCommand);
   assert.match(second.statusCommand.join(' '), /mac-printer\.js \{printer\} \{jobId\}/);
 });

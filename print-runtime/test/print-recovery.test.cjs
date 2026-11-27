@@ -98,7 +98,7 @@ async function fixture(t, hold) {
     console.log(JSON.stringify({ printerStatus: 'Idle', jobs }));`;
   const waitingSheet = hold === 'after' ? '2' : '';
   const config = { base: `http://127.0.0.1:${server.address().port}`, token: 'print-recovery-test',
-    lockDir: directory, printers: { ORIGINAL: 'printer' }, resultRetries: 1,
+    lockDir: directory, printer: 'printer', resultRetries: 1,
     printerSheetSettleMs: 0, printerWatchMaxMs: 3000, printerPollMs: 25,
     command: [process.execPath, '-e', command, marker, '{file}', waitingSheet],
     statusCommand: [process.execPath, '-e', check, queueFile, marker, '{jobId}', waitingSheet] };

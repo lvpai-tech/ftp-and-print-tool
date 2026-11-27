@@ -115,8 +115,8 @@ function pageHtml() {
       <div class="msg" id="actionMsg"></div>
     </section>
     <section>
-      <h2>打印机路由</h2>
-      <div id="printers"></div>
+      <h2>打印机</h2>
+      <div id="printer"></div>
     </section>
     <section class="wide">
       <h2>最近结果</h2>
@@ -133,12 +133,8 @@ function pageHtml() {
         <input name="scenicIds" />
         <label>pollMs / idleBackoffMs / resultRetries</label>
         <input name="timing" placeholder="3000,12000,5" />
-        <label>allowDefaultPrinter（true/false）</label>
-        <input name="allowDefaultPrinter" />
-        <label>defaultPrinter</label>
-        <input name="defaultPrinter" />
-        <label>printers JSON</label>
-        <textarea name="printers" rows="5"></textarea>
+        <label for="printerName">6 寸照片打印机</label>
+        <input id="printerName" name="printer" />
         <label>command JSON 数组</label>
         <textarea name="command" rows="6"></textarea>
         <div class="actions">
@@ -185,14 +181,8 @@ function pageHtml() {
         ['景区', esc((cfg.scenicIds || []).join(',') || '（服务端授权）')],
       ].map(([k,v]) => '<div class="row"><span class="label">'+k+'</span><span class="value">'+v+'</span></div>').join('');
 
-      const printers = cfg.printers || {};
-      const rows = Object.keys(printers).length
-        ? Object.entries(printers).map(([k,v]) => '<div class="row"><span class="label">'+esc(k)+'</span><span class="value">'+esc(v)+'</span></div>').join('')
-        : '<div class="row"><span class="label">（未配置）</span></div>';
-      const fallback = cfg.allowDefaultPrinter
-        ? '<div class="row"><span class="label">兜底</span><span class="value">'+esc(cfg.defaultPrinter)+'</span></div>'
-        : '<div class="row"><span class="label">兜底</span><span class="value">关闭</span></div>';
-      document.getElementById('printers').innerHTML = rows + fallback;
+      document.getElementById('printer').textContent = cfg.printer || (cfg.printerSelectionRequired
+        ? '旧设置使用了多台打印机，请选择一台并保存。' : '未配置');
 
       const hist = data.history || [];
       document.getElementById('history').innerHTML = hist.length
@@ -207,9 +197,7 @@ function pageHtml() {
       form.token.value = '';
       form.scenicIds.value = (cfg.scenicIds || []).join(',');
       form.timing.value = [cfg.autoPrintMs || 300000, cfg.listRefreshMs || 30000, cfg.resultRetries].join(',');
-      form.allowDefaultPrinter.value = String(!!cfg.allowDefaultPrinter);
-      form.defaultPrinter.value = cfg.defaultPrinter || '';
-      form.printers.value = JSON.stringify(cfg.printers || {}, null, 2);
+      form.printer.value = cfg.printer || '';
       form.command.value = JSON.stringify(cfg.command || [], null, 2);
     }
     async function act(path, msgEl) {
@@ -237,9 +225,7 @@ function pageHtml() {
           autoPrintMs: Number(autoPrintMs || 300000),
           listRefreshMs: Number(listRefreshMs || 30000),
           resultRetries: Number(resultRetries || 5),
-          allowDefaultPrinter: /^(1|true|yes)$/i.test(form.allowDefaultPrinter.value.trim()),
-          defaultPrinter: form.defaultPrinter.value.trim(),
-          printers: JSON.parse(form.printers.value || '{}'),
+          printer: form.printer.value.trim(),
           command: JSON.parse(form.command.value || '[]'),
         };
         if (form.token.value.trim()) body.token = form.token.value.trim();
@@ -295,6 +281,7 @@ function createStatusServer(deps) {
         return sendJson(response, 200, { ok: true, autoPrint: on });
       }
       if (method === 'POST' && url.pathname === '/api/reload') {
+        if (getScheduler().getState().printBusy) throw new Error('正在打印中，请稍候');
         const next = reloadFromDisk();
         setConfig(next);
         getScheduler().setConfig(next);
@@ -305,6 +292,7 @@ function createStatusServer(deps) {
         if (!body || typeof body !== 'object') {
           return sendJson(response, 400, { error: '需要JSON配置体' });
         }
+        if (getScheduler().getState().printBusy) throw new Error('正在打印中，请稍候');
         const current = toWritableConfig(getConfig());
         const merged = {
           ...current,

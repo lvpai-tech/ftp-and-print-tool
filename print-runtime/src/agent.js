@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { claimJob, downloadFile, reportResult } = require('./api');
-const { resolvePrinter, runPrintCommand, summarizePrinters } = require('./print');
+const { requirePrinter, resolvePrinter, runPrintCommand, summarizePrinters } = require('./print');
 const { assertPrinterReady, watchAfterSubmit, cancelPendingLvpaiJobs } = require('./printer-status');
 const { usesMacPrintScript } = require('./mac-printer');
 const { matchesSheets } = require('./print-recovery');
@@ -80,7 +80,7 @@ async function processClaimedJob(config, job, hooks = {}) {
     for (let index = record ? 0 : startAt; index < sheets.length; index += 1) {
       const item = sheets[index];
       if (record?.sheets[index].state === 'DONE') continue;
-      const printer = resolvePrinter(config, item.kind);
+      const printer = resolvePrinter(config, item.kind, skipPrint);
       let cached = fileCache.get(item.fileUrl);
       if (!cached) {
         const { buffer, contentType } = await downloadFile(config, item.fileUrl);
@@ -155,7 +155,7 @@ async function processClaimedJob(config, job, hooks = {}) {
     const progress =
       totalSheets > 0 ? `（已完成${completedSheets}/${totalSheets}张，待继续）` : '';
     const reason = `${error.message}${progress}`.slice(0, 480);
-    printerSummary = summarizePrinters(usedPrinters) || (config.defaultPrinter || '');
+    printerSummary = summarizePrinters(usedPrinters) || config.printer || '';
     const result = {
       attempt: job.attempt,
       status: 'FAILED',
@@ -206,6 +206,7 @@ async function processClaimedJob(config, job, hooks = {}) {
  * 领取并处理一个 PHOTOS 任务。
  */
 async function runOnce(config, hooks = {}) {
+  if (!config.skipPrint && !hooks.skipPrint) requirePrinter(config);
   const job = await claimJob(config);
   if (!job) return { state: 'IDLE' };
   return processClaimedJob(config, job, hooks);

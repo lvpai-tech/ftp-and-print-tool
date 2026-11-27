@@ -9,6 +9,7 @@ const {
   normalizeConfig,
   loadConfig,
   applyEnvOverrides,
+  toWritableConfig,
   EXAMPLE_CONFIG_PATH,
 } = require('../src/config');
 
@@ -50,15 +51,11 @@ test('配置校验：缺少 token/command 时拒绝；base 可缺省为正式根
 test('配置校验：合法示例可规范化，环境变量可覆盖', () => {
   const example = JSON.parse(fs.readFileSync(EXAMPLE_CONFIG_PATH, 'utf8'));
   example.token = 'test-token';
-  example.printers = {
-    SIZE_6: 'A',
-    ORIGINAL: 'B',
-    CREATIVE: 'B',
-  };
+  example.printer = 'A';
   const cfg = normalizeConfig(example);
   assert.equal(cfg.base.endsWith('/'), false);
   assert.equal(cfg.pollMs, 3000);
-  assert.equal(cfg.allowDefaultPrinter, false);
+  assert.equal(cfg.printer, 'A');
 
   const overridden = normalizeConfig(
     applyEnvOverrides(example, {
@@ -66,12 +63,31 @@ test('配置校验：合法示例可规范化，环境变量可覆盖', () => {
       PRINT_AGENT_TOKEN: 'from-env',
       PRINT_AGENT_POLL_MS: '5000',
       PRINT_AGENT_SCENIC_IDS: '2,3',
+      PRINT_AGENT_PRINTER: 'B',
     }),
   );
   assert.equal(overridden.base, 'http://127.0.0.1:9/api/operation');
   assert.equal(overridden.token, 'from-env');
   assert.equal(overridden.pollMs, 5000);
   assert.deepEqual(overridden.scenicIds, ['2', '3']);
+  assert.equal(overridden.printer, 'B');
+});
+
+test('旧配置同一队列自动沿用，多队列须重选，已保存的新队列优先', () => {
+  const raw = { token: 'test', command: validCommand, autoPrint: true, skipPrint: false };
+  const legacy = { ...raw, printers: { COVER: ' A ', SIZE_6: 'A', ORIGINAL: 'A', CREATIVE: 'A' } };
+  assert.equal(normalizeConfig(legacy).printer, 'A');
+  assert.equal(normalizeConfig({ ...raw, allowDefaultPrinter: true, defaultPrinter: 'A' }).printer, 'A');
+  const conflict = normalizeConfig({ ...legacy, printers: { ...legacy.printers, CREATIVE: 'B' } });
+  assert.equal(conflict.printer, '');
+  assert.equal(conflict.printerSelectionRequired, true);
+  assert.equal(conflict.autoPrint, false);
+  assert.equal(normalizeConfig(toWritableConfig(conflict)).printerSelectionRequired, true);
+  const selected = toWritableConfig(normalizeConfig({ ...toWritableConfig(conflict), printer: 'B' }));
+  assert.equal(selected.printer, 'B');
+  assert.equal(Object.hasOwn(selected, 'printers'), false);
+  assert.equal(Object.hasOwn(selected, 'printerSelectionRequired'), false);
+  assert.equal(normalizeConfig({ ...legacy, printer: 'C' }).printer, 'C');
 });
 
 test('多景区档案：旧配置自动迁成一条并激活；redact 遮盖密钥', () => {
