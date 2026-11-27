@@ -35,14 +35,14 @@ void main() {
 
   Future<void> showUpload(
     WidgetTester tester, {
-    PrintBridge? bridge,
+    http.Client? batchClient,
     WorkstationSession? session,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
         home: TransferPage(
           supportDirectory: () async => support,
-          printBridge: bridge,
+          batchClient: batchClient,
           session: session,
         ),
       ),
@@ -50,7 +50,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('上传机位默认显示照片批次，切换页签保留批次筛选', (tester) async {
+  testWidgets('上传机位无需打印档案即可查询批次，切换页签保留筛选', (tester) async {
     tester.view.physicalSize = const Size(1280, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -65,22 +65,56 @@ void main() {
         'token': 'a' * 64,
       }),
     });
-    final bridge = _BatchBridge();
-    addTearDown(bridge.dispose);
-    await showUpload(tester, bridge: bridge);
+    final calls = <Uri>[];
+    final client = MockClient((request) async {
+      expect(request.method, 'GET');
+      expect(request.url.origin, gateway.origin);
+      expect(
+        request.url.path,
+        '/api/operation/workstation-upload/stations/317/photo-batches',
+      );
+      expect(request.headers['x-workstation-token'], 'a' * 64);
+      expect(request.headers, isNot(contains('x-print-agent-token')));
+      expect(request.url.queryParameters.keys, unorderedEquals(['from', 'to']));
+      calls.add(request.url);
+      return http.Response(
+        jsonEncode({
+          'code': 200,
+          'data': {
+            'canWrite': false,
+            'batches': [
+              {
+                'id': 'card-6969',
+                'receivedAt': '2026-11-23T09:23:24Z',
+                'status': 'CARD',
+                'cardTail': '6969',
+                'directory': 'aggregated',
+                'targetPhotoId': '209',
+                'targetCardId': '6969',
+                'photos': [
+                  {
+                    'id': '209',
+                    'receivedAt': '2026-11-23T09:23:24Z',
+                    'ending': true,
+                    'thumbnailUrl': 'https://example.invalid/photo.jpg',
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+        200,
+      );
+    });
+    addTearDown(client.close);
+    await showUpload(tester, batchClient: client);
     await tester.tap(find.text('A08'));
     await tester.pumpAndSettle();
     expect(find.text('照片批次'), findsOneWidget);
     expect(find.text('本机上传'), findsOneWidget);
     expect(find.text('本机暂无上传任务'), findsNothing);
     expect(find.text('取片批次'), findsNothing);
-    expect(find.text('照片归属缺少景区档案'), findsOneWidget);
-    expect(find.text('添加打印密钥'), findsNothing);
-    expect(bridge.calls, isEmpty);
-
-    bridge.setMatchingScenic(true);
-    await tester.pumpAndSettle();
-    expect(find.text('照片批次'), findsOneWidget);
+    expect(find.text('照片归属缺少景区档案'), findsNothing);
     final timeline = find.byType(PhotoBatchTimeline);
     expect(timeline, findsOneWidget);
     expect(tester.widget<PhotoBatchTimeline>(timeline).inline, isTrue);
@@ -94,18 +128,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('查看图片'), findsOneWidget);
     expect(find.text('查询拍摄信息'), findsOneWidget);
-    expect(bridge.calls, ['listBatchStations', 'listPhotoBatches']);
+    expect(find.text('删除照片'), findsNothing);
+    expect(find.text('整批删除'), findsNothing);
+    expect(calls, hasLength(1));
     expect(tester.takeException(), isNull);
     await tester.tapAt(const Offset(10, 10));
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('刷新批次'));
     await tester.pumpAndSettle();
-    expect(bridge.calls, [
-      'listBatchStations',
-      'listPhotoBatches',
-      'listBatchStations',
-      'listPhotoBatches',
-    ]);
+    expect(calls, hasLength(2));
     expect(find.text('取片卡 6969'), findsOneWidget);
     expect(find.byTooltip('选择机位'), findsNothing);
     await tester.tap(find.text('全部状态'));
@@ -119,7 +150,7 @@ void main() {
     await tester.tap(find.text('照片批次'));
     await tester.pumpAndSettle();
     expect(find.text('已归集'), findsOneWidget);
-    expect(bridge.calls, hasLength(4));
+    expect(calls, hasLength(2));
     tester.view.physicalSize = const Size(375, 812);
     await tester.pumpAndSettle();
     await tester.ensureVisible(date);
@@ -443,68 +474,4 @@ class _StationDetailsAccount extends WorkstationAccount {
   Future<({WorkstationScenic scenic, String name, String code})> stationDetails(
     CosUploadProfile profile,
   ) async => details;
-}
-
-class _BatchBridge extends PrintBridge {
-  _BatchBridge() {
-    connected = true;
-    setMatchingScenic(false);
-  }
-
-  void setMatchingScenic(bool available) {
-    snapshot = {
-      'configured': true,
-      'config': {
-        'activeScenicProfileId': 'active-print',
-        'scenicProfiles': [
-          {
-            'id': 'active-print',
-            'scenicIds': ['1'],
-            'scenicName': '蓝月谷',
-          },
-          if (available)
-            {
-              'id': 'upload-scenic',
-              'scenicIds': ['5'],
-              'scenicName': '汉京中心',
-            },
-        ],
-      },
-    };
-    notifyListeners();
-  }
-
-  final calls = <String>[];
-
-  @override
-  Future<dynamic> call(String method, [List<dynamic> args = const []]) async {
-    calls.add(method);
-    expect(args.last, {'profileId': 'upload-scenic', 'scenicId': '5'});
-    return switch (method) {
-      'listBatchStations' => <Json>[
-        {'id': '317', 'code': 'A08', 'name': '验收机位'},
-      ],
-      'listPhotoBatches' => {
-        'batches': <Json>[
-          {
-            'id': 'card-6969',
-            'receivedAt': '2026-11-23T09:23:24Z',
-            'status': 'CARD',
-            'cardTail': '6969',
-            'targetPhotoId': '209',
-            'targetCardId': '6969',
-            'photos': <Json>[
-              {
-                'id': '209',
-                'receivedAt': '2026-11-23T09:23:24Z',
-                'ending': true,
-                'thumbnailUrl': 'https://example.invalid/photo.jpg',
-              },
-            ],
-          },
-        ],
-      },
-      _ => throw StateError(method),
-    };
-  }
 }

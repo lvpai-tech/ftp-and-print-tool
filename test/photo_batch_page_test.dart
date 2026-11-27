@@ -108,6 +108,7 @@ void main() {
             {'id': '17', 'code': 'A17', 'name': '测试机位'},
           ],
           'listPhotoBatches' => {
+            'canWrite': true,
             'batches': [
               {
                 'id': 'batch-1',
@@ -242,6 +243,7 @@ void main() {
               expect((args.single as Map)['stationId'], '17');
               return <String, dynamic>{
                 'batches': batches,
+                'canWrite': true,
                 'suspiciousIntervalSec': 120,
               };
             }(),

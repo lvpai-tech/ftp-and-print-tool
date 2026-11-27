@@ -476,6 +476,44 @@ void main() {
   }, timeout: const Timeout(Duration(minutes: 2)));
 
   final savedJpegSamples = Platform.environment['SAVED_JPEG_SAMPLE_DIR'];
+  test('机位没有打印档案时仍能监听、导入并完成上传', () async {
+    final fixture = await _QueueFixture.open();
+    const store = ProfileStore();
+    final support = Directory(p.join(fixture.scratch.path, 'workstation'));
+    await fixture.run(() async {
+      final station = StationUpload(
+        profile: fixture.profile,
+        store: store,
+        support: support,
+        inboxRoot: Directory(p.join(support.path, 'inbox')),
+        transferSlots: UploadSlots(1),
+        preparationSlots: UploadSlots(1),
+      );
+      try {
+        await station.restore();
+        expect(station.running, isTrue);
+        final source = await File(p.join(fixture.scratch.path, 'import.png'))
+            .writeAsBytes(await _png());
+        await station.importPhotos([source]);
+        await _until(
+          () => station.uploader.jobs.singleOrNull?.state == 'accepted',
+          '导入照片进入上传队列',
+          describe: () => '${station.message} ${station.uploader.issues}',
+        );
+        final job = station.uploader.jobs.single;
+        expect(p.basename(job.source), 'import.png');
+        expect(job.source, isNot(source.path));
+        fixture.ingested.add(job.id);
+        await _until(() => job.state == 'ingested', '导入照片完成入库');
+        expect(await source.exists(), isTrue);
+        expect(fixture.prepared, [job.id]);
+      } finally {
+        await station.suspend();
+        station.dispose();
+      }
+    });
+  });
+
   test('已保存的三张 JPG 按原发现顺序进入 COS 队列', () async {
     final fixture = await _QueueFixture.open();
     final uploader = fixture.uploader();

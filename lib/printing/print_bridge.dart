@@ -8,16 +8,11 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../workstation_storage.dart';
+import '../workstation_result_error.dart';
 import 'print_enrollment.dart';
 
 typedef Json = Map<String, dynamic>;
 typedef ZipExportProgress = ({int completed, int total, bool saving});
-
-class PrintBridgeResultError extends StateError {
-  PrintBridgeResultError(super.message, this.resultCode);
-
-  final int resultCode;
-}
 
 /// Flutter 与独立打印进程之间的私有管道。断开后禁止自动重试送打。
 class PrintBridge extends ChangeNotifier {
@@ -222,7 +217,7 @@ class PrintBridge extends ChangeNotifier {
         final error = message['error'] as String;
         final code = message['resultCode'];
         pending.completeError(
-          code is int ? PrintBridgeResultError(error, code) : StateError(error),
+          code is int ? WorkstationResultError(error, code) : StateError(error),
         );
       } else {
         final data = message['data'];

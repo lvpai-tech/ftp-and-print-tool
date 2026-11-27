@@ -11,6 +11,7 @@ import '../../ui/card_tail_dialog.dart';
 import '../../ui/design.dart';
 import '../../ui/dropdown_field.dart';
 import '../../ui/workstation_form_dialog.dart';
+import '../../workstation_result_error.dart';
 import '../job_query_time.dart';
 import '../print_bridge.dart';
 import 'photo_batch_split_dialog.dart';
@@ -84,10 +85,13 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   bool _submitting = false;
   bool _selecting = false;
   bool _refreshFromUploads = false;
+  bool _uploadCanWrite = false;
   String? _candidate;
   String? _candidateBarcode;
   String? _recognitionPhotoId;
   String? _selectionNotice;
+
+  bool get _canWrite => !widget.inline || _uploadCanWrite;
 
   List<Json> get _visibleBatches => _directory == 'all'
       ? _batches
@@ -136,29 +140,31 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       _selectionNotice = null;
     });
     try {
-      final stations = refreshStations || _stations == null
-          ? (await widget.call('listBatchStations', []) as List).cast<Json>()
-          : _stations!;
-      if (!mounted) return;
-      final previous = _station;
-      final hasSelection = stations.any((row) => row['id'] == previous);
-      final station = widget.inline || hasSelection
-          ? previous
-          : stations.firstOrNull?['id'] as String?;
-      final unavailable = widget.inline && station != null && !hasSelection;
-      setState(() {
-        _stations = stations;
-        _station = station;
-        if (station != previous || unavailable) _batches = [];
-      });
-      if (unavailable) {
-        throw StateError('当前打印景区没有此上传机位，请核对机位和景区设置。');
+      if (!widget.inline) {
+        final stations = refreshStations || _stations == null
+            ? (await widget.call('listBatchStations', []) as List).cast<Json>()
+            : _stations!;
+        if (!mounted) return;
+        final previous = _station;
+        final station = stations.any((row) => row['id'] == previous)
+            ? previous
+            : stations.firstOrNull?['id'] as String?;
+        setState(() {
+          _stations = stations;
+          _station = station;
+          if (station != previous) _batches = [];
+        });
       }
-      final result = station == null
+      final result = _station == null
           ? null
           : await widget.call('listPhotoBatches', [_range]) as Json;
+      final canWrite = result?['canWrite'];
+      if (widget.inline && canWrite is! bool) {
+        throw StateError('照片批次响应缺少操作权限');
+      }
       if (mounted) {
         setState(() {
+          _uploadCanWrite = canWrite == true;
           _intervalThreshold = result?['suspiciousIntervalSec'] as int?;
           _batches = result == null
               ? []
@@ -166,13 +172,19 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
         });
       }
     } catch (error) {
-      if (mounted) setState(() => _error = appErrorMessage(error));
+      if (mounted) {
+        setState(() {
+          _uploadCanWrite = false;
+          _error = appErrorMessage(error);
+        });
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
   bool _canDrop(_Dragged photo, Json target) =>
+      _canWrite &&
       !_loading &&
       !_working &&
       !_selecting &&
@@ -397,7 +409,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   ];
 
   Future<void> _assign({_Dragged? single}) async {
-    if (_working || _loading) return;
+    if (!_canWrite || _working || _loading) return;
     final groups = single == null
         ? _selectedGroups()
         : [
@@ -474,7 +486,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
       }
       _requests.remove(key);
       return result;
-    } on PrintBridgeResultError catch (error) {
+    } on WorkstationResultError catch (error) {
       if (_isRejectedCorrection(error)) _requests.remove(key);
       rethrow;
     }
@@ -520,7 +532,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
   });
 
   Future<void> _removePhotos(List<Json> photos, {String? batchLabel}) async {
-    if (_loading || _working) return;
+    if (!_canWrite || _loading || _working) return;
     setState(() => _working = true);
     final wholeBatch = batchLabel != null;
     try {
@@ -618,12 +630,15 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     if (_working || _loading) return;
     final photo = item.photo;
     final cardPhotoId = photo['id'] as String;
-    final canFill = _batches.any(
-      (batch) =>
-          _unassigned(batch) &&
-          _photos(batch)
-              .any((photo) => _movable(photo) && photo['id'] != cardPhotoId),
-    );
+    final canFill =
+        _canWrite &&
+        _batches.any(
+          (batch) =>
+              _unassigned(batch) &&
+              _photos(
+                batch,
+              ).any((photo) => _movable(photo) && photo['id'] != cardPhotoId),
+        );
     setState(() => _working = true);
     CardCodeChoice? recognized;
     try {
@@ -703,6 +718,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     final selection = OutlinedButton.icon(
       onPressed:
           enabled &&
+              _canWrite &&
               _visibleBatches.any((batch) => _photos(batch).any(_movable))
           ? () => _setSelectionMode(!_selecting)
           : null,
@@ -773,7 +789,12 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
               dateFilter,
               statusFilter,
               refresh,
-              selection,
+              if (_canWrite) selection,
+              if (widget.inline &&
+                  !_uploadCanWrite &&
+                  !_loading &&
+                  _error == null)
+                const Text('仅查看 · 请用有景区维护权限的工作台账号登录'),
             ],
           );
           if (widget.inline) {
@@ -1167,19 +1188,20 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
                   ],
                 ),
               ),
-              TextButton.icon(
-                onPressed: _loading || _working || photos.isEmpty
-                    ? null
-                    : () => _removePhotos(
-                        _photos(batch),
-                        batchLabel: _label(batch),
-                      ),
-                style: TextButton.styleFrom(
-                  foregroundColor: WorkstationStyle.bad,
+              if (_canWrite)
+                TextButton.icon(
+                  onPressed: _loading || _working || photos.isEmpty
+                      ? null
+                      : () => _removePhotos(
+                          _photos(batch),
+                          batchLabel: _label(batch),
+                        ),
+                  style: TextButton.styleFrom(
+                    foregroundColor: WorkstationStyle.bad,
+                  ),
+                  icon: const Icon(Icons.delete_outline, size: 17),
+                  label: const Text('整批删除'),
                 ),
-                icon: const Icon(Icons.delete_outline, size: 17),
-                label: const Text('整批删除'),
-              ),
             ],
           ),
           const Divider(height: 14, color: WorkstationStyle.line),
@@ -1221,7 +1243,8 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
     final ending = photo['ending'] == true;
     final time = _time(photo);
     final id = photo['id'] as String;
-    final canMove = !_selecting && hasDestination && !_working && !_loading;
+    final canMove =
+        _canWrite && !_selecting && hasDestination && !_working && !_loading;
     final checked = _selected.contains(id);
     final selectable = _canSelect(photo) && !_working && !_loading;
     final item = (photo: photo, batch: batch);
@@ -1311,8 +1334,11 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
                         itemBuilder: (_) => [
                           for (final action in _PhotoAction.values)
                             if ((action != _PhotoAction.move || canMove) &&
+                                (action != _PhotoAction.remove || _canWrite) &&
                                 (action != _PhotoAction.setCode ||
-                                    (_movable(photo) && _unassigned(batch))))
+                                    (_canWrite &&
+                                        _movable(photo) &&
+                                        _unassigned(batch))))
                               PopupMenuItem(
                                 value: action,
                                 child: Row(
@@ -1423,7 +1449,7 @@ class _PhotoBatchTimelineState extends State<PhotoBatchTimeline> {
               side: const BorderSide(color: WorkstationStyle.line),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            onPressed: _loading || _working
+            onPressed: !_canWrite || _loading || _working
                 ? null
                 : () => _split(before, after, label),
             icon: const Icon(Icons.schedule, size: 14),
@@ -2007,7 +2033,7 @@ class _BatchFilterMenu extends StatelessWidget {
 }
 
 bool _isRejectedCorrection(Object error) =>
-    error is PrintBridgeResultError &&
+    error is WorkstationResultError &&
     const {40001, 40101, 40102, 40301, 40401, 40901}.contains(error.resultCode);
 
 class _AssignmentDialog extends StatefulWidget {

@@ -3,16 +3,17 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/services.dart' show PlatformException;
+import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../auto_upload/cos_upload.dart';
+import '../auto_upload/station_photo_batches.dart';
 import '../auto_upload/station_upload.dart';
 import '../auto_upload/upload_folders.dart';
 import '../auto_upload/upload_slots.dart';
 import '../branding.dart';
-import '../printing/print_bridge.dart';
 import '../printing/ui/photo_batch_page.dart';
 import '../profile_store.dart';
 import '../workstation_account.dart';
@@ -22,7 +23,6 @@ import 'app_dialogs.dart';
 import 'auto_upload_panel.dart';
 import 'cos_upload_dialog.dart';
 import 'design.dart';
-import 'dropdown_field.dart';
 import 'update_button.dart';
 import 'workstation_enrollment_panel.dart';
 
@@ -34,7 +34,7 @@ class TransferPage extends StatefulWidget {
     this.onActiveChanged,
     this.onUploadingChanged,
     this.onConfiguredChanged,
-    this.printBridge,
+    this.batchClient,
     this.supportDirectory,
     this.session,
   });
@@ -44,7 +44,7 @@ class TransferPage extends StatefulWidget {
   final ValueChanged<bool>? onActiveChanged;
   final ValueChanged<bool>? onUploadingChanged;
   final ValueChanged<bool>? onConfiguredChanged;
-  final PrintBridge? printBridge;
+  final http.Client? batchClient;
   final Future<Directory> Function()? supportDirectory;
   final WorkstationSession? session;
 
@@ -61,10 +61,10 @@ class _TransferPageState extends State<TransferPage>
   final _removing = <StationUpload>{};
   final _transferSlots = UploadSlots(3);
   final _preparationSlots = UploadSlots(2);
+  late final _batchClient = widget.batchClient ?? http.Client();
   Directory? _support, _inbox;
   UploadFolders? _folders;
   StationUpload? _selected;
-  String? _legacyBatchProfileId;
   bool _loading = true;
   bool _refreshing = false;
   bool _configuring = false;
@@ -275,6 +275,7 @@ class _TransferPageState extends State<TransferPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     widget.session?.updateUploads = null;
+    if (widget.batchClient == null) _batchClient.close();
     for (final station in _stations.values) {
       station.removeListener(_refresh);
       station.dispose();
@@ -548,7 +549,6 @@ class _TransferPageState extends State<TransferPage>
                     ? null
                     : () => setState(() {
                         _selected = station;
-                        _legacyBatchProfileId = null;
                       }),
               ),
             ),
@@ -606,94 +606,28 @@ class _TransferPageState extends State<TransferPage>
     );
   }
 
-  Widget? _batchTimeline(StationUpload station) {
-    final bridge = widget.printBridge;
-    if (bridge == null) return null;
-    final profile = station.profile;
+  Widget _batchTimeline(StationUpload station) {
     return ListenableBuilder(
-      listenable: Listenable.merge([bridge, station]),
+      listenable: station,
       builder: (context, _) {
-        final config = bridge.config;
-        final scenicId = profile.scenicId;
-        final activeId = config['activeScenicProfileId'];
-        final profiles = (config['scenicProfiles'] as List? ?? const [])
-            .whereType<Map>()
-            .where((entry) => entry['id'] is String)
-            .toList();
-        final matches = profiles.where(
-          (entry) => scenicId == null
-              ? true
-              : (entry['scenicIds'] as List?)?.any(
-                      (id) => id.toString() == scenicId,
-                    ) ==
-                    true,
+        final profile = station.profile;
+        final batches = StationPhotoBatches(
+          _batchClient,
+          profile,
+          station.personnelToken,
         );
-        final matching =
-            (scenicId == null
-                ? matches
-                      .where((entry) => entry['id'] == _legacyBatchProfileId)
-                      .firstOrNull
-                : null) ??
-            matches.where((entry) => entry['id'] == activeId).firstOrNull ??
-            matches.firstOrNull;
-        if (!bridge.connected) {
-          return const SliverToBoxAdapter(
-            child: _BatchAccessNotice(
-              title: '照片归属暂不可用',
-              message: '请在打印照片页检查打印服务状态。',
-            ),
-          );
-        }
-        if (!bridge.configured || matching == null) {
-          return const SliverToBoxAdapter(
-            child: _BatchAccessNotice(
-              title: '照片归属缺少景区档案',
-              message: '请在「打印照片」申请对应景区的打印权限。',
-            ),
-          );
-        }
-        final profileId = matching['id'] as String;
-        final scope = {'profileId': profileId, 'scenicId': ?scenicId};
         var ingested = 0;
         var grouped = 0;
         for (final job in station.uploader.jobs) {
           if (job.state == 'ingested') ingested++;
           if (job.state == 'grouped') grouped++;
         }
-        final timeline = PhotoBatchTimeline.inline(
-          key: ValueKey((bridge, profileId, scenicId, profile.stationId)),
-          call: (method, args) => bridge.call(method, [...args, scope]),
-          scenicName: _batchScenicLabel(matching),
+        return PhotoBatchTimeline.inline(
+          key: ValueKey(profile),
+          call: batches.call,
+          scenicName: profile.scenicName ?? '当前机位',
           stationId: profile.stationId,
           uploadProgress: (ingested: ingested, grouped: grouped),
-        );
-        if (scenicId != null) return timeline;
-        return SliverMainAxisGroup(
-          slivers: [
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: SizedBox(
-                    width: 236,
-                    child: DropdownField<Map>(
-                      label: '选择取片批次的景区档案',
-                      showLabel: false,
-                      placeholder: '选择景区档案',
-                      options: profiles,
-                      value: matching,
-                      labelFor: _batchScenicLabel,
-                      onChanged: (profile) => setState(
-                        () => _legacyBatchProfileId = profile['id'] as String,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            timeline,
-          ],
         );
       },
     );
@@ -727,32 +661,6 @@ class _TransferPageState extends State<TransferPage>
           ),
         ),
       ),
-    ),
-  );
-}
-
-String _batchScenicLabel(Map profile) {
-  final name = (profile['scenicName'] as String?)?.trim();
-  return name?.isNotEmpty == true ? name! : '未命名景区';
-}
-
-class _BatchAccessNotice extends StatelessWidget {
-  const _BatchAccessNotice({required this.title, required this.message});
-
-  final String title, message;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(top: 12),
-    padding: const EdgeInsets.all(20),
-    decoration: WorkstationStyle.surface(),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 6),
-        Text(message, style: const TextStyle(color: WorkstationStyle.muted)),
-      ],
     ),
   );
 }
