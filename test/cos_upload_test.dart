@@ -983,8 +983,10 @@ void main() {
       await _until(() => uploader.jobs.single.state == 'ingested', '原图入库');
       await uploader.stop();
 
-      final backfill = await Directory(p.join(fixture.scratch.path, 'backfill'))
-          .create();
+      final createdBackfill = await Directory(
+        p.join(fixture.scratch.path, 'backfill'),
+      ).create();
+      final backfill = Directory(await createdBackfill.resolveSymbolicLinks());
       final skip = await original.copy(p.join(backfill.path, 'skip.png'));
       final repeat = await original.copy(p.join(backfill.path, 'repeat.png'));
       Future<void> startBackfill() => uploader.start(
